@@ -18,3 +18,15 @@ Thumbs.db
 # 临时文件
 *.bak
 *.tmp
+
+# 本地编译产物 (根目录)
+/agent
+/installer
+/manager
+agent.exe
+ddns-manager
+node-agent
+ddns-installer
+
+# 备份文件
+*.bak

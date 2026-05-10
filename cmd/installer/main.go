@@ -475,7 +475,9 @@ func generateFingerprint() string {
 
 func generatePassword() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("随机数生成失败: %v", err)
+	}
 	return hex.EncodeToString(b)
 }
 

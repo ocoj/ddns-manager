@@ -353,7 +353,15 @@ func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
 func (s *ManagerStore) agentConfigPath() string { return filepath.Join(s.dir, "agent_config.json") }
 
 type AgentConfig struct {
-	LatestVersion string `json:"latest_version"`
+	LatestVersion string            `json:"latest_version"`
+	UpgradeState  map[string]UpgJob `json:"upgrade_state,omitempty"` // nodeID → 升级任务
+}
+
+// UpgJob tracks an agent upgrade trigger for dedup and UI status.
+type UpgJob struct {
+	TargetVer string `json:"target_ver"` // 目标版本
+	Triggered string `json:"triggered"`  // 触发时间 RFC3339
+	Completed string `json:"completed,omitempty"` // 完成时间 (agent 心跳确认后写入)
 }
 
 func (s *ManagerStore) agentManifestPath() string { return filepath.Join(s.dir, "agent_manifest.json") }

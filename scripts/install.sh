@@ -38,14 +38,15 @@ fi
 MANAGER="${MANAGER%/}"
 
 # 检测系统架构，归一化为 Go 标准命名 (amd64/arm64/arm)
-# 取消 x86_64 映射——构建脚本产出文件名使用 amd64
+# 构建脚本产出文件名统一使用 Go 标准命名
 OS="linux"
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64|amd64)  GOARCH="amd64" ;;
     aarch64)       GOARCH="arm64" ;;
-    armv7l)        GOARCH="arm"  ;;
-    *) echo "不支持的架构: $ARCH"; exit 1 ;;
+    armv7l|armv6l|armv8l|arm)  GOARCH="arm"  ;;
+    i686|i386)     GOARCH="386" ;;
+    *) echo "[WARN] 未知架构: $ARCH，尝试使用 amd64"; GOARCH="amd64" ;;
 esac
 
 echo "============================================"
@@ -71,12 +72,19 @@ if [ -z "$VERSION" ]; then
     echo "下载 ddns-installer-linux-${GOARCH} ..."
     INSTALLER_NAME="ddns-installer-linux-${GOARCH}"
     if ! curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$INSTALLER_NAME" 2>/dev/null; then
-        # fallback: try versioned name
-        echo "尝试版本化名称..."
-        FALLBACK=$(curl -fsS "$MANAGER/bin/" 2>/dev/null | grep -o 'ddns-installer[^"]*-linux-amd64' | head -1 || true)
-        if [ -n "$FALLBACK" ]; then
-            curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$FALLBACK"
-        fi
+        # 管理端不提供 /bin/ 目录列表，直接试备选名称（按优先级）
+        echo "备选名称重试..."
+        # 构建版本化备选名称，从管理端获取最新版本号
+        LATEST_VER=$(curl -fsS "$MANAGER/api/admin/agent-version" -H "Authorization: Bearer $(echo -n 'admin:Admin12345' | base64)" 2>/dev/null | grep -o '"latest_version":"[^"]*"' | cut -d'"' -f4 || true)
+        for pattern in \
+            "ddns-installer-v${LATEST_VER}-linux-${GOARCH}" \
+            "ddns-installer-latest" \
+            "ddns-installer-latest-linux-${GOARCH}"; do
+            [ -z "$pattern" ] && continue
+            if curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$pattern" 2>/dev/null; then
+                [ -s "$TMP_INSTALLER" ] && break
+            fi
+        done
     fi
 else
     curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/ddns-installer-$VERSION-$OS-$GOARCH"

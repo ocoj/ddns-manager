@@ -14,4 +14,5 @@ require (
 	github.com/wagslane/go-password-validator v0.3.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
+	software.sslmate.com/src/go-pkcs12 v0.7.1 // indirect
 )

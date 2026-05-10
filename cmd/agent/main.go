@@ -102,7 +102,9 @@ func loadConfig(path string) (*model.AgentConfig, error) {
 
 func generatePassword() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("随机数生成失败: %v", err) // 不可恢复 — 安全关键路径
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -209,14 +211,17 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				log.Printf("配置应用失败: %v", err)
 			} else {
 				// Cache encrypted config for next oneshot run (AES-256-GCM)
+				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
 				os.MkdirAll(filepath.Dir(configCachePath()), 0700)
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
 					crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "config-cache"))
 				if encErr != nil {
-					log.Printf("[config] 缓存加密失败: %v", encErr)
-					cacheData = resp.Config.YAML // fallback: store plain (should not happen)
+					log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
+					// 不写入 disk — 明文 DNS 凭据泄露风险不可接受
+					// 下次心跳会重新尝试加密并缓存
+				} else {
+					os.WriteFile(configCachePath(), []byte(cacheData), 0600)
 				}
-				os.WriteFile(configCachePath(), []byte(cacheData), 0600)
 				// re-run DNS update with new config (with timeout, don't block heartbeat)
 				go func() { runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute) }()
 			}
@@ -280,6 +285,7 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) *model.Heartb
 }
 
 // applyCertUpdates processes certificate updates from heartbeat response.
+// Deploys cert files → updates IIS bindings (Windows) → reloads services → recycles app pools.
 func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 	if len(updates) == 0 {
 		return
@@ -295,9 +301,11 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		}
 		os.MkdirAll(path, 0o700)
 		hasPFX := false
+		pfxFilename := "" // actual PFX filename from bundle (not BundleName+.pfx)
 		for name, ct := range cu.Files {
 			plain, err := crypto.Decrypt(ct, key)
 			if err != nil {
+				log.Printf("[cert] 解密失败 %s/%s: %v", cu.BundleName, name, err)
 				continue
 			}
 			tmp := filepath.Join(path, name+".new")
@@ -306,24 +314,101 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			os.Rename(tmp, dst)
 			if strings.HasSuffix(strings.ToLower(name), ".pfx") {
 				hasPFX = true
+				pfxFilename = name // record actual PFX filename from bundle
 			}
 		}
 		// Save cert hash marker
 		hashFile := filepath.Join(path, ".cert_hash")
 		os.WriteFile(hashFile, []byte(cu.CertHash), 0o600)
-		log.Printf("证书已部署: %s -> %s", cu.BundleName, path)
+		log.Printf("[cert] 已部署: %s -> %s", cu.BundleName, path)
 
 		// On Windows, auto-import cert to IIS after deployment
 		if runtime.GOOS == "windows" {
-			if hasPFX {
-				pfxFile := filepath.Join(path, cu.BundleName+".pfx")
+			if hasPFX && pfxFilename != "" {
+				pfxFile := filepath.Join(path, pfxFilename)
 				if _, err := os.Stat(pfxFile); err == nil {
 					importPFXToIIS(pfxFile, cu.BundleName, cfg.IISCertBindings)
+					// Recycle IIS app pools after cert binding update
+					recycleIISAppPools()
 				}
 			} else {
 				importToIIS(path, cu.BundleName, cfg.IISCertBindings)
+				recycleIISAppPools()
 			}
 		}
+
+		// Process service reload hints from Manager
+		for _, svc := range cu.ReloadServices {
+			reloadService(svc)
+		}
+	}
+}
+
+// reloadService reloads or restarts a system service after cert deployment.
+// Supports systemd service names (Linux) and Windows service names.
+func reloadService(svc string) {
+	if runtime.GOOS == "windows" {
+		// Windows: try appcmd recycle first (IIS), then net stop/start
+		if strings.Contains(strings.ToLower(svc), "iis") || strings.Contains(strings.ToLower(svc), "w3svc") {
+			recycleIISAppPools()
+			return
+		}
+		// Generic Windows service restart
+		exec.Command("sc", "stop", svc).Run()
+		time.Sleep(2 * time.Second)
+		out, err := exec.Command("sc", "start", svc).CombinedOutput()
+		if err != nil {
+			log.Printf("[cert] 服务重启失败 %s: %v: %s", svc, err, string(out))
+		} else {
+			log.Printf("[cert] 服务已重启: %s", svc)
+		}
+		return
+	}
+	// Linux: try reload first (nginx -s reload, systemctl reload), then restart
+	out, err := exec.Command("systemctl", "reload", svc).CombinedOutput()
+	if err != nil {
+		// reload not supported, try restart
+		out2, err2 := exec.Command("systemctl", "restart", svc).CombinedOutput()
+		if err2 != nil {
+			log.Printf("[cert] 服务重载失败 %s: %v: %s", svc, err2, string(out2))
+		} else {
+			log.Printf("[cert] 服务已重启: %s", svc)
+		}
+	} else {
+		log.Printf("[cert] 服务已重载: %s", svc)
+		_ = out
+	}
+}
+
+// recycleIISAppPools recycles all IIS application pools so the new certificate
+// takes effect immediately. Uses appcmd (IIS 7+) with fallback to iisreset.
+func recycleIISAppPools() {
+	// Preferred: recycle individual app pools (less disruptive than iisreset)
+	appcmd := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd.exe")
+	if _, err := os.Stat(appcmd); err == nil {
+		out, err := exec.Command(appcmd, "list", "apppool", "/xml").Output()
+		if err == nil {
+			// Parse app pool names and recycle each
+			for _, line := range strings.Split(string(out), "\n") {
+				if idx := strings.Index(line, "APPPOOL.NAME="); idx != -1 {
+					start := idx + len("APPPOOL.NAME=") + 1
+					end := strings.IndexByte(line[start:], '"')
+					if end > 0 {
+						poolName := line[start : start+end]
+						exec.Command(appcmd, "recycle", "apppool", poolName).Run()
+						log.Printf("[cert] IIS 应用池已回收: %s", poolName)
+					}
+				}
+			}
+			return
+		}
+	}
+	// Fallback: full IIS reset (disruptive but guaranteed)
+	out, err := exec.Command("iisreset", "/noforce").CombinedOutput()
+	if err != nil {
+		log.Printf("[cert] IIS 重置失败: %v: %s", err, string(out))
+	} else {
+		log.Printf("[cert] IIS 已重置 (iisreset)")
 	}
 }
 func fileSHA256(path string) string {
@@ -344,12 +429,19 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 		return result
 	}
 	// walk the cert directory for .cert_hash marker files
+	// 限制深度: 证书目录通常 ≤3 层，超过 5 层停止 (防止 CertPath 误配为 /)
+	maxDepth := 5
 	filepath.Walk(cfg.CertPath, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Printf("[cert] 遍历目录错误 %s: %v", p, err)
 			return nil
 		}
+		// 深度保护: 超出限制的目录跳过
 		if info.IsDir() {
+			rel, _ := filepath.Rel(cfg.CertPath, p)
+			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxDepth {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if info.Name() == ".cert_hash" {
@@ -367,6 +459,10 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 // newHTTPClient returns an http.Client that clones http.DefaultTransport
 // (preserving HTTP/2, connection pooling) with optional TLS verification skip.
 func newHTTPClient(verifySSL bool, timeout time.Duration) *http.Client {
+	// 防御: timeout=0 表示无限等待，一个挂起的 TCP 连接会永久阻塞心跳
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	if verifySSL {
 		return &http.Client{Timeout: timeout}
 	}
@@ -454,7 +550,7 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		return fmt.Errorf("cannot find self")
 	}
 
-	// Resolve symlink to real path (Linux: /usr/local/bin/node-agent → /opt/ddns-manager/node-agent)
+	// Resolve symlink to real path (Linux: /usr/local/bin/node-agent → /opt/ddns-manager/node-agent-v1.5.2-linux-amd64)
 	if realPath, err := filepath.EvalSymlinks(exePath); err == nil {
 		exePath = realPath
 	}
@@ -466,25 +562,48 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 
 	log.Printf("自升级: 正在下载 %s 从 %s", update.Version, url)
 	tmpFile := exePath + ".new"
-	hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute) // 2分钟超时（~15MB二进制），网络差时不再无限等待
-	resp, err := hc.Get(url)
-	if err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
-	}
-	f2, err := os.Create(tmpFile)
-	if err != nil {
-		return fmt.Errorf("create tmp: %w", err)
-	}
-	// Limit download to 100MB to prevent disk exhaustion from a compromised Manager
-	if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
+
+	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟
+	var downloadErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			log.Printf("自升级: 重试 %d/3 ...", attempt+1)
+		}
+		hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute) // 2分钟超时（~15MB二进制），网络差时不再无限等待
+		resp, err := hc.Get(url)
+		if err != nil {
+			downloadErr = err
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			downloadErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			resp.Body.Close()
+			continue
+		}
+		f2, err := os.Create(tmpFile)
+		if err != nil {
+			downloadErr = fmt.Errorf("create tmp: %w", err)
+			resp.Body.Close()
+			continue
+		}
+		// Limit download to 100MB to prevent disk exhaustion from a compromised Manager
+		if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
+			f2.Close()
+			resp.Body.Close()
+			downloadErr = fmt.Errorf("write: %w", err)
+			continue
+		}
 		f2.Close()
-		return fmt.Errorf("write: %w", err)
+		resp.Body.Close()
+		downloadErr = nil
+		break
 	}
-	f2.Close()
+	if downloadErr != nil {
+		os.Remove(tmpFile)
+		return fmt.Errorf("download: %w (重试3次)", downloadErr)
+	}
 
 	if err := validateAgentBinary(tmpFile); err != nil {
 		os.Remove(tmpFile)
@@ -498,13 +617,18 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		}
 	}
 
-	log.Printf("自升级: 正在替换 %s → %s", exePath, tmpFile)
-	if err := replaceRunningBinary(exePath, tmpFile); err != nil {
+	log.Printf("自升级: 正在替换 %s → v%s", exePath, update.Version)
+	if err := replaceRunningBinary(exePath, tmpFile, update.Version); err != nil {
 		return fmt.Errorf("replace: %w", err)
 	}
 
-	// replaceRunningBinary handles platform-specific replacement + process exit.
-	// This line should never be reached.
+	// Linux oneshot 模式: 升级后触发即时心跳，避免 DNS 更新中断 5 分钟
+	if runtime.GOOS != "windows" {
+		restartAgentAfterUpgrade()
+	}
+
+	// replaceRunningBinary handles platform-specific replacement.
+	// This line should never be reached on Windows (CreateProcess detaches).
 	log.Printf("自升级: 即将退出")
 	os.Exit(0)
 	return nil
@@ -792,6 +916,7 @@ func autoBindExisting(thumb, certCN string) {
 
 // ── Windows Trust (MotW removal) ──
 func main() {
+	log.SetFlags(log.LstdFlags) // 所有日志带时间戳 (2009/01/23 01:23:45)
 	heartbeat := flag.Bool("heartbeat", false, "send single heartbeat (for systemd timer)")
 	daemon := flag.Bool("daemon", false, "run as daemon (for Windows Service)")
 	showVersion := flag.Bool("version", false, "show version")

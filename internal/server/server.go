@@ -235,6 +235,7 @@ func (s *Server) Router() *mux.Router {
 	a.HandleFunc("/certs", s.handleUploadCert).Methods("POST")
 	a.HandleFunc("/certs/{name}", s.handleDeleteCert).Methods("DELETE")
 	a.HandleFunc("/certs/{name}/download", s.handleDownloadCert).Methods("GET")
+	a.HandleFunc("/certs/{name}/pfx", s.handleDownloadPFX).Methods("GET")
 	a.HandleFunc("/certs/{name}/renew", s.handleRenewCert).Methods("POST")
 	// acme (multi-account)
 	a.HandleFunc("/acme/all", s.handleACMEList).Methods("GET")
@@ -250,6 +251,7 @@ func (s *Server) Router() *mux.Router {
 	// agent version
 	a.HandleFunc("/agent-version", s.handleGetAgentVersion).Methods("GET")
 	a.HandleFunc("/agent-version", s.handleSetAgentVersion).Methods("POST")
+	a.HandleFunc("/agent-upgrade-state", s.handleGetUpgradeState).Methods("GET")
 	a.HandleFunc("/agent-binaries", s.handleListAgentBinaries).Methods("GET")
 	a.HandleFunc("/agent-binaries", s.handleUploadAgentBinary).Methods("POST")
 	a.HandleFunc("/agent-binaries/{name}", s.handleDeleteAgentBinary).Methods("DELETE")

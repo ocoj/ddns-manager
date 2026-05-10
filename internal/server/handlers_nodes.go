@@ -22,6 +22,8 @@ import (
 )
 
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	// 限制心跳请求体最大 1MB，防止恶意节点发送超大 JSON 耗尽内存
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	nodeID, password, ok := parseAuth(r)
 	if !ok {
 		jsonErr(w, http.StatusUnauthorized, "认证信息无效")
@@ -100,15 +102,53 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	goos, goarch := detectPlatform(rec)
 	agentCfg, _ := s.store.LoadAgentConfig()
 	if agentCfg != nil && agentCfg.LatestVersion != "" && agentCfg.LatestVersion != req.Status.AgentVersion {
-		manifest, _ := s.store.LoadAgentManifest()
-		key := goos + "-" + goarch
-		if f, ok := manifest[key]; ok && f != "" {
-			// 防御: 过滤路径穿越字符, 仅允许安全文件名
-			safeName := strings.ReplaceAll(strings.ReplaceAll(f, "..", ""), "/", "")
-			if safeName != "" && safeName == f {
-				if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
-					resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
+		// 升级退避: 同一目标版本 30 分钟内不重复推送
+		// 避免网络状况差时每次心跳都重试下载 (864次/天)
+		now := time.Now().UTC()
+		shouldPush := true
+		if agentCfg.UpgradeState != nil {
+			if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+				// 已完成: 不再推送
+				if job.Completed != "" && job.TargetVer == agentCfg.LatestVersion {
+					shouldPush = false
 				}
+				// 30 分钟内已推送同版本: 跳过一次
+				if t, err := time.Parse(time.RFC3339, job.Triggered); err == nil {
+					if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 30*time.Minute {
+						shouldPush = false
+					}
+				}
+			}
+		}
+		if shouldPush {
+			manifest, _ := s.store.LoadAgentManifest()
+			key := goos + "-" + goarch
+			if f, ok := manifest[key]; ok && f != "" {
+				safeName := strings.ReplaceAll(strings.ReplaceAll(f, "..", ""), "/", "")
+				if safeName != "" && safeName == f {
+					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
+						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
+						// 记录推送时间
+						if agentCfg.UpgradeState == nil {
+							agentCfg.UpgradeState = make(map[string]store.UpgJob)
+						}
+						agentCfg.UpgradeState[nodeID] = store.UpgJob{
+							TargetVer: agentCfg.LatestVersion,
+							Triggered: now.Format(time.RFC3339),
+						}
+						s.store.SaveAgentConfig(agentCfg)
+					}
+				}
+			}
+		}
+	}
+	// 标记已完成的升级 (agent 版本已匹配目标)
+	if agentCfg != nil && agentCfg.UpgradeState != nil {
+		if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+			if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+				job.Completed = time.Now().UTC().Format(time.RFC3339)
+				agentCfg.UpgradeState[nodeID] = job
+				s.store.SaveAgentConfig(agentCfg)
 			}
 		}
 	}
@@ -182,6 +222,8 @@ func (s *Server) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "approved"})
 }
 func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
+	// 限制请求体 1MB，防止大请求内存耗尽
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	id := mux.Vars(r)["id"]
 	var req model.NodeConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -192,6 +234,14 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonErr(w, http.StatusNotFound, "节点未找到")
 		return
+	}
+	// 校验 DNS Key 存在性 — 防止保存不存在的 key 导致后续渲染失败
+	if req.DNSKeyName != "" {
+		keys, _ := s.store.LoadDNSKeys()
+		if _, ok := keys[req.DNSKeyName]; !ok {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("DNS Key %q 不存在，请先在「DNS Key」页面创建", req.DNSKeyName))
+			return
+		}
 	}
 	data, _ := json.Marshal(req)
 	rec.ConfigYAML = string(data)

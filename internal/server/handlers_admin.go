@@ -256,6 +256,17 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 // ── admin: agent version ──
 
 
+// handleGetUpgradeState returns the server-side upgrade state for all nodes.
+// Replaces localStorage-based per-browser tracking for cross-device consistency.
+func (s *Server) handleGetUpgradeState(w http.ResponseWriter, r *http.Request) {
+	cfg, _ := s.store.LoadAgentConfig()
+	if cfg == nil || cfg.UpgradeState == nil {
+		jsonOK(w, map[string]interface{}{})
+		return
+	}
+	jsonOK(w, cfg.UpgradeState)
+}
+
 func (s *Server) handleGetAgentVersion(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := s.store.LoadAgentConfig()
 	v := ""

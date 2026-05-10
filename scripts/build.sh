@@ -15,12 +15,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-# 版本号优先级: 环境变量 VERSION > git tag > VERSION 文件 > 兜底
-# git tag: v1.5.2 → "v1.5.2"
-# git describe (tag后有提交): v1.5.2-3-gabc1234-dirty
-# VERSION 文件: 无 git 时后备
-VERSION="${VERSION:-$(git -C "$PROJECT_DIR" describe --tags --match 'v*' --dirty 2>/dev/null || (cat "$PROJECT_DIR/VERSION" 2>/dev/null) || echo "dev")}"
-# VER_NUM 去掉 v 前缀用于文件名 (v1.5.2 → 1.5.2)
+# 版本号优先级: 环境变量 VERSION > VERSION 文件 > git tag (仅干净树) > 兜底
+# VERSION 文件为语义化版本号唯一真相源 (e.g. v1.5.3)，发版前人工升级
+# git describe 仅作参考，不进入文件名 —— 防止 git 脏标记/哈希污染文件名
+# 文件名始终为干净的 node-agent-v{M.m.p}-{os}-{arch} 格式
+VERSION_FILE="$(cat "$PROJECT_DIR/VERSION" 2>/dev/null || echo "")"
+if [ -n "${VERSION:-}" ]; then
+    # 显式环境变量最高优先级 (CI/CD 注入)
+    :
+elif [ -n "$VERSION_FILE" ]; then
+    # VERSION 文件是语义化版本唯一真相源
+    VERSION="$VERSION_FILE"
+else
+    # 无 VERSION 文件时回退到 git describe (仅干净树, 不带 --dirty)
+    VERSION="$(git -C "$PROJECT_DIR" describe --tags --match 'v*' 2>/dev/null || echo "dev")"
+fi
+# VER_NUM 去掉 v 前缀用于文件名 (v1.5.3 → 1.5.3)
 VER_NUM="${VERSION#v}"
 
 # signing config (set via env or leave empty to skip)

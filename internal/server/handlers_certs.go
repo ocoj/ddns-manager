@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/kk/ddns-manager/internal/acme"
+	mycrypto "github.com/kk/ddns-manager/internal/crypto"
 	"github.com/kk/ddns-manager/internal/store"
 )
 
@@ -160,6 +161,14 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 	if len(files) == 0 {
 		jsonErr(w, http.StatusBadRequest, "no files uploaded")
 		return
+	}
+	// 自动生成 PFX — 检测上传文件中是否有 PEM 证书+私钥对
+	certPEM, hasCert := findPEMFile(files, ".pem", ".crt")
+	keyPEM, hasKey := findPEMFile(files, ".key")
+	if hasCert && hasKey {
+		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
+			files["cert.pfx"] = pfxData
+		}
 	}
 	bundle := &store.CertBundle{Name: name, Files: files, Hash: computeBundleHash(files)}
 	if err := s.store.SaveCertBundle(bundle); err != nil {
@@ -472,6 +481,14 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 			bundle.Files[fn] = data
 		}
 	}
+	// 生成 PFX — Windows 节点无需 openssl，直接用 importPFXToIIS 快速路径
+	if certPEM, ok1 := bundle.Files["fullchain.pem"]; ok1 {
+		if keyPEM, ok2 := bundle.Files["privkey.pem"]; ok2 {
+			if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
+				bundle.Files["cert.pfx"] = pfxData
+			}
+		}
+	}
 	bundle.Hash = computeBundleHash(bundle.Files)
 	s.store.SaveCertBundle(bundle)
 	// clean up the original cert dir (issueViaAcmeSh creates certs/domain/, we save to certs/acme-domain/)
@@ -480,6 +497,81 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logMgr.Log("acme", "已签发", certName, fmt.Sprintf("ca=%s domains=%s", mgr.AccountInfo().CA, strings.Join(req.Domains, ",")))
 	jsonOK(w, map[string]interface{}{"status": "issued", "name": "acme-" + certName, "domains": req.Domains, "log": mgr.GetLog()})
+}
+
+// handleDownloadPFX generates and downloads a PKCS#12 (.pfx) certificate container.
+// The password is provided via ?password= query parameter — one-time, never stored.
+// This is the recommended way for Windows admins to manually import certs via certlm.msc.
+func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	password := r.URL.Query().Get("password")
+	if password == "" {
+		jsonErr(w, http.StatusBadRequest, "password 参数为必填项 (?password=你的密码)")
+		return
+	}
+	if len(password) < 6 {
+		jsonErr(w, http.StatusBadRequest, "密码至少 6 个字符")
+		return
+	}
+
+	b, err := s.store.LoadCertBundle(name)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "证书集未找到")
+		return
+	}
+
+	// Find cert + key PEM from bundle
+	var certPEM, keyPEM []byte
+	for fname, content := range b.Files {
+		lower := strings.ToLower(fname)
+		switch {
+		case strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt"):
+			if certPEM == nil {
+				certPEM = content
+			}
+		case strings.HasSuffix(lower, ".key"):
+			if keyPEM == nil {
+				keyPEM = content
+			}
+		}
+	}
+	if certPEM == nil || keyPEM == nil {
+		jsonErr(w, http.StatusBadRequest, "证书集缺少证书或私钥文件")
+		return
+	}
+
+	pfxData, err := mycrypto.GeneratePFX(certPEM, keyPEM, password)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+err.Error())
+		return
+	}
+
+	// Derive a safe, user-readable filename from the bundle name
+	// Remove "acme-" prefix if present
+	downloadName := strings.TrimPrefix(name, "acme-")
+	if !strings.HasSuffix(downloadName, ".pfx") {
+		downloadName += ".pfx"
+	}
+
+	w.Header().Set("Content-Type", "application/x-pkcs12")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", downloadName))
+	w.Write(pfxData)
+
+	s.logMgr.Log("cert", "已下载 PFX", name+" (IIS 手动导入)", "success")
+}
+
+// findPEMFile searches the uploaded file map for a file matching any of the given extensions.
+// Returns the file content and true if found. Used for PFX auto-generation from uploaded PEM files.
+func findPEMFile(files map[string][]byte, exts ...string) ([]byte, bool) {
+	for name, data := range files {
+		lower := strings.ToLower(name)
+		for _, ext := range exts {
+			if strings.HasSuffix(lower, ext) {
+				return data, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // ── admin: logs ──

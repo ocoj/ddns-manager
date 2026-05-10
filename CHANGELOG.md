@@ -1,5 +1,82 @@
 # CHANGELOG
 
+## v1.5.5 — 2026-05-10
+
+### 🛠️ 部署命令修复 + 客户端质量
+
+- **B1 部署命令版本化命名** — Linux 已装节点升级命令改为下载到版本化文件名 + `ln -sf` 更新符号链接，不再直接覆盖 `node-agent`
+- **B2 Windows 部署命令服务等待** — 固定 `Start-Sleep 3` 改为 `sc query` 轮询（最多 30s），与自动升级修复一致
+- **B3 Linux 部署命令边界守卫** — `systemctl start` 前加 `&&`，确保下载失败时不会启动损坏的二进制
+- **B4 hostname 加引号** — 安装器调用 `"$(hostname)"` 防止含空格主机名被拆词
+
+### ⚡ 升级稳定性增强
+
+- **E1 升级退避** — Manager 侧追踪每节点推送时间，30 分钟内同版本不重复推送 AgentUpdate（防止 864次/天无效下载）
+- **E2 批量升级倒计时** — WebUI 等待状态显示剩余秒数 `~287s`，让用户知道还要等多久
+- **E3 服务端升级状态** — `UpgradeState` 持久化到 `agent_config.json`，新增 `GET /api/admin/agent-upgrade-state` API，替代浏览器 localStorage
+
+### 🛡️ 防御性编程
+
+- **Q1 Agent 日志时间戳** — `main()` 添加 `log.SetFlags(log.LstdFlags)`
+- **Q2 rand.Read 错误处理** — `generatePassword()` 失败时 `log.Fatal` 而非静默
+- **Q3 HTTP Client 超时保护** — `newHTTPClient()` timeout=0 自动补为 30s
+- **Q4 Walk 深度限制** — `collectCertHashes` 最多扫描 5 层子目录，防止 CertPath 误配导致全系统遍历
+
+### 🧪 测试
+
+- 新增 `TestUpgradeBackoffWithin30Minutes` — 验证退避逻辑 (30分钟阈值)
+- 新增 `TestCollectCertHashesDepthLimit` — 验证 Walk 深度限制
+- 新增 `TestUpgradeStateCompletionTracking` — 验证完成标记持久化
+
+## v1.5.4 — 2026-05-10
+
+### 🔐 证书 PFX 下载 + IIS 绑定完善
+
+- **PFX 下载端点** — `GET /api/admin/certs/{name}/pfx?password=***`，一次性密码，用于 Windows certlm.msc 手动导入
+- **WebUI PFX 按钮** — 证书列表每行新增 PFX 下载按钮，弹窗设密码，自动下载
+- **修复取消误报** — 点击取消不弹"密码至少 6 位"错误
+
+## v1.5.3 — 2026-05-10
+
+### 🔐 证书自动更新 + IIS 绑定 (彻底重写)
+
+- **Manager 端 Go 原生 PFX 生成** — 集成 `go-pkcs12`，ACME 签发/手动上传时自动生成 `cert.pfx`，Windows 节点无需 openssl
+- **Windows IIS 绑定零依赖** — Agent 走 `importPFXToIIS` 快速路径 (PowerShell 直导)，`importToIIS` 降级为仅旧 bundle 兼容
+- **PFX 文件查找修复** — 用实际 bundle 文件名而非 `BundleName+.pfx` 拼接
+- **证书部署后服务重载** — Agent 处理 `ReloadServices`，Linux `systemctl reload/restart`，Windows `sc stop/start`
+- **IIS 应用池自动回收** — 证书绑定后 `appcmd recycle apppool` (精确) → `iisreset` (兜底)
+- **解密失败日志** — 静默 `continue` 改为 `log.Printf("[cert] 解密失败 %s: %v", name, err)`
+
+### 🔴 自升级关键修复
+
+- **Linux 自升级后 DNS 中断 5 分钟** — 新增 `restartAgentAfterUpgrade()`，升级后立即触发 systemd heartbeat，消除 oneshot 模式下的 DNS 更新空窗期
+- **版本化文件名 .new 后缀污染** — `replaceRunningBinary` 重写命名逻辑，用 `runtime.GOOS/runtime.GOARCH` 直接构建文件名，不再解析旧文件名（旧名含 git describe 多段版本会拆错）
+- **自升级下载无重试** — `selfUpgrade` 添加 3 次重试 + 递增退避 (2s/4s/6s)，防止网络抖动导致 5 分钟等待
+- **配置缓存加密失败明文回退** — 移除 `ddns_cache.yaml` 的明文 fallback，加密失败时拒绝写入，下次心跳重试
+
+### 🟠 安全加固
+
+- **心跳请求体无大小限制** — `handleHeartbeat` + `handleSaveNodeConfig` 添加 `MaxBytesReader(1MB)`，防止 OOM
+- **DNS Key 配置无校验** — `handleSaveNodeConfig` 校验 DNSKeyName 存在性，防止保存不存在的 key 导致渲染失败
+
+### 🛠️ 构建与部署
+
+- **版本号优先级修正** — `build.sh` 改为 **VERSION 文件 > git describe**，移除 `--dirty`，文件名永为干净语义化版本 `node-agent-v{M.m.p}-{os}-{arch}`
+- **VERSION 文件升级** — v1.5.2 → v1.5.3
+- **install.sh 架构检测补全** — 新增 armv6l/armv8l/i686 检测，未知架构警告而非退出
+- **install.sh 移除无效 fallback** — 管理端 `/bin/` 不提供目录列表，删掉无效的 grep 抓取
+
+### 🪟 Windows 自升级稳健性
+
+- **升级批处理等待逻辑** — 从固定 5 秒 sleep 改为轮询 `sc query` + 30s 超时强制 `taskkill`
+- **签名兼容** — `replaceRunningBinary` 统一 3 参数签名 (curExe, newExe, version)
+
+### 🧪 测试
+
+- 新增 `TestReplaceRunningBinaryVersionedNaming` — 验证版本化文件名不含 .new
+- 新增 `TestHeartbeatBodySizeLimit` — 验证 2MB 请求被拒绝
+- 新增 `TestConfigEncryptionNoPlaintextFallback` — 验证加密失败不写明文
+
 ## v1.5.2-audit — 2026-05-10
 
 ### 🔴 关键修复 (3 项阻断级)

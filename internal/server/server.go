@@ -1,0 +1,273 @@
+package server
+
+import (
+	"context"
+	"log"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/kk/ddns-manager/internal/acme"
+	srvcfg "github.com/kk/ddns-manager/internal/config"
+	"github.com/kk/ddns-manager/internal/logger"
+	"github.com/kk/ddns-manager/internal/store"
+	"golang.org/x/crypto/bcrypt"
+)
+
+const defaultAdminPassword = "Admin12345"
+const maxUploadSize = 50 << 20
+
+type Server struct {
+	cfg             *srvcfg.ManagerConfig
+	store           *store.ManagerStore
+	acme            *acme.Manager   // default (backward compat)
+	acmeMgrs        []*acme.Manager // multi-account managers (protected by acmeMu)
+	logMgr          *logger.Manager
+	adminToken      string // protected by adminTokenMu
+	accessCollector *accessStatsCollector
+	// rate limiting
+	globalLimiter    *rateLimiter
+	heartbeatLimiter *rateLimiter
+	loginLimiter     *rateLimiter
+	rateLock         sync.RWMutex
+	// concurrency protection
+	adminTokenMu sync.RWMutex
+	acmeMu       sync.RWMutex
+	// system info cache (updated by background goroutine)
+	sysInfoMu   sync.RWMutex
+	sysInfoCache map[string]interface{}
+}
+
+
+func (s *Server) getAdminToken() string {
+	s.adminTokenMu.RLock()
+	defer s.adminTokenMu.RUnlock()
+	return s.adminToken
+}
+
+func (s *Server) setAdminToken(token string) {
+	s.adminTokenMu.Lock()
+	defer s.adminTokenMu.Unlock()
+	s.adminToken = token
+}
+
+func (s *Server) acmeMgrList() []*acme.Manager {
+	s.acmeMu.RLock()
+	defer s.acmeMu.RUnlock()
+	out := make([]*acme.Manager, len(s.acmeMgrs))
+	copy(out, s.acmeMgrs)
+	return out
+}
+
+func (s *Server) addACMEMgr(mgr *acme.Manager) {
+	s.acmeMu.Lock()
+	defer s.acmeMu.Unlock()
+	s.acmeMgrs = append(s.acmeMgrs, mgr)
+}
+
+func (s *Server) setACMEMgr(index int, mgr *acme.Manager) {
+	s.acmeMu.Lock()
+	defer s.acmeMu.Unlock()
+	if index < len(s.acmeMgrs) {
+		s.acmeMgrs[index] = mgr
+	} else {
+		s.acmeMgrs = append(s.acmeMgrs, mgr)
+	}
+}
+
+func (s *Server) removeACMEMgr(index int) {
+	s.acmeMu.Lock()
+	defer s.acmeMu.Unlock()
+	if index < len(s.acmeMgrs) {
+		s.acmeMgrs = append(s.acmeMgrs[:index], s.acmeMgrs[index+1:]...)
+	}
+}
+
+// StartAutoRenew starts a background goroutine that renews ACME certs
+// belonging to each registered account. Only ACME-issued certs with a
+// matching email in meta.json are renewed; user-uploaded certs are skipped.
+
+func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				mgrs := s.acmeMgrList()
+				for _, mgr := range mgrs {
+					renewed := mgr.Renew(ctx)
+					if len(renewed) > 0 {
+						log.Printf("[acme] 自动续期成功 (帐号 %s): %v", mgr.AccountInfo().Email, renewed)
+					}
+				}
+				cancel()
+			case <-shutdown:
+				log.Println("[acme] 续期协程已停止")
+				return
+			}
+		}
+	}()
+}
+
+func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager) *Server {
+	svr := &Server{cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr, accessCollector: newAccessStatsCollector(cfg.DataDir)}
+	st, err := s.LoadAdminState()
+	if err != nil {
+		log.Fatalf("加载管理员状态失败: %v", err)
+	}
+	if st == nil {
+		defaultToken := tokenFromPassword(defaultAdminPassword)
+		hash, err := bcrypt.GenerateFromPassword([]byte(defaultToken), bcrypt.DefaultCost)
+		if err != nil {
+			log.Fatalf("bcrypt 加密失败: %v", err)
+		}
+		st = &store.AdminState{TokenHash: string(hash), PasswordChanged: false}
+		if err := s.SaveAdminState(st); err != nil {
+			log.Fatalf("保存管理员状态失败: %v", err)
+		}
+		log.Println("[admin] 首次运行 — 已设置默认密码 (Admin12345)")
+	}
+	if !st.PasswordChanged {
+		svr.adminToken = tokenFromPassword(defaultAdminPassword)
+	}
+	// init multi-account ACME managers
+	svr.initACMEManagers()
+	return svr
+}
+
+func (s *Server) initACMEManagers() {
+	s.acmeMu.Lock()
+	defer s.acmeMu.Unlock()
+	accounts, err := s.store.LoadACMEAccounts()
+	if err != nil || len(accounts) == 0 {
+		if s.acme != nil {
+			s.acmeMgrs = []*acme.Manager{s.acme}
+		}
+		return
+	}
+	certsDir := filepath.Join(s.cfg.DataDir, "certs")
+	for _, ac := range accounts {
+		mgr, err := acme.NewWithKey(certsDir, ac.Email, ":80", []byte(ac.AccountKey))
+		if err != nil {
+			log.Printf("[acme] 初始化 %s/%s 失败: %v", ac.Email, ac.CA, err)
+			continue
+		}
+		for _, ca := range acme.AllCAs {
+			if strings.EqualFold(ca.Name, ac.CA) {
+				mgr.SetCA(ca)
+				break
+			}
+		}
+		if ac.KeyType != "" {
+			mgr.SetKeyType(acme.ParseKeyType(ac.KeyType))
+		}
+		if ac.EABKID != "" && ac.EABKey != "" {
+			mgr.SetEAB(&acme.EAB{KID: ac.EABKID, HMACKey: ac.EABKey})
+		}
+		s.acmeMgrs = append(s.acmeMgrs, mgr)
+		// register account in background (non-blocking, with timeout)
+		idx := len(s.acmeMgrs) - 1
+		email := ac.Email
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := mgr.RegisterAccount(ctx); err != nil {
+				log.Printf("[acme] 注册帐号 %s 失败: %v", email, err)
+				return
+			}
+			// persist the account key if newly generated
+			keyPEM, _ := mgr.AccountKeyPEM()
+			if keyPEM != nil && ac.AccountKey == "" {
+				s.acmeMu.Lock()
+				s.updateACMEMgrKey(idx, string(keyPEM))
+				s.acmeMu.Unlock()
+			}
+			log.Printf("[acme] 帐号已就绪: %s", email)
+		}()
+	}
+	log.Printf("[acme] 已加载 %d 个 ACME 帐号", len(s.acmeMgrs))
+}
+
+// updateACMEMgrKey persists the generated account key to store.
+func (s *Server) updateACMEMgrKey(index int, keyPEM string) {
+	accounts, err := s.store.LoadACMEAccounts()
+	if err != nil || index >= len(accounts) {
+		return
+	}
+	accounts[index].AccountKey = keyPEM
+	s.store.SaveACMEAccounts(accounts)
+}
+
+func (s *Server) Router() *mux.Router {
+	r := mux.NewRouter()
+	// public (with rate limiting)
+	r.HandleFunc("/api/ping", s.handlePing).Methods("GET")
+	r.HandleFunc("/api/auth/login", s.rateLimitMiddleware(s.handleLogin, false, true)).Methods("POST")
+	r.HandleFunc("/api/admin/status", s.handleAdminStatus).Methods("GET")
+	r.HandleFunc("/api/heartbeat", s.rateLimitMiddleware(s.handleHeartbeat, true, false)).Methods("POST")
+	r.HandleFunc("/api/register", s.rateLimitMiddleware(s.handleRegister, false, false)).Methods("POST")
+
+	// admin (auth required)
+	a := r.PathPrefix("/api/admin").Subrouter()
+	a.Use(s.adminMiddleware)
+
+	// dashboard
+	a.HandleFunc("/stats", s.handleStats).Methods("GET")
+	a.HandleFunc("/access-stats", s.handleAccessStats).Methods("GET")
+	a.HandleFunc("/system-info", s.handleSystemInfo).Methods("GET")
+	// nodes
+	a.HandleFunc("/nodes", s.handleListNodes).Methods("GET")
+	a.HandleFunc("/nodes/{id}", s.handleGetNode).Methods("GET")
+	a.HandleFunc("/nodes/{id}/approve", s.handleApproveNode).Methods("POST")
+	a.HandleFunc("/nodes/{id}/config", s.handleSaveNodeConfig).Methods("PUT")
+	a.HandleFunc("/nodes/{id}", s.handleDeleteNode).Methods("DELETE")
+	// dns keys
+	a.HandleFunc("/dns-keys", s.handleListDNSKeys).Methods("GET")
+	a.HandleFunc("/dns-keys", s.handleSaveDNSKey).Methods("POST")
+	a.HandleFunc("/dns-keys/{name}", s.handleDeleteDNSKey).Methods("DELETE")
+	// certs
+	a.HandleFunc("/certs", s.handleListCerts).Methods("GET")
+	a.HandleFunc("/certs/{name}", s.handleGetCert).Methods("GET")
+	a.HandleFunc("/certs", s.handleUploadCert).Methods("POST")
+	a.HandleFunc("/certs/{name}", s.handleDeleteCert).Methods("DELETE")
+	a.HandleFunc("/certs/{name}/download", s.handleDownloadCert).Methods("GET")
+	a.HandleFunc("/certs/{name}/renew", s.handleRenewCert).Methods("POST")
+	// acme (multi-account)
+	a.HandleFunc("/acme/all", s.handleACMEList).Methods("GET")
+	a.HandleFunc("/acme/accounts/{index}", s.handleACMESaveAccountIndex).Methods("PUT")
+	a.HandleFunc("/acme/accounts/{index}", s.handleACMEDeleteAccount).Methods("DELETE")
+	a.HandleFunc("/acme/issue", s.handleACMEIssue).Methods("POST")
+	// logs
+	a.HandleFunc("/logs", s.handleGetLogs).Methods("GET")
+	a.HandleFunc("/logs/download", s.handleLogsDownload).Methods("GET")
+	a.HandleFunc("/logs/cleanup", s.handleLogsCleanup).Methods("POST")
+	// admin
+	a.HandleFunc("/change-password", s.handleChangePassword).Methods("POST")
+	// agent version
+	a.HandleFunc("/agent-version", s.handleGetAgentVersion).Methods("GET")
+	a.HandleFunc("/agent-version", s.handleSetAgentVersion).Methods("POST")
+	a.HandleFunc("/agent-binaries", s.handleListAgentBinaries).Methods("GET")
+	a.HandleFunc("/agent-binaries", s.handleUploadAgentBinary).Methods("POST")
+	a.HandleFunc("/agent-binaries/{name}", s.handleDeleteAgentBinary).Methods("DELETE")
+	// smtp
+	a.HandleFunc("/smtp", s.handleGetSMTP).Methods("GET")
+	a.HandleFunc("/smtp", s.handleSaveSMTP).Methods("POST")
+	a.HandleFunc("/smtp/test", s.handleSMTPTest).Methods("POST")
+	// rate-limit
+	a.HandleFunc("/rate-limit", s.handleGetRateLimit).Methods("GET")
+	a.HandleFunc("/rate-limit", s.handleSaveRateLimit).Methods("POST")
+
+	// static
+
+	// /bin/ file server — explicit HandleFunc avoids PathPrefix("/") conflict
+	r.HandleFunc("/bin/{filename:.*}", s.handleBinFile).Methods("GET")
+
+	// static SPA served by cmd/manager/main.go
+	return r
+}
+
+// ── middleware ──

@@ -1,0 +1,957 @@
+# ddns-manager 架构与实现文档
+
+> **定位**: 后端实现唯一真相源（Single Source of Truth）。任何接手此项目的开发者，读完本文档 + 代码即能理解所有设计意图。
+>
+> **Web UI**: 已独立分离到 `docs/WEBUI-DESIGN.md`。本文档不含前端内容。
+>
+> **核心**: Agent 内嵌 ddns-go DNS provider library（同进程），不再运行独立 ddns-go 二进制。
+
+---
+
+## 目录
+
+1. [前言](#前言)
+2. [设计原则](#1-设计原则)
+3. [架构总览](#2-架构总览)
+4. [目录结构](#3-目录结构)
+5. [数据模型](#4-数据模型-modelgo)
+6. [配置引擎](#5-配置引擎)
+7. [Agent 核心实现](#6-agent-核心实现)
+8. [Manager REST API](#7-manager-rest-api)
+9. [持久化](#8-持久化-storego)
+10. [审计日志](#9-审计日志-loggergo)
+11. [安全与加密](#10-安全与加密)
+12. [ddns-go 集成细节](#11-ddns-go-集成细节)
+13. [ACME 证书管理](#12-acme-证书管理)
+14. [系统资源监控](#13-系统资源监控)
+15. [测试](#14-测试)
+16. [边界条件](#15-边界条件)
+17. [部署与运维](#16-部署与运维)
+
+---
+
+## 前言
+
+**本项目处于开发测试阶段，从未正式发布。** v1、v2 仅为开发过程中的自然版本演进标识，不代表已发布的稳定版本。
+
+**不向下兼容原则**: 代码迭代不保证与旧版本的数据格式、API 或配置文件兼容。每次部署更新时：
+1. 旧代码/旧模块 → 打包备份到项目外备份目录
+2. 清离项目目录
+3. 全新部署新代码
+
+**测试环境仅限以下三台服务器**（详见 §16.4），不得在其他服务器上部署测试。
+
+---
+
+## 1. 设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **内嵌 ddns-go** | go.mod import `github.com/jeessy2/ddns-go/v6`，仅用 `dns/` `config/` `util/` 包。Agent 单进程，零外部二进制依赖 |
+| **配置即推送** | Manager 持有 DNS Key + 节点配置模板 → 心跳时渲染完整 ddns-go YAML → 下发 → Agent 热加载（无需写盘重启） |
+| **健康直接报** | DNS 更新结果从 DNSUpdater 内存直接获取，不解析日志/systemctl |
+| **单进程 Agent** | 心跳 + DNS 更新 + 证书部署 + 自升级，一体运行 |
+| **确定性 hash** | 配置和证书 hash 使用稳定排序 + sha256，保证 Manager/Agent 比对一致 |
+
+---
+
+## 2. 架构总览
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Manager (管理端 :9877)                       │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Web UI (SPA, go:embed static/) — 见 WEBUI-DESIGN.md    │ │
+│  ├─────────────────────────────────────────────────────────┤ │
+│  │  REST API (gorilla/mux)                                  │ │
+│  │  /api/heartbeat  /api/register  /api/admin/*             │ │
+│  ├─────────────────────────────────────────────────────────┤ │
+│  │  配置引擎: renderDDNSConfig (server.go)                   │ │
+│  │  JSON 配置 → struct → ddns-go YAML (含 DNS Key 注入)      │ │
+│  ├─────────────────────────────────────────────────────────┤ │
+│  │  持久化 (JSON): nodes.json / dns_keys.json / admin.json   │ │
+│  │              certs/ / events.log / smtp_config.json       │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└──────────────┬───────────────────────────────────────────────┘
+               │  HTTPS + Bearer Token (node_id:password base64)
+               │  每 5 分钟心跳: Agent 上报状态, Manager 下发配置+证书+升级
+    ┌──────────┼──────────┬──────────┐
+    ▼          ▼          ▼          ▼
+┌────────┐ ┌────────┐ ┌────────┐
+│ Agent  │ │ Agent  │ │ Agent  │ ...
+│(Linux) │ │(Win)   │ │        │
+│        │ │        │ │
+│ ┌──────────────────────────────────────┐
+│ │ 心跳循环 (每 5 min):                  │
+│ │   1. DNSUpdater.Run()                │
+│ │   2. collectCertHashes()             │
+│ │   3. 构建 HeartbeatReq → 发送        │
+│ │   4. 接收 Config → ApplyConfig()     │
+│ │   5. 接收 Certs → applyCertUpdates() │
+│ │   6. 接收 AgentUpdate → selfUpgrade()│
+│ ├──────────────────────────────────────┤
+│ │ DNSUpdater (内嵌 ddns-go library)    │
+│ │ import jeessy2/ddns-go/v6            │
+│ │   config/ — 配置解析                  │
+│ │   dns/    — 32 个 DNS provider 实现   │
+│ │   util/   — IP 缓存                   │
+│ └──────────────────────────────────────┘
+└────────┘
+```
+
+---
+
+## 3. 目录结构
+
+```
+ddns-manager/
+├── cmd/
+│   ├── manager/main.go          # 管理端入口 (HTTP/TLS + 优雅关闭)
+│   ├── manager/static/          # SPA 单文件 (go:embed)
+│   ├── agent/main.go            # Agent 入口 (心跳/daemon/install)
+│   ├── agent/dns_updater.go     # 内嵌 DNS 引擎 (ddns-go library)
+│   ├── agent/dns_updater_test.go # DNS 引擎 + Provider 注册表测试
+│   ├── agent/svc_windows.go     # Windows Service 集成
+│   ├── agent/svc_stub.go        # !windows stub
+│   ├── agent/upgrade_linux.go   # Linux 自升级 (io.Copy + rename)
+│   ├── agent/upgrade_windows.go # Windows 自升级 (detached batch)
+│   ├── agent/versioninfo.json   # Windows 版本资源
+│   └── installer/main.go        # 交互式安装向导 (含卸载)
+├── internal/
+│   ├── model/model.go           # 全部数据模型 (v1 兼容 + v2)
+│   ├── server/                 # REST API（7 文件拆分）
+│   │   ├── server.go           #   核心结构 + 路由 + 生命周期 (273行)
+│   │   ├── middleware.go        #   速率限制 + 认证中间件 (156行)
+│   │   ├── access_stats.go     #   访问统计 + 系统资源 (224行)
+│   │   ├── handlers_nodes.go   #   心跳 + 节点 CRUD + 配置引擎 (403行)
+│   │   ├── handlers_certs.go   #   证书 + ACME (464行)
+│   │   ├── handlers_admin.go   #   DNS Key / Agent / SMTP / Logs / Auth (358行)
+│   │   └── json_helpers.go     #   JSON 编码辅助 (30行)
+│   ├── store/store.go           # 文件持久化 (JSON + 二进制)
+│   ├── store/store_test.go      # 持久化层测试 (21 tests)
+│   ├── config/config.go         # Manager 配置加载 (manager.yaml)
+│   ├── config/config_test.go    # 配置加载测试 (6 tests)
+│   ├── crypto/aes.go            # AES-256-GCM 加密 (配置/证书传输)
+│   ├── crypto/aes_test.go       # 加解密 + 密钥派生测试 (11 tests)
+│   ├── acme/acme.go             # ACME 证书签发 (acme.sh + 纯 Go)
+│   ├── sysinfo/                 # 跨平台系统资源采集 (CPU/内存/磁盘)
+│   ├── logger/logger.go         # 审计日志 (JSONL + ring buffer)
+│   ├── notify/notify.go         # SMTP 邮件通知
+│   └── notify/notify_test.go    # 邮件配置验证测试 (11 tests)
+├── scripts/
+│   ├── build.sh                 # 跨平台构建 (Linux/Windows, amd64/arm64)
+│   ├── install.sh               # 一键安装脚本
+│   └── check.sh                 # 部署健康检查
+├── docs/
+│   └── WEBUI-DESIGN.md          # Web UI 设计文档
+├── DESIGN-v2.md                 # 本文件
+├── README.md
+├── CHANGELOG.md
+├── go.mod
+└── go.sum
+```
+
+---
+
+## 4. 数据模型 (model.go)
+
+### 4.1 心跳协议
+
+```go
+// 请求 (Agent → Manager)
+type HeartbeatReq struct {
+    NodeID      string        `json:"node_id"`
+    Fingerprint string        `json:"fingerprint"`
+    Status      NodeStatus    `json:"status"`
+    ConfigHash  string        `json:"config_hash"`       // Agent 当前配置 SHA256
+    Logs        []string      `json:"logs,omitempty"`    // 最近 10 条 DNS 日志
+    Hardware    *HardwareInfo `json:"hardware,omitempty"`
+}
+
+type NodeStatus struct {
+    AgentVersion string            `json:"agent_version"`
+    IPv4         string            `json:"ipv4"`
+    IPv6         string            `json:"ipv6"`
+    CertHashes   map[string]string `json:"cert_hashes,omitempty"` // deployPath→hash
+    DDNSHealth   *DDNSHealthInfo   `json:"ddns_health,omitempty"`
+}
+
+type DDNSHealthInfo struct {
+    Running   bool   `json:"running"`              // DNSUpdater 是否可用
+    LastOK    bool   `json:"last_ok"`              // 最后一次更新是否成功
+    LastError string `json:"last_error,omitempty"` // 错误详情
+    LogLine   string `json:"log_line,omitempty"`   // 最近一条日志
+    Status    string `json:"status,omitempty"`     // Manager 判定: OK/ERR/DOWN
+    StatusMsg string `json:"status_msg,omitempty"`
+}
+
+// 响应 (Manager → Agent)
+type HeartbeatResp struct {
+    OK          bool          `json:"ok"`
+    Timestamp   string        `json:"timestamp"`
+    Config      *ConfigPush   `json:"config,omitempty"`      // 配置变更时下发
+    CertUpdates []*CertUpdate `json:"cert_updates,omitempty"` // 证书变更时下发
+    AgentUpdate *AgentUpdate  `json:"agent_update,omitempty"` // 版本升级时下发
+    Error       string        `json:"error,omitempty"`
+}
+```
+
+### 4.2 配置下发
+
+```go
+type ConfigPush struct {
+    YAML string `json:"yaml"` // 完整 ddns-go YAML 配置
+    Hash string `json:"hash"` // SHA256 hash (确定性，带分隔符)
+}
+
+// Agent 端请求 Manager 下发的节点配置 (JSON, 存于 NodeRecord.ConfigYAML)
+type NodeConfigRequest struct {
+    DNSKeyName   string        `json:"dns_key_name"`   // 多Key支持
+    DnsProvider  string        `json:"dns_provider"`
+    TTL          string        `json:"ttl"`           // "120"/"300"/"600"
+    IPv4         IPv4Config    `json:"ipv4"`
+    IPv6         IPv6Config    `json:"ipv6"`
+    CertBindings []CertBinding `json:"cert_bindings"`
+}
+```
+
+### 4.3 DNS Key 多账号
+
+```go
+type DNSKeyRecord struct {
+    Name            string   `json:"name"`              // 自定义名称 (e.g. "阿里云-生产")
+    Provider        string   `json:"provider"`          // ddns-go 供应商 (e.g. "alidns")
+    AccessKeyID     string   `json:"access_key_id"`
+    AccessKeySecret string   `json:"access_key_secret"`
+    UpdatedAt       string   `json:"updated_at"`
+    UsedByNodes     []string `json:"used_by_nodes"`
+}
+```
+
+- **向后兼容**: 旧 `dns_keys.json` (key=provider) → Load 时自动填充 `Name=Provider`
+- 节点配置存储 `dns_key_name`，renderDDNSConfig 据此查找 Key
+- ACME DNS-01 验证通过 `name` 查找 Key，读取 `provider` 传给 acme.sh
+
+### 4.4 节点持久化
+
+```go
+type NodeRecord struct {
+    Fingerprint  string        `json:"fingerprint"`
+    PasswordHash string        `json:"password_hash"`
+    CreatedAt    time.Time     `json:"created_at"`
+    LastSeen     time.Time     `json:"last_seen"`
+    ConfigYAML   string        `json:"config_yaml"`    // NodeConfigRequest JSON
+    ConfigHash   string        `json:"config_hash"`    // 下发的配置 hash
+    ConfigSentAt time.Time     `json:"config_sent_at"`
+    CertBindings []CertBinding `json:"cert_bindings"`
+    Tags         []string      `json:"tags,omitempty"`
+    Notes        string        `json:"notes,omitempty"`
+    Status       NodeStatus    `json:"status,omitempty"`
+    Hardware     *HardwareInfo `json:"hardware,omitempty"`
+}
+```
+
+---
+
+## 5. 配置引擎
+
+### 5.1 实现方式
+
+配置渲染在 `internal/server/handlers_nodes.go:renderDDNSConfig` 中完成，采用 **JSON 反序列化 + 直接组装 + YAML 序列化** 方式：
+
+1. 从 `NodeRecord.ConfigYAML` 读取 JSON（Web UI 的 `NodeConfigRequest` 序列化结果）
+2. 反序列化为中间结构体
+3. 从 `dns_keys.json` 注入 DNS Key
+4. 填充默认值（TTL=300, IPv4/IPv6 URL）
+5. 组装 `ddnsGoConfig` 结构体
+6. `yaml.Marshal` 输出 ddns-go 兼容 YAML
+
+**选择此方案而非 Go template 的原因**：
+- 类型安全：struct → yaml.Marshal 保证输出合法的 ddns-go 配置
+- 无注入风险：不拼接字符串，模板注入攻击面为零
+- 简单：不需要维护模板文件和 template.Execute 错误处理
+
+### 5.2 渲染函数签名
+
+```go
+func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, hash string)
+```
+
+- `jsonCfg`: Web UI 保存的 `NodeConfigRequest` JSON
+- 返回值 `("", "")` 表示渲染失败（JSON 解析失败 / DNS provider 缺失 / DNS Key 未配置）
+- 失败时日志会记录具体原因
+- hash 格式: `"sha256:" + hex`，与证书 hash 格式一致（v1.5.1）
+
+### 5.3 默认值策略
+
+| 字段 | 默认值 |
+|------|--------|
+| TTL | `"300"` |
+| IPv4 GetType | `"url"` |
+| IPv4 URL | `"http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org"` |
+| IPv6 GetType | `"url"` |
+| IPv6 URL | `"http://api6.ipify.org"` |
+| NotAllowWanAccess | `true` |
+
+### 5.4 输出示例
+
+```yaml
+# ddns-go config generated by ddns-manager v2
+notallowwanaccess: true
+dnsconf:
+  - dns:
+      name: alidns
+      id: LTAI5tKk****
+      secret: ********
+    ipv4:
+      enable: true
+      gettype: url
+      url: http://ipv4.icanhazip.com,http://checkip.amazonaws.com
+      netinterface: ""
+      cmd: ""
+      domains:
+        - ddd.example.com
+    ipv6:
+      enable: true
+      gettype: netinterface
+      url: http://api6.ipify.org
+      netinterface: ens34
+      cmd: ""
+      ipv6reg: ""
+      domains:
+        - test.example.com
+    ttl: "300"
+```
+
+---
+
+## 6. Agent 核心实现
+
+### 6.1 心跳循环
+
+文件：`cmd/agent/main.go:doHeartbeat`
+
+```go
+func doHeartbeat(cfg *AgentConfig) error {
+    // 1. 初始化 DNSUpdater (单例, sync.Once, 首次加载缓存配置)
+    dnsUpdaterOnce.Do(func() {
+        dnsUpdater = NewDNSUpdater()
+        // 读取加密缓存 → 解密（v1.5.2+）或明文回退（v1.5.1 兼容）
+        if data, _ := os.ReadFile(configCachePath()); err == nil {
+            yamlData := data
+            key := crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "config-cache")
+            if plain, decErr := crypto.Decrypt(string(data), key); decErr == nil {
+                yamlData = plain
+            }
+            dnsUpdater.ApplyConfig(yamlData)
+        }
+    })
+
+    // 2. 执行 DNS 更新 (2 分钟超时，防止 DNS API 降级阻塞心跳)
+    status := runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
+
+    // 3. 收集已部署的证书 hash
+    certHashes := collectCertHashes(cfg)
+
+    // 4. 构建并发送心跳
+    req := model.HeartbeatReq{
+        NodeID:      cfg.NodeID,
+        Fingerprint: cfg.Fingerprint,
+        Status:      model.NodeStatus{
+            AgentVersion: version, IPv4: status.IPv4, IPv6: status.IPv6,
+            CertHashes: certHashes,
+            DDNSHealth: &model.DDNSHealthInfo{...},
+        },
+        ConfigHash: dnsUpdater.ConfigHash(),
+        Logs:       dnsUpdater.RecentLogs(10),
+        Hardware:   collectHardware(),
+    }
+    resp := sendHeartbeat(cfg, req)
+
+    // 5. 配置热加载 + 加密缓存 (AES-256-GCM)
+    if resp.Config != nil && resp.Config.Hash != req.ConfigHash {
+        dnsUpdater.ApplyConfig([]byte(resp.Config.YAML))
+        cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
+            crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "config-cache"))
+        if encErr != nil {
+            cacheData = resp.Config.YAML // 回退明文
+        }
+        os.WriteFile(configCachePath(), []byte(cacheData), 0600)
+    }
+
+    // 6. 证书部署
+    applyCertUpdates(cfg, resp.CertUpdates)
+
+    // 7. 自升级
+    if resp.AgentUpdate != nil { selfUpgrade(cfg, resp.AgentUpdate) }
+}
+```
+
+### 6.2 DNS Updater
+
+文件：`cmd/agent/dns_updater.go`
+
+底层使用 ddns-go v6 library 的三个包：
+
+| 包 | 用途 |
+|----|------|
+| `ddns-go/v6/config` | `Config` 结构体 (YAML 反序列化)、`UpdatedFailed` 常量 |
+| `ddns-go/v6/dns` | 32 个 DNS provider 实现 (`alidns`, `cloudflare`, `dnspod`...) |
+| `ddns-go/v6/util` | `IpCache` (IP 变化检测) |
+
+```go
+type DNSUpdater struct {
+    mu     sync.Mutex
+    cfg    *ddnsconfig.Config
+    status DNSStatus
+    logBuf *LogBuffer  // 50 条环形缓冲区
+}
+
+func (u *DNSUpdater) Run() DNSStatus {
+    for _, dc := range u.cfg.DnsConf {
+        provider := newProvider(dc.DNS.Name)
+        ipv4cache := &util.IpCache{}
+        ipv6cache := &util.IpCache{}
+        provider.Init(&dc, ipv4cache, ipv6cache)
+        domains := provider.AddUpdateDomainRecords()
+        // 检查各域名状态、收集 IPv4/IPv6
+    }
+}
+
+func (u *DNSUpdater) ApplyConfig(yamlData []byte) error {
+    var cfg ddnsconfig.Config
+    yaml.Unmarshal(yamlData, &cfg)
+    u.cfg = &cfg
+}
+```
+
+**运行超时保护**：`runDNSUpdateWithTimeout()` 在 2 分钟超时后使用上次已知状态继续心跳，超时 goroutine 由 DNSUpdater 的 mutex 保证不会并发执行。
+
+**Provider 注册表** (28 个)：
+
+```go
+// providerRegistry maps names to factory functions (v1.5.1: map replaces switch).
+// Must be kept in sync with ddns-go's dns/index.go:RunOnce().
+var providerRegistry = map[string]func() dns.DNS{
+    "alidns":       func() dns.DNS { return &dns.Alidns{} },
+    "cloudflare":   func() dns.DNS { return &dns.Cloudflare{} },
+    "tencentcloud": func() dns.DNS { return &dns.TencentCloud{} },
+    // ... 28 total
+}
+
+func newProvider(name string) dns.DNS {
+    if fn, ok := providerRegistry[name]; ok {
+        return fn()
+    }
+    return nil
+}
+```
+
+**同步验证**: `TestProviderRegistryCompleteness` 维护一份与 ddns-go index.go 对齐的规范名单，检测缺失/多余条目。
+
+### 6.3 证书部署与哈希比对
+
+**Agent 端** (`collectCertHashes`): 扫描 `cfg.CertPath` 下所有 `.cert_hash` 文件，构建 `map[deployPath]hash` 上报。
+
+**Manager 端** (心跳处理): 将 Agent 上报的 `CertHashes[deployPath]` 与 `store.CertBundle.Hash` 比对：
+- 不匹配 → 下发证书（AES-256-GCM 加密）
+- 匹配 → 跳过
+
+**Hash 算法**（双方一致）：SHA256 所有文件内容（按文件名排序），统一格式 `"sha256:%x"`。
+
+### 6.4 降级模式
+
+- **Agent 重启后无配置**: DNSUpdater 以空配置启动 → `Run()` 立即返回（无操作），`DDNSHealth.Running=true`。等 Manager 推送配置后自动恢复。
+- **Manager 离线**: Agent 继续使用缓存的配置和证书，独立运行 DNS 更新。新配置/证书变更延迟到 Manager 恢复。
+
+### 6.5 自升级
+
+| 平台 | 机制 |
+|------|------|
+| Linux | `io.Copy` 到 tmp → `os.Rename` 原子替换（跨文件系统安全）|
+| Windows | 写入批处理脚本 → `CreateProcess(CREATE_NO_WINDOW)` 分离执行 → 退出 → SCM 5 秒后自动重启。含路径元字符安全检查 |
+
+自升级前 `validateAgentBinary()` 检查 ELF/PE 头 + 架构匹配，防止错误二进制损坏运行中的 agent。
+
+---
+
+## 7. Manager REST API
+
+### 7.1 认证机制
+
+- **管理端**: Bearer token = `sha256("admin:" + password)` + bcrypt 持久化
+- **节点端**: Bearer token = `base64(node_id + ":" + password)`
+
+### 7.2 速率限制
+
+三级 token bucket（per-IP）:
+
+| 限制器 | 默认值 | 适用范围 |
+|--------|--------|----------|
+| globalLimiter | 600 req/min | 普通 API |
+| heartbeatLimiter | 120 req/min | POST /api/heartbeat |
+| loginLimiter | 10 req/min | POST /api/auth/login |
+
+配置可通过 Web UI「设置」页调整，持久化到 `rate_limit.json`。
+
+### 7.3 路由表
+
+完整端点列表见 `docs/WEBUI-DESIGN.md §8`。
+
+### 7.4 心跳持久化
+
+心跳处理（`handleHeartbeat`）在单次 `s.store.PutNode(nodeID, rec)` 中完成所有持久化，避免双写 I/O：
+
+```
+1. 更新 LastSeen, Status, DDNSHealth, Hardware → 暂存内存
+2. 渲染配置、比对 hash → 有变更时更新 ConfigHash/ConfigSentAt → 暂存内存
+3. 收集证书更新 → 构建响应
+4. s.store.PutNode() → 一次 ReadFile→Modify→WriteFile 完成全部持久化
+```
+
+### 7.5 中间件链
+
+```
+请求 → 速率限制 → 认证验证 (Bearer Token) → 处理函数
+                              ↓ (failed)
+                          bcrypt fallback
+                         (admin token rotation)
+```
+
+---
+
+## 8. 持久化 (store.go)
+
+### 8.1 文件清单
+
+| 文件 | 内容 | 权限 |
+|------|------|------|
+| `nodes.json` | `map[nodeID]*NodeRecord` | 0600 |
+| `dns_keys.json` | DNS provider 密钥 | 0600 |
+| `admin.json` | bcrypt hash + password_changed | 0600 |
+| `smtp_config.json` | SMTP 配置 | 0600 |
+| `rate_limit.json` | 速率限制配置 | 0600 |
+| `agent_config.json` | 强制 Agent 版本 | 0600 |
+| `agent_manifest.json` | platform→versioned-filename 映射 (升级推送用) | 0644 |
+| `acme_config.json` | ACME 多账号配置 (email/ca/keytype/eab/account_key) | 0600 |
+| `certs/<name>/` | 证书文件 + meta.json (含 email 归属) | 0700/0600 |
+| `bin/` | Agent 二进制文件 | 0755 |
+| `events.log` | 审计日志 (JSONL) | 0600 |
+
+### 8.2 并发安全
+
+所有读写使用 `sync.RWMutex` 保护。读操作用 `RLock`，写操作用 `Lock`。关键操作（`PutNode`、`DeleteNode`、`PutACMEAccount`、`DeleteACMEAccount`）全程持写锁完成读-修改-写，消除 TOCTOU 竞态。
+
+---
+
+## 9. 审计日志 (logger.go)
+
+### 9.1 架构
+
+- **落盘**: JSONL 文件 (`events.log`)，每行一条 JSON
+- **内存**: 环形缓冲区 (默认 10000 条)，重启时从磁盘回读
+  - 文件 ≤ 2MB → 全量读取
+  - 文件 > 2MB → 尾部 2MB 读取（跳过首行残片），避免 50MB+ 全量加载
+- **轮转**: 日志文件 >50MB 时自动轮转为 `events-YYYY-MM-DD.log`
+- **空间管理**: 磁盘使用率 ≥90% 时自动删除最旧日志文件
+- **锁分离**: `mu` 保护环形缓冲区（μs级），`fileMu` 保护文件 I/O（ms级）
+
+### 9.2 事件结构
+
+```go
+type Event struct {
+    Time     time.Time `json:"time"`
+    Category string    `json:"category"` // heartbeat/config/auth/node/system
+    Action   string    `json:"action"`
+    Node     string    `json:"node,omitempty"`
+    Detail   string    `json:"detail"`
+    Status   string    `json:"status"`   // success/error/warning/info
+    IP       string    `json:"ip,omitempty"`
+    User     string    `json:"user,omitempty"`
+}
+```
+
+---
+
+## 10. 安全与加密
+
+### 10.1 传输加密
+
+| 场景 | 方式 |
+|------|------|
+| Agent ↔ Manager | TLS + Bearer Token 认证 |
+| 证书分发 | TLS + AES-256-GCM 应用层加密 |
+| 管理端密码 | bcrypt hash (constant-time comparison) |
+| 节点密码 | bcrypt hash (持久化) + base64 传输 |
+
+### 10.2 AES 加密 (crypto/aes.go)
+
+```
+密钥派生: HKDF-SHA256(password + "\x00" + fingerprint, salt=nil, info=purpose) → 32 bytes
+域分离:   "cert-transport" 证书加密 / "config-cache" 配置缓存（Key_A ≠ Key_B, RFC 5869）
+模式:     AES-256-GCM (认证加密)
+格式:     base64(nonce + ciphertext + tag)
+随机数:   crypto/rand (每次加密 12 bytes 新 nonce)
+```
+
+**说明**: password 固定 32 字节 hex 随机数（128 位熵），fingerprint 固定 `sha256:` 前缀 + 64 字节 hex，`\x00` 不可能出现在任一输入中。v1.5.2 升级为 HKDF-SHA256 并引入 purpose 参数做域分离。⚠️ 此改动不向下兼容——所有已部署的加密证书需重新签发。
+
+### 10.3 认证流程
+
+```
+注册: Agent 生成随机 32 字节密码 → Manager bcrypt 存储
+心跳: base64(node_id:password) → Manager bcrypt.CompareHashAndPassword
+指纹: sha256(hostname + machine-id) 双重校验
+```
+
+---
+
+## 11. ddns-go 集成细节
+
+### 11.1 依赖方式
+
+```
+go.mod:
+  require github.com/jeessy2/ddns-go/v6 v6.17.0
+```
+
+**不 fork、不 copy**: 直接 `go get -u` 即可同步官方更新（含新 DNS provider）。
+
+### 11.2 v2 删除的 v1 逻辑
+
+| v1 做了什么 | v2 为什么不需要 |
+|-------------|----------------|
+| 下载 ddns-go 二进制 | import library 编译进 agent |
+| systemd/journalctl 管理 ddns-go 进程 | 同进程，零外部进程管理 |
+| `systemctl is-active ddns-go` | DNSUpdater.Status() |
+| 解析日志文件/错误扫描 | DNSUpdater 直接返回内存状态 |
+| `mergeDNSSection` 逐行合并配置 | ApplyConfig() 整体替换 |
+| 重启 ddns-go | 同进程，热加载 |
+
+### 11.3 升级指引
+
+```bash
+go get -u github.com/jeessy2/ddns-go/v6
+go mod tidy
+go build ./...
+go vet ./...
+# 验证 Provider 注册表完整性
+go test ./cmd/agent/ -run Registry -v
+# 如有 MISSING → 更新 ddnsCanonicalProviders + providerRegistry
+```
+
+---
+
+## 12. ACME 证书管理
+
+### 12.1 双路径
+
+| 路径 | 触发条件 | 支持 CA |
+|------|----------|---------|
+| acme.sh | `acme.sh` 可执行且 DNS provider 在映射表中 | Let's Encrypt, ZeroSSL, Buypass, Google Trust |
+| 纯 Go (HTTP-01) | acme.sh 不可用或手动指定 | `golang.org/x/crypto/acme` |
+
+### 12.2 DNS provider 映射 (acme.sh)
+
+| 内部名 | acme.sh DNS API | 凭据 |
+|--------|----------------|------|
+| alidns | dns_ali | Ali_Key + Ali_Secret |
+| cloudflare | dns_cf | CF_Token |
+| txcloud | dns_tencent | Tencent_SecretId + Tencent_SecretKey |
+| huawei | dns_huaweicloud | HUAWEICLOUD_Username |
+| duckdns | dns_duckdns | DuckDNS_Token |
+| godaddy | dns_gd | GD_Key + GD_Secret |
+
+**安全**: DNS 凭据通过临时文件 (0600) 传入，不暴露在 `/proc/<pid>/environ`。
+
+### 12.3 多账号 + 各自续签
+
+#### 功能要求
+
+- **一账号一身份**: 每个 ACME 账号（邮箱+CA+密钥类型组合）独立签发证书
+- **各自续签**: 每个账号只续签自己签发的证书，不碰其他账号的证书
+- **不上传证书**: 用户通过 Web UI 上传的证书（无 `acme:true` 标记）永不自动续签
+- **多 CA 共存**: 同目录下 Let's Encrypt / ZeroSSL / Google Trust 证书互不干扰
+
+#### 实现方式
+
+**签发时标记归属** — `issueCert()` / `issueViaAcmeSh()` 写入 `meta.json` 时增加 `email` 字段：
+
+```json
+{
+  "domains": ["example.com"],
+  "issued": "2026-05-08T10:00:00+08:00",
+  "acme": true,
+  "ca": "Let's Encrypt",
+  "key_type": "EC256",
+  "email": "admin@example.com"
+}
+```
+
+**续签时过滤** — `Renew()` 扫描 `certsDir` 下所有证书目录，读取 `meta.json` 后按规则判定：
+
+```go
+func (m *Manager) Renew(ctx context.Context) (renewed []string) {
+    for _, e := range entries {
+        data, _ := os.ReadFile(metaPath)
+        // 1. 用户上传的证书 → 跳过
+        if !strings.Contains(data, `"acme":true`) { continue }
+        // 2. 其他账号签发的证书 → 跳过
+        if hasEmail && email != m.email { continue }
+        // 3. 自己的证书或旧证书（无 email 字段）→ 检查过期 → 续签
+        cert := parseCert(fullchain)
+        if time.Until(cert.NotAfter) > m.renewBefore { continue }
+        renewed = append(renewed, renewViaAcmeSh(domains))
+    }
+}
+```
+
+**兜底规则**: `meta.json` 中没有 `email` 字段的旧证书（v1.2.x 之前签发），由第一个扫描到的 Manager 负责续签。新签发的证书始终带 `email`。
+
+**定时调度** — `StartAutoRenew()` 在 `server.go` 中，24 小时 ticker，串行遍历所有已注册 ACME Manager：
+
+```go
+func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
+    go func() {
+        ticker := time.NewTicker(24 * time.Hour)
+        for {
+            select {
+            case <-ticker.C:
+                for _, mgr := range s.acmeMgrList() {
+                    renewed := mgr.Renew(ctx)
+                    log.Printf("[acme] auto-renewed (account %s): %v",
+                        mgr.AccountInfo().Email, renewed)
+                }
+            case <-shutdown: return
+            }
+        }
+    }()
+}
+```
+
+**判定流程图**:
+
+```
+24h ticker 触发
+  └→ Server.StartAutoRenew()
+       └→ for mgr in acmeMgrs (串行):
+            └→ mgr.Renew()
+                 └→ for each cert directory:
+                      ├─ meta.json 无 "acme":true → skip (用户上传)
+                      ├─ meta.json 有 email 且 ≠ mgr.email → skip (其他账号)
+                      ├─ meta.json 无 email (旧证书) → 由第一个 mgr 处理
+                      └─ email 匹配 → 检查 NotAfter → 过期则续签
+```
+
+### 12.4 ACME 账号密钥持久化
+
+**问题**: `acme.New()` 每次生成新 ECDSA P-256 密钥，服务器重启后 ACM 身份丢失，`GetReg` 无法找回原账号。
+
+**实现**:
+
+- **`NewWithKey(certsDir, email, httpPort, keyPEM)`** — 支持传入已有 PEM 密钥，空则生成新密钥
+- **`AccountKeyPEM()`** — 导出账号私钥为 PEM，用于持久化
+- **`ACMEAccountConfig.AccountKey`** — 新增字段，注册成功后持久化到 `acme_config.json`
+- **`initACMEManagers`** — 启动时用存储的密钥创建 Manager，后台 goroutine 异步 `RegisterAccount`/`GetReg` 恢复注册状态
+- **`handleACMESaveAccountIndex`** — 新增/更新账号时保存生成的密钥
+
+**密钥生命周期**:
+
+```
+首次注册: acme.NewWithKey(nil) → 生成密钥 → RegisterAccount → AccountKeyPEM → 持久化
+重启恢复: acme.NewWithKey(keyPEM) → 加载密钥 → RegisterAccount → GetReg → registered=true
+更新账号: 保留旧密钥 (keyPEM ≠ "") → 重新注册/更新 CA
+```
+
+---
+
+## 13. 系统资源监控
+
+### 13.1 后端采集
+
+`internal/sysinfo/` 包提供跨平台系统资源采集：
+
+```go
+// sysinfo.go — 跨平台接口
+func CPUPercent() float64
+func MemoryInfo() (used uint64, total uint64)
+func DiskInfo() (used uint64, total uint64)
+```
+
+`StartSysInfoCollector()` 在 Manager 启动时以 30 秒间隔后台采集，通过 `sysInfoMu.RWMutex` 保护缓存，API 即时返回最新数据。
+
+**API**: `GET /api/admin/system-info` → `{"cpu_percent","memory_used","memory_total","disk_used","disk_total"}`
+
+### 13.2 Agent 端上报
+
+节点心跳携带 `HardwareInfo`（含 `cpu_percent`/`memory_*`/`disk_*`），Manager 端可用于仪表盘资源展示。注意：节点端资源信息来自 `collectHardware()` 的单次采样，实时性低于管理端 30s 缓存。
+
+---
+
+## 14. 测试
+
+### 14.1 测试覆盖
+
+| 包 | 测试文件 | 用例数 | 覆盖重点 |
+|------|---------|--------|---------|
+| `internal/crypto` | `aes_test.go` | 6 | 加解密往返、错误输入、错密钥、不同 nonce、密钥派生确定性+兼容性 golden 值、域分离断言 |
+| `internal/config` | `config_test.go` | 6 | 默认值、文件不存在、保存加载往返、空文件、部分覆盖、权限 0600 |
+| `internal/store` | `store_test.go` | 28 | 节点 CRUD+并发+原子删除、证书保存/确定性 hash/列表/删除、DNS Key 追踪、Admin 状态、SMTP 配置、ACME 账户+并发、速率限制 |
+| `internal/notify` | `notify_test.go` | 7 | IsConfigured 边界、Masked 脱敏+非突变、空配置静默跳过、Toggle 关闭静默 |
+| `cmd/agent` | `dns_updater_test.go` | 12 | LogBuffer 并发、Provider 注册表完整性（28→规范名单双向校验）、空配置 Run、ConfigHash、无效 YAML、DNSStatus |
+
+**总计**: 5 测试文件，**59 个测试用例**。
+
+### 14.2 Provider 注册表验证
+
+```bash
+go test ./cmd/agent/ -run Registry -v
+```
+
+双向校验：
+- **缺失**: `MISSING from providerRegistry (add them): <name>` — ddns-go 新增 Provider
+- **多余**: `EXTRA in providerRegistry (remove or add to canonical list): <name>` — 注册表含已删除/拼写错误条目
+
+### 14.3 运行全部测试
+
+```bash
+go test ./... -count=1
+```
+
+---
+
+## 15. 边界条件
+
+### 15.1 Agent 启动时序
+
+1. 首次启动 → 无缓存配置 → DNSUpdater 空跑 → 心跳上报 Running 但无实际更新
+2. Manager 推送配置 → ApplyConfig → 后续心跳开始真正 DNS 更新
+3. 重启后 → 从 `configCachePath()` 加载加密缓存 → 解密 → 立即恢复 DNS 更新
+
+### 15.2 证书下发判定
+
+```
+if Agent.CertHashes[deployPath] == Bundle.Hash → skip
+else → 加密下发完整证书包
+```
+
+新 agent（无 .cert_hash 文件）→ `CertHashes` 为空 → 全量下发。
+
+### 15.3 配置变更检测
+
+```
+if resp.Config.Hash != req.ConfigHash → 下发新配置
+```
+
+hash 由 Manager 的 `renderDDNSConfig()` 计算，Agent 的 `dnsUpdater.ConfigHash()` 比对。
+
+### 15.4 磁盘空间保护
+
+`EnsureDiskSpace()` 在每次 `Log()` 调用时间歇检查（≥1min 间隔）：
+- 磁盘使用率 < 90% → 跳过
+- 磁盘使用率 ≥ 90% → 按修改时间从旧到新删除轮转日志文件，直到使用率降到 90% 以下
+
+### 15.5 DNS 更新超时
+
+`runDNSUpdateWithTimeout()` 在 2 分钟超时后使用上次已知状态继续心跳。超时 goroutine 由 DNSUpdater 的 mutex 保证不会并发执行。参见 §6.2。
+
+---
+
+## 16. 部署与运维
+
+### 16.1 系统要求
+
+| 组件 | 要求 |
+|------|------|
+| Manager | Go 1.25+, 端口 9877 (HTTPS), 端口 80 (HTTP-01 验证) |
+| Agent (Linux) | systemd timer, `/opt/ddns-manager/` |
+| Agent (Windows) | Windows 7+, Windows Service (SCM) |
+
+### 16.2 构建
+
+```bash
+# 版本号优先级: 环境变量 VERSION > git tag (v1.5.2) > VERSION 文件 > "dev"
+VERSION=$(cat VERSION) bash scripts/build.sh
+# 输出: build/
+#   ddns-manager-linux-amd64, ddns-manager-v1.5.2-linux-amd64
+#   node-agent-linux-amd64, node-agent-v1.5.2-linux-amd64
+#   node-agent-windows-amd64.exe (含 VERSIONINFO)
+#   ddns-installer-linux-amd64, ddns-installer-v1.5.2-linux-amd64
+```
+
+**版本号来源** (优先级):
+1. `git describe --tags --match 'v*'` — 有 tag 时精确版本
+2. `cat VERSION` 文件 — 无 git 时后备
+3. 硬编码 `dev` — 兜底
+
+### 16.3 安装模式
+
+| 平台 | Agent 运行方式 |
+|------|---------------|
+| Linux | `systemd timer` (OnUnitActiveSec=300s) |
+| Linux daemon | `-daemon` (内置 5min ticker) |
+| Windows | Windows Service (SCM, auto-restart) |
+
+### 16.4 测试环境
+
+| 角色 | 服务器名 | 内网 IP | 外网域名 | 操作系统 | 访问方式 | 功能说明 |
+|------|---------|---------|---------|---------|---------|---------|
+| **管理端** | ddm服务器 | 10.0.0.1 | manager.example.com | Ubuntu 64bit | SSH (Vaultwarden) | NPM 反代 (:30443/:30080) → ddns-manager :9877 |
+| **客户端A** | — | 10.0.0.2 | — | Ubuntu 64bit | SSH (Vaultwarden) | ddns-manager Agent |
+| **客户端B** | — | 10.0.0.3 | — | Windows Server 2022 64bit | WinRM (Vaultwarden) | ddns-manager Agent |
+
+**访问凭证**: 所有服务器凭证统一存储在 Vaultwarden 中，按服务器名/IP 搜索。
+
+### 16.5 部署流程
+
+1. 构建全部二进制 → `VERSION=$(cat VERSION) bash scripts/build.sh`
+2. 管理端: 替换 `/opt/ddns-manager/ddns-manager` 二进制 → 重启 systemd 服务
+3. 客户端A: `scp node-agent-v1.5.2-linux-amd64 → 10.0.0.2:/opt/ddns-manager/` → `ln -sf node-agent-v1.5.2-linux-amd64 node-agent` → systemd timer
+4. 客户端B: `scp node-agent-v1.5.2-windows-amd64.exe → 10.0.0.3:C:\ddns-manager\` → `mklink node-agent.exe → v1.5.2-windows-amd64.exe` → 重启服务
+5. 更新 Manager 的 `agent_manifest.json` 和 `agent_config.json` 指向新版本
+
+### 16.6 客户端版本管理
+
+**文件命名规则**: `{component}-v{VERSION}-{os}-{arch}[.exe]`
+
+```
+node-agent-v1.5.2-linux-amd64          # Agent (版本号)
+node-agent → node-agent-v1.5.2-linux-amd64   # 符号链接 (systemd 引用此路径)
+node-agent-linux-amd64                   # Agent (latest, 安装器使用)
+ddns-manager-v1.5.2-linux-amd64         # Manager (版本号)
+ddns-installer-v1.5.2-linux-amd64       # Installer (版本号)
+```
+
+**安装后目录结构**:
+```
+/opt/ddns-manager/
+├── node-agent → node-agent-v1.5.2-linux-amd64   ← 符号链接
+├── node-agent-v1.5.2-linux-amd64                ← ls 直接可见版本
+├── agent.yaml
+└── ddns_cache.yaml
+```
+
+**规则**:
+- 每个平台产 2 个文件：版本号版 + latest 版（同名无版本号）
+- latest 版供一键部署脚本/curl 直接下载（免查版本号）
+- 版本号版供 manifest 映射、Web UI 展示、回滚
+- 安装时创建符号链接 `node-agent → node-agent-v{VERSION}-{os}-{arch}`，systemd 引用链接
+- 升级时更新符号链接指向新版本，原子切换无需改 systemd 配置
+- 版本号从文件名提取（正则 `v?(\d+.\d+.\d+)`），不依赖 manifest
+
+**manifest 格式** (`agent_manifest.json`):
+```json
+{
+  "linux-amd64": "node-agent-v1.5.2-linux-amd64",
+  "linux-arm64": "node-agent-v1.5.2-linux-arm64",
+  "linux-arm": "node-agent-v1.5.2-linux-arm",
+  "windows-amd64": "node-agent-v1.5.2-windows-amd64.exe"
+}
+```
+- key = platform (`detectPlatform()` 输出: Go标准命名 `{goos}-{goarch}`，如 `linux-amd64` `windows-amd64`)
+- value = 版本号文件名（`handleBinFile` 从 `data/bin/` 提供下载）
+- 升级时心跳响应 `AgentUpdate.URL = "bin/" + filename`
+
+---
+
+*最后更新: 2026-05-10 — v1.5.2-audit: 版本管理自动化/符号链接安装/流量持久化/Web UI增强/日志全覆盖/页面状态管理器 — 21项修复 + 3服务器实机部署验证*

@@ -1,0 +1,586 @@
+# ddns-manager v2 Web UI 设计文档
+
+> **定位**: Web 前端设计规范（风格、布局、组件、交互），对 `cmd/manager/static/index.html` 负责。
+>
+> **参考风格**: 1Panel 管理面板
+>
+> **实现**: 单文件 SPA，通过 `//go:embed static/*` 编译到 Manager 二进制。
+
+---
+
+## 目录
+
+1. [全局布局](#1-全局布局)
+2. [色彩方案](#2-色彩方案)
+3. [侧边栏](#3-侧边栏)
+4. [顶栏](#4-顶栏)
+5. [通用组件](#5-通用组件)
+6. [页面功能](#6-页面功能)
+7. [节点配置模态框](#7-节点配置模态框)
+8. [API 端点](#8-api-端点)
+9. [PWA 支持](#9-pwa-支持)
+10. [技术约束](#10-技术约束)
+11. [默认值策略](#11-默认值策略)
+
+---
+
+## 1. 全局布局
+
+```
+┌─ Sidebar (200px) ───┬─ Top Bar ──────────────────────────────┐
+│  #f0f5ff 背景         │  #fff 背景, 1px #f0f0f0 底部分割线      │
+│                      ├────────────────────────────────────────┤
+│  Logo + 标题          │                                         │
+│  ─────────────────    │       内容区 (#f5f7fa 背景)              │
+│  ≡ 仪表盘             │                                         │
+│  ≡ 节点               │  ┌─ Card (白色圆角+微阴影) ──────────┐  │
+│  ≡ DNS & 证书         │  │  表格/表单内容                     │  │
+│  ≡ 版本管理           │  └───────────────────────────────────┘  │
+│  ≡ 日志               │                                         │
+│  ≡ 设置               │                                         │
+│                      │                                         │
+│  v2.0.1              │                                         │
+└──────────────────────┴─────────────────────────────────────────┘
+```
+
+- 左侧 200px 固定导航栏，SPA 单页切换
+- 移动端 (≤768px)：侧边栏缩至 60px 仅图标，或汉堡菜单隐藏，内容区最大化
+
+---
+
+## 2. 色彩方案
+
+| 用途 | 色值 |
+|------|------|
+| 主色 | `#1677ff` |
+| 侧边栏背景 | `#f0f5ff` |
+| 内容区背景 | `#f5f7fa` |
+| 卡片背景 | `#ffffff` |
+| 主文字 | `#262626` |
+| 次要文字 | `#595959` |
+| 边框 | `#f0f0f0` |
+| 输入框边框 | `#d9d9d9` |
+| 表头背景 | `#fafafa` |
+| 在线绿 | `#52c41a` |
+| 离线红 | `#ff4d4f` |
+| 警告橙 | `#faad14` |
+| 图表色1 | `#1677ff` (总请求线) |
+| 图表色2 | `#52c41a` |
+| 图表色3 | `#faad14` |
+| 图表色4 | `#ff4d4f` |
+| 图表色5 | `#722ed1` |
+
+---
+
+## 3. 侧边栏
+
+| 属性 | 规格 |
+|------|------|
+| 宽度 | 200px |
+| 背景 | `#f0f5ff` |
+| 菜单项高度 | 48px |
+| 图标 | 单色细线风格，`#8c8c8c`，16px |
+| 文字 | 13px, `#595959` |
+| 悬停 | 背景 `#e6f0ff` |
+| 选中态 | **白色背景 + 左侧 3px 蓝色竖条** (`#1677ff`)，文字和图标变蓝 |
+| Logo区 | 顶部，使用 `favicon.png` 图标 + "DDNS-Manager" 粗体，底部分割线 |
+| 底部 | 版本号 `v2.0.1`，11px 灰色 |
+
+---
+
+## 4. 顶栏
+
+- 白色背景，底部 1px `#f0f0f0` 分割线，高 48px
+- 左侧显示当前页面标题（从菜单选中项获取）
+- 右上角：自动刷新状态指示（显示"自动刷新 · HH:MM:SS"）
+
+---
+
+## 5. 通用组件
+
+### 5.1 卡片
+- 白色背景，圆角 6px
+- 阴影：`0 1px 2px rgba(0,0,0,.03)`
+- 内边距 20px 24px
+
+### 5.2 按钮
+| 类型 | 样式 |
+|------|------|
+| 主按钮 | 实心 `#1677ff`，白字，圆角 6px，h=34px |
+| 次要按钮 | 白底 + `#d9d9d9` 边框 + `#1677ff` 文字 |
+| 危险按钮 | 白底 + `#ff4d4f` 文字 + `#ffccc7` 边框 |
+| 小按钮 | h=28px, min-w=48px |
+| 排列 | 右对齐 (`justify-content: flex-end`) |
+
+### 5.3 表格
+- 表头：`#fafafa` 背景，灰色 11px 粗体字
+- 行分割线：`#f0f0f0` 1px
+- 行悬停：`#f5f7fa`
+- 无斑马纹
+- 状态标签 (badge)：圆角药丸形，11px 粗体
+
+### 5.4 表单
+- Label：12px, `#595959`，输入框上方
+- 输入框：白底，`#d9d9d9` 边框，聚焦 `#1677ff` + 光晕
+- 输入框高度：38px, 圆角 6px
+
+### 5.5 模态框
+- 居中遮罩层，半透明背景
+- 内容卡片最大高度 85vh，溢出滚动
+- 右上角关闭按钮
+
+### 5.6 Toast
+- 右下角固定，z-index 2000
+- 成功 `#52c41a` / 错误 `#ff4d4f` / 警告 `#faad14`
+- 2.5 秒自动消失
+
+### 5.7 折线图组件（Canvas 原生，无外部库）
+
+- 使用 HTML5 `<canvas>` 绘制，不依赖 Chart.js 等外部库
+- 支持自适应 DPR (window.devicePixelRatio)
+- 支持 window resize 重绘
+- Y轴 5 条网格线，自动刻度
+- X轴最多显示 12 个时间标签
+- 每条曲线带小圆点数据标记
+- 支持多条曲线叠加（不同颜色，HTML 中 CSS 变量 `--c0`~`--c4`）
+- 总请求曲线颜色: `#1677ff`，IP 曲线颜色按序分配: 蓝/绿/黄/红/紫
+
+---
+
+## 6. 页面功能
+
+### 6.1 登录页
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                                                               │
+│              ┌─ 渐变背景 (#eef2ff → #c7d2fe) ──────────────┐ │
+│              │                                               │ │
+│              │     ┌─ 白色卡片 (圆角12px, 微阴影) ─────┐     │ │
+│              │     │                                     │     │ │
+│              │     │    [Logo SVG]                       │     │ │
+│              │     │    DDNS-Manager                     │     │ │
+│              │     │    分布式 DDNS 节点管理平台           │     │ │
+│              │     │                                     │     │ │
+│              │     │    [管理员密码输入框]                  │     │ │
+│              │     │    [登录按钮 (全宽)]                  │     │ │
+│              │     │                                     │     │ │
+│              │     └─────────────────────────────────────┘     │ │
+│              └────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- 无侧边栏，全屏居中
+- 登录成功 → 存 token → 显示侧边栏 + 跳转仪表盘
+- 首次登录 → 弹出修改密码
+- 密码错误 → 红色提示
+
+### 6.2 仪表盘 【核心增强】
+
+包含统计卡片、系统资源饼图、节点状态表格、最近事件、访问统计折线图。
+
+**仪表盘统计卡片 (4列)**: 节点总数 | 在线 | 健康 | 离线
+- 健康: DDNS 状态 = OK (DNS 更新正常)，比"在线"更严格
+
+**仪表盘刷新策略**:
+- 统计卡片 + 节点表格：每 5 秒拉取一次
+- 最近事件：每 5 秒拉取 `GET /api/admin/logs?limit=10`
+- 图表数据：每 5 秒拉取 `GET /api/admin/access-stats?window=60`
+- 图表使用 Canvas 重绘，非全量重建 DOM
+
+**数据来源**:
+- 统计/节点: `GET /api/admin/stats` + `GET /api/admin/nodes`
+- 最近事件: `GET /api/admin/logs?limit=10`
+- 访问曲线: `GET /api/admin/access-stats`
+- 系统资源: `GET /api/admin/system-info`
+
+### 6.3 节点管理
+
+- 节点列表表格（含指纹、IP、DNS、版本、待审批标记）
+- 已审批节点：[编辑配置] [删除]
+- 待审批节点：[审批配置]
+- 点击编辑/审批 → 弹出配置模态框（见 §7）
+- 删除 → 二次确认
+
+### 6.4 DNS & 证书（合并页）
+
+DNS Keys 管理 + 证书管理 + ACME 账号管理，三级布局。
+
+**DNS Keys**:
+- 列表显示 Key 名称、供应商、AccessKeyID（脱敏）、使用节点数
+- [新增] [编辑] [删除] 操作
+
+**证书**:
+- 列表显示名称、域名、到期时间、来源（ACME/上传）
+- [上传证书] [ACME申请] [下载] [删除]
+- ACME 证书支持 [续签] 按钮
+
+**ACME 账号管理**:
+- 列出所有已配置账号（邮箱、CA、密钥类型、注册状态）
+- [添加账号] → `PUT /api/admin/acme/accounts/-1`
+- 删除 → `DELETE /api/admin/acme/accounts/{index}` → 二次确认
+- 支持多 CA (Let's Encrypt / ZeroSSL / Google Trust Services)
+
+**ACME 申请**:
+- 选择账号（下拉框，多账号支持）
+- 输入域名 → 选择 DNS Provider → 申请
+- 显示 acme.sh 完整输出日志
+
+### 6.5 版本管理
+
+- 强制版本号设置 + [保存]
+- 一键部署命令按钮（自动复制到剪贴板，`navigator.clipboard.writeText()`）
+- 已上传二进制列表（按 OS 分组，显示版本号 + 大小）+ [删除]
+- [上传二进制] 按钮（自动识别 PE/ELF → OS+架构）
+- 节点升级：复选框选择节点 + 目标版本下拉 → [批量升级]
+
+### 6.6 系统日志
+
+- 筛选：节点/分类/日期范围/搜索
+- 分页列表（时间/节点/分类/事件/状态）
+- [下载日志] [清理旧日志] 按钮
+
+### 6.7 设置
+
+- **修改密码** — 新密码 + 确认，≥8 字符
+- **SMTP 邮件通知** — Host/Port/Username/Password/To，通知事件开关
+- **访问限流** — 全局/心跳/登录 req/min，启用/禁用开关
+
+---
+
+## 7. 节点配置模态框 【核心】
+
+```
+┌─ 节点配置: node-02 ───────────────────────────────────────────┐
+│                                                                │
+│  DNS Key: [阿里云 (LTAI5tKk***6Z1P6) ▼]                        │
+│                                                                │
+│  ══ IPv4 ═══════════════════════════════════════════════════  │
+│  ☑ 启用  获取方式: [url ▼]  (url / 网卡 / 命令)                  │
+│                                                                │
+│  ┌─ url 方式 ──────────────────────────────────────────────┐  │
+│  │ URL: [http://ipv4.icanhazip.com,http://checkip.amazonaws.com] │
+│  │      默认值，逗号分隔多URL自动轮询，留空使用默认              │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│  ┌─ 网卡方式 (仅选中时显示) ────────────────────────────────┐  │
+│  │ 网卡: [ens34 (192.168.1.5) ▼]   ← 从Agent心跳上报加载      │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│  ┌─ 命令方式 (仅选中时显示) ────────────────────────────────┐  │
+│  │ 命令: [curl -s ifconfig.me              ]                  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  域名: [ddd.example.com] [✕]  [+ 添加]                           │
+│                                                                │
+│  ══ IPv6 ═══════════════════════════════════════════════════  │
+│  ☑ 启用  获取方式: [网卡 ▼]                                     │
+│                                                                │
+│  ┌─ url 方式 ──────────────────────────────────────────────┐  │
+│  │ URL: [http://api6.ipify.org,http://checkip.amazonaws.com,http://icanhazip.com] │
+│  │      默认值，逗号分隔多URL自动轮询，留空使用默认              │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│  ┌─ 网卡方式 ──────────────────────────────────────────────┐  │
+│  │ 网卡: [ens34 ▼]                                           │  │
+│  │ IPv6 正则: [                    ]  (可选, 多IP过滤)         │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│  ┌─ 命令方式 ──────────────────────────────────────────────┐  │
+│  │ 命令: [curl -s ifconfig.me              ]                  │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  域名: [test.example.com] [✕]  [+ 添加]                           │
+│                                                                │
+│  ══ 证书绑定 ═══════════════════════════════════════════════  │
+│  证书: [example.com ▼]  部署路径: [/etc/nginx/certs/]   [+ 添加] │
+│                                                                │
+│  ══ 高级 ═══════════════════════════════════════════════════  │
+│  TTL: [600s ▼]                                                 │
+│                                                                │
+│  [取消]                                          [保存并下发]    │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 规则
+1. 获取方式切换 → 对应输入区显示，其他隐藏
+2. 网卡列表从 `hardware.interfaces` 心跳数据加载（格式：`ens34 (192.168.1.5)`）
+3. URL 留空 → 使用默认值
+4. 域名和证书绑定支持动态增减
+5. 保存调用 `PUT /api/admin/nodes/{id}/config`
+
+### 请求格式
+```json
+{
+  "dns_provider": "alidns",
+  "ttl": "600",
+  "ipv4": {
+    "enable": true,
+    "gettype": "url",
+    "url": "http://ipv4.icanhazip.com,http://checkip.amazonaws.com",
+    "netinterface": "",
+    "cmd": "",
+    "domains": ["test.example.com"]
+  },
+  "ipv6": {
+    "enable": true,
+    "gettype": "netInterface",
+    "url": "http://api6.ipify.org,http://checkip.amazonaws.com,http://icanhazip.com",
+    "netinterface": "ens34",
+    "cmd": "",
+    "ipv6reg": "",
+    "domains": ["test2.example.com"]
+  },
+  "cert_bindings": [
+    {"bundle_name": "example.com", "deploy_path": "/opt/ddns-manager/certs/"}
+  ]
+}
+```
+
+---
+
+## 8. API 端点
+
+> 基于 `internal/server/server.go` 实际路由对照修正。
+
+### 8.1 公开端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/ping` | 健康检查，返回 `{"status":"ok"}` |
+| `GET` | `/api/admin/status` | 管理员状态，返回 `{"password_changed":bool}` |
+| `POST` | `/api/auth/login` | 管理员登录，请求 `{"password"}` → `{"token","password_changed"}` |
+| `POST` | `/api/register` | 节点注册（Agent 用） |
+| `POST` | `/api/heartbeat` | 节点心跳（Agent 用，含配置下发+证书推送） |
+| `GET` | `/bin/{filename}` | 下载二进制文件（公开） |
+
+### 8.2 管理端点 (需 Bearer Token)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/admin/stats` | 仪表盘统计 → `{"nodes_total","nodes_online","dns_keys","cert_bundles","acme_bundles"}` |
+| `GET` | `/api/admin/access-stats` | 访问统计时序数据 → `{"timestamps","total_series","top_ips","recent_events"}` |
+| `GET` | `/api/admin/system-info` | 管理端系统资源 → `{"cpu_percent","memory_*","disk_*"}` (30s 缓存) |
+| `GET` | `/api/admin/nodes` | 节点列表 → `map[string]NodeRecord`（key=node_id） |
+| `GET` | `/api/admin/nodes/{id}` | 获取单个节点 |
+| `POST` | `/api/admin/nodes/{id}/approve` | 审批节点 |
+| `PUT` | `/api/admin/nodes/{id}/config` | 保存节点配置 |
+| `DELETE` | `/api/admin/nodes/{id}` | 删除节点 |
+| `GET` | `/api/admin/dns-keys` | DNS Keys → `map[string]DNSKeyRecord` |
+| `POST` | `/api/admin/dns-keys` | 保存 DNS Key |
+| `DELETE` | `/api/admin/dns-keys/{name}` | 删除 DNS Key |
+| `GET` | `/api/admin/certs` | 证书列表 → `[{"name","files","hash","acme","domains","expiry"}]` |
+| `GET` | `/api/admin/certs/{name}` | 获取单个证书 |
+| `POST` | `/api/admin/certs` | 上传证书 (multipart/form-data) |
+| `DELETE` | `/api/admin/certs/{name}` | 删除证书 |
+| `GET` | `/api/admin/certs/{name}/download` | 下载证书文件 |
+| `POST` | `/api/admin/acme/all` | ACME 帐号列表 → `{"accounts":[...]}` |
+| `PUT` | `/api/admin/acme/accounts/{index}` | 新增/更新 ACME 帐号（index=-1=新增） |
+| `DELETE` | `/api/admin/acme/accounts/{index}` | 删除 ACME 帐号 |
+| `POST` | `/api/admin/acme/issue` | ACME 申请证书 |
+| `GET` | `/api/admin/logs` | 查询日志，参数: `?category=&status=&node=&from=&to=&limit=100&offset=0` |
+| `GET` | `/api/admin/logs/download` | 下载日志包 (tar.gz) |
+| `POST` | `/api/admin/logs/cleanup` | 清理旧日志 |
+| `GET` | `/api/admin/agent-version` | 获取强制版本 → `{"latest_version":""}` |
+| `POST` | `/api/admin/agent-version` | 设置强制版本 |
+| `GET` | `/api/admin/agent-binaries` | 二进制列表 → `[{"name","size","version"}]` |
+| `POST` | `/api/admin/agent-binaries` | 上传二进制 (multipart/form-data) |
+| `DELETE` | `/api/admin/agent-binaries/{name}` | 删除二进制 |
+| `GET` | `/api/admin/smtp` | SMTP 配置 |
+| `POST` | `/api/admin/smtp` | 保存 SMTP 配置 |
+| `POST` | `/api/admin/smtp/test` | 发送测试邮件 |
+| `POST` | `/api/admin/change-password` | 修改密码 (≥8字符) |
+| `GET` | `/api/admin/rate-limit` | 限流配置 |
+| `POST` | `/api/admin/rate-limit` | 保存限流配置 |
+
+### 8.3 数据模型对照
+
+#### `NodeRecord` (GET /api/admin/nodes 返回)
+
+```json
+{
+  "fingerprint": "sha256:...",
+  "password_hash": "$2a$...",
+  "created_at": "2026-05-08T14:59:22Z",
+  "last_seen": "2026-05-09T17:04:00Z",
+  "cert_bindings": [{"bundle_name":"...","deploy_path":"..."}],
+  "config_yaml": "{\"dns_provider\":...}",
+  "config_hash": "sha256:...",
+  "config_sent_at": "2026-05-09T17:04:00Z",
+  "tags": [],
+  "notes": "",
+  "status": {
+    "agent_version": "1.5.2",
+    "ipv4": "116.5.85.29",
+    "ipv6": "",
+    "ddns_health": {"running": true, "last_ok": true, "status": "OK"}
+  },
+  "hardware": {
+    "hostname": "ubuntu2",
+    "os": "Ubuntu 24.04.1 LTS",
+    "arch": "amd64",
+    "cpu_percent": 23.5,
+    "memory_used": 4294967296,
+    "memory_total": 8589934592,
+    "disk_used": 53687091200,
+    "disk_total": 107374182400,
+    "interfaces": [{"name":"ens34","mac":"...","ipv4":"10.0.0.2","ipv6":"..."}]
+  }
+}
+```
+
+**前端映射**: id=map的key, name=`hardware.hostname`, ip=`status.ipv4`, version=`status.agent_version`, health=`status.ddns_health.status`, online=`status.ddns_health.running`, config=JSON.parse(`config_yaml`)
+
+#### `NodeConfigRequest` (PUT /api/admin/nodes/{id}/config 请求体)
+
+```json
+{
+  "dns_provider": "alidns",
+  "dns_key_name": "阿里云-生产",
+  "ttl": "600",
+  "ipv4": {"enable":true,"gettype":"url","url":"","netinterface":"","cmd":"","domains":["..."]},
+  "ipv6": {"enable":false,"gettype":"","url":"","netinterface":"","cmd":"","ipv6reg":"","domains":null},
+  "cert_bindings": [{"bundle_name":"...","deploy_path":"..."}]
+}
+```
+
+#### `DNSKeyRecord` (GET /api/admin/dns-keys 返回)
+
+```json
+{
+  "name": "阿里云-生产",
+  "provider": "alidns",
+  "access_key_id": "LTAI5t...",
+  "access_key_secret": "...",
+  "updated_at": "2026-05-08T15:08:56Z",
+  "used_by_nodes": ["client-a","client-b"]
+}
+```
+
+#### `RateLimitConfig`
+
+```json
+{
+  "enabled": false,
+  "requests_per_min": 600,
+  "heartbeat_per_min": 120,
+  "login_per_min": 10
+}
+```
+
+---
+
+## 9. PWA 支持
+
+网站支持安装为独立应用（PWA），在 Chrome/Edge/Safari 中可添加到桌面。
+
+### 配置清单
+- `manifest.json` — Web App Manifest，定义应用名/图标/主题色/显示模式
+- `<link rel="manifest">` — HTML head 关联 manifest
+- `<link rel="apple-touch-icon">` — iOS Safari 桌面图标
+- `<meta name="theme-color">` — 移动端状态栏颜色 `#1677ff`
+- 图标文件：`icon-192.png` (192x192) + `icon-512.png` (512x512) + `apple-touch-icon.png`
+
+### manifest.json
+```json
+{
+  "name": "DDNS-Manager",
+  "short_name": "DDNS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#1677ff",
+  "icons": [
+    {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
+```
+
+### 验证方法
+1. Chrome F12 → Application → Manifest → 检查 Icons 栏
+2. 地址栏应出现"安装"图标
+3. 无痕模式测试避免缓存干扰
+
+---
+
+## 10. 技术约束
+
+- 单文件 `index.html`（内嵌 CSS + JS）
+- 通过 `//go:embed static/*` 编译到 Manager 二进制
+- 无外部框架依赖
+- Canvas 原生折线图 + 环形饼图（无 Chart.js 等外部库）
+- 移动端响应式适配
+- 剪贴板 API: `navigator.clipboard.writeText()` (HTTPS/localhost)
+- 升级状态持久化: `localStorage`（非 sessionStorage，浏览器关闭后保留）
+
+## 11. 页面状态管理
+
+### 11.1 页面隔离状态管理器 (Page-Isolated State Manager)
+
+**设计目标**: 全局性解决两个互斥需求：
+- 5 秒自动刷新时，当前页面未保存编辑**不丢失**
+- 切换页面时，旧页脏数据**不回显**，目标页从 API 干净加载
+
+**核心架构**:
+
+```
+_pageStore = {                          _pageClean = {
+  'settings': {                           'settings': false,  // 用户编辑了 SMTP，未保存
+    inputs: {'smtp-host': 'x.com'},       'nodes':    true,   // 刚刚保存了节点配置
+    checks: {'_chk:rl-enabled': true},    ...
+    _page: 'settings'                    }
+  },
+  'nodes': { ... }
+}
+```
+
+**三条铁律**:
+
+| 场景 | 行为 | 实现 |
+|------|------|------|
+| 5 秒定时刷新 | 当前页编辑保留 | `capturePageState()` → 重渲染 → `restorePageState()` 仅当 `_page === currentPage` |
+| 切换页面 | 目标页从 API 加载，旧页脏数据丢弃 | `navigate()` 时 `delete _pageStore[page]` |
+| 保存成功 | 标记页面 clean，下次刷新用 API 数据 | `markPageClean(page)` |
+
+### 11.2 自动捕获规则
+
+新增元素**无需**改捕获函数，符合以下任一规则即自动受保护：
+
+| 优先级 | 规则 | 示例 |
+|--------|------|------|
+| 1 | `element.id` | `<input id="smtp-host">` → key=`smtp-host` |
+| 2 | `element.dataset.ssKey` | `<input data-ss-key="cert-path-0">` → key=`cert-path-0` |
+| 3 | className 注册表 | `'.node-upgrade-cb'` → 按 value 索引 (仅 versions 页) |
+
+规则 1/2 覆盖 95% 场景，规则 3 仅用于无 id 的动态批量元素。
+
+### 11.3 脏标记机制
+
+- **自动脏标记**: `initApp()` 中绑定全局 `input`/`change` 事件代理，任何 `#content` 或模态框内的输入变化 → `markPageDirty()` → `_pageClean[currentPage] = false`
+- **清脏标记**: 8 个保存函数 (`saveNodeConfig` / `saveDNSKey` / `uploadCert` / `saveACMEAccount` / `issueACME` / `saveForcedVersion` / `changePassword` / `saveSMTP` / `saveRateLimit`) 成功回调中调用 `markPageClean()`
+- **恢复条件**: `restorePageState()` 检查 `!_pageClean[page]`，clean 时跳过恢复（直接用 API 数据）
+
+### 11.4 开发者规范
+
+> ⚠️ **新增保存函数时**：必须在成功回调中调 `markPageClean()`，否则下次刷新会回退 API 数据。
+>
+> ⚠️ **新增输入元素时**：加 `id` 或 `data-ss-key` 属性即自动受保护，无需其他改动。不加标识 → 5 秒刷新会丢失编辑。
+
+---
+
+## 12. 默认值策略
+
+| 字段 | 默认值 |
+|------|------|
+| IPv4 URL | `http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org` |
+| IPv6 URL | `http://api6.ipify.org,http://checkip.amazonaws.com,http://icanhazip.com` |
+| TTL | `600` (阿里云最低要求) |
+| 获取方式 | `url` |
+| 限流 全局/心跳/登录 | `600/120/10` req/min |
+| 图表窗口 | 60 分钟 |
+| 最近事件条数 | 10 条 |
+| 自动刷新间隔 | 5 秒 |
+| Top IP 数量 | 5 |
+| ACME 默认密钥类型 | EC256 |
+| 管理端默认密码 | `Admin12345` (首次登录后强制修改) |
+
+---
+
+*最后更新: 2026-05-10 — v1.5.2-audit: 新增 §11 页面隔离状态管理器 + 仪表盘4看板/节点域名IP列/列宽优化 + SMTP智能匹配/发件人重排/管理端域名/邮件模板优化 + 流量曲线时间范围选择器 + 侧边栏SVG图标升级*

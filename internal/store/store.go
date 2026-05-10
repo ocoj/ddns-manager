@@ -1,0 +1,654 @@
+// Package store provides file-system-based persistence.
+package store
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/kk/ddns-manager/internal/model"
+	"github.com/kk/ddns-manager/internal/notify"
+)
+
+// ManagerStore is the central data store.
+type ManagerStore struct {
+	mu     sync.RWMutex
+	dir    string
+}
+
+// NewStore opens or initialises the data directory.
+func NewStore(dir string) (*ManagerStore, error) {
+	for _, sub := range []string{"configs", "certs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			return nil, err
+		}
+	}
+	return &ManagerStore{dir: dir}, nil
+}
+
+// ── Nodes ──
+
+func (s *ManagerStore) nodesPath() string { return filepath.Join(s.dir, "nodes.json") }
+
+func (s *ManagerStore) LoadNodes() (map[string]*model.NodeRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nodes := map[string]*model.NodeRecord{}
+	data, err := os.ReadFile(s.nodesPath())
+	if os.IsNotExist(err) {
+		return nodes, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &nodes); err != nil {
+		return nil, fmt.Errorf("nodes.json: %w", err)
+	}
+	return nodes, nil
+}
+
+// saveNodesLocked writes nodes to disk. Caller must hold s.mu.Lock().
+func (s *ManagerStore) saveNodesLocked(nodes map[string]*model.NodeRecord) error {
+	data, err := json.MarshalIndent(nodes, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.nodesPath(), data, 0o600)
+}
+
+func (s *ManagerStore) SaveNodes(nodes map[string]*model.NodeRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveNodesLocked(nodes)
+}
+
+func (s *ManagerStore) GetNode(id string) (*model.NodeRecord, error) {
+	nodes, err := s.LoadNodes()
+	if err != nil {
+		return nil, err
+	}
+	n, ok := nodes[id]
+	if !ok {
+		return nil, fmt.Errorf("node %q not found", id)
+	}
+	return n, nil
+}
+
+// PutNode atomically reads-modifies-writes a single node record.
+// Holds write lock for the entire operation to prevent TOCTOU races
+// between concurrent heartbeat handlers.
+func (s *ManagerStore) PutNode(id string, rec *model.NodeRecord) error {
+	return s.putNodeInternal(id, rec, false)
+}
+
+// DeleteNode atomically removes a node record under write lock.
+// Prevents the TOCTOU race in handleDeleteNode (LoadNodes → delete → SaveNodes).
+func (s *ManagerStore) DeleteNode(id string) error {
+	return s.putNodeInternal(id, nil, true)
+}
+
+func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nodes := map[string]*model.NodeRecord{}
+	data, err := os.ReadFile(s.nodesPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &nodes); err != nil {
+			return fmt.Errorf("nodes.json: %w", err)
+		}
+	}
+	if del {
+		if _, ok := nodes[id]; !ok {
+			return fmt.Errorf("node %q not found", id)
+		}
+		delete(nodes, id)
+	} else {
+		nodes[id] = rec
+	}
+	return s.saveNodesLocked(nodes)
+}
+
+// ── Configs ── (removed - DNS keys managed via dns_keys.json)
+
+// ── Certs ──
+
+type CertBundle struct {
+	Name       string            `json:"name"`
+	Files      map[string][]byte `json:"-"`
+	TargetPath string            `json:"target_path"`
+	ExpiresAt  time.Time         `json:"expires_at"`
+	Domains    []string          `json:"domains"`
+	Hash       string            `json:"hash"`
+}
+
+func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
+	dir := filepath.Join(s.dir, "certs", name)
+	metaPath := filepath.Join(dir, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil, err
+	}
+	var b CertBundle
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, err
+	}
+	b.Files = map[string][]byte{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("readdir %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == "meta.json" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("readfile %s/%s: %w", dir, e.Name(), err)
+		}
+		b.Files[e.Name()] = content
+	}
+	return &b, nil
+}
+
+func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
+	dir := filepath.Join(s.dir, "certs", b.Name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// write files in stable order, compute deterministic hash
+	h := sha256.New()
+	names := make([]string, 0, len(b.Files))
+	for name := range b.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		content := b.Files[name]
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+			return err
+		}
+		h.Write(content)
+	}
+	b.Hash = fmt.Sprintf("sha256:%x", h.Sum(nil))
+	// preserve existing extra fields not in CertBundle struct (e.g. ACME metadata: acme/email/ca/key_type)
+	extra := map[string]interface{}{}
+	if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
+		if ex := map[string]interface{}{}; json.Unmarshal(data, &ex) == nil {
+			structKeys := map[string]bool{"name":true,"files":true,"target_path":true,"expires_at":true,"domains":true,"hash":true}
+			for k, v := range ex {
+				if !structKeys[k] {
+					extra[k] = v
+				}
+			}
+		}
+	}
+	// marshal bundle, then merge extra fields
+	metaMap := map[string]interface{}{}
+	data, err := json.Marshal(b)
+	if err != nil {
+		return fmt.Errorf("marshal cert bundle: %w", err)
+	}
+	if err := json.Unmarshal(data, &metaMap); err != nil {
+		return fmt.Errorf("unmarshal cert bundle: %w", err)
+	}
+	for k, v := range extra {
+		metaMap[k] = v
+	}
+	meta, err := json.MarshalIndent(metaMap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal cert meta: %w", err)
+	}
+	return os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600)
+}
+
+func (s *ManagerStore) ListCertBundles() ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(s.dir, "certs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
+func (s *ManagerStore) DeleteCertBundle(name string) error {
+	return os.RemoveAll(filepath.Join(s.dir, "certs", name))
+}
+
+// ── Admin State ──
+
+type AdminState struct {
+	TokenHash       string `json:"token_hash"`        // bcrypt of admin token
+	PasswordChanged bool   `json:"password_changed"`
+}
+
+func (s *ManagerStore) adminPath() string { return filepath.Join(s.dir, "admin.json") }
+
+func (s *ManagerStore) LoadAdminState() (*AdminState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.adminPath())
+	if os.IsNotExist(err) {
+		return nil, nil // not initialised
+	}
+	if err != nil {
+		return nil, err
+	}
+	var st AdminState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+func (s *ManagerStore) SaveAdminState(st *AdminState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.adminPath(), data, 0o600)
+}
+
+// ── DNS Keys ──
+
+func (s *ManagerStore) dnsKeysPath() string { return filepath.Join(s.dir, "dns_keys.json") }
+
+func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
+	keys := map[string]*model.DNSKeyRecord{}
+	data, err := os.ReadFile(s.dnsKeysPath())
+	if os.IsNotExist(err) {
+		return keys, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("dns_keys.json: %w", err)
+	}
+	// backward compat: old keys use provider as key, fill Name/Provider if empty
+	for k, v := range keys {
+		if v.Name == "" { v.Name = k }
+		if v.Provider == "" { v.Provider = k }
+	}
+	return keys, nil
+}
+
+func (s *ManagerStore) SaveDNSKeys(keys map[string]*model.DNSKeyRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+}
+
+// TrackDNSKeyUsage adds nodeID to the used_by_nodes list of a DNS key (by name).
+func (s *ManagerStore) TrackDNSKeyUsage(keyName, nodeID string) error {
+	keys, err := s.LoadDNSKeys()
+	if err != nil {
+		return err
+	}
+	rec, ok := keys[keyName]
+	if !ok {
+		return nil
+	}
+	found := false
+	for _, n := range rec.UsedByNodes {
+		if n == nodeID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		rec.UsedByNodes = append(rec.UsedByNodes, nodeID)
+		return s.SaveDNSKeys(keys)
+	}
+	return nil
+}
+
+// RemoveNodeFromDNSKeys removes nodeID from all DNS key usage lists.
+func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
+	keys, err := s.LoadDNSKeys()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, rec := range keys {
+		for i, n := range rec.UsedByNodes {
+			if n == nodeID {
+				rec.UsedByNodes = append(rec.UsedByNodes[:i], rec.UsedByNodes[i+1:]...)
+				changed = true
+				break
+			}
+		}
+	}
+	if changed {
+		return s.SaveDNSKeys(keys)
+	}
+	return nil
+}
+
+// ── Agent Version ──
+
+func (s *ManagerStore) agentConfigPath() string { return filepath.Join(s.dir, "agent_config.json") }
+
+type AgentConfig struct {
+	LatestVersion string `json:"latest_version"`
+}
+
+func (s *ManagerStore) agentManifestPath() string { return filepath.Join(s.dir, "agent_manifest.json") }
+
+func (s *ManagerStore) LoadAgentManifest() (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.agentManifestPath())
+	if os.IsNotExist(err) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (s *ManagerStore) SaveAgentManifest(m map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.agentManifestPath(), data, 0o644)
+}
+
+func (s *ManagerStore) LoadAgentConfig() (*AgentConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.agentConfigPath())
+	if os.IsNotExist(err) {
+		return &AgentConfig{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cfg AgentConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func (s *ManagerStore) SaveAgentConfig(cfg *AgentConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.agentConfigPath(), data, 0o600)
+}
+
+// ── Agent Binaries ──
+
+func (s *ManagerStore) AgentBinDir() string {
+	dir := filepath.Join(s.dir, "bin")
+	os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+func (s *ManagerStore) ListAgentBinaries() ([]map[string]interface{}, error) {
+	entries, err := os.ReadDir(s.AgentBinDir())
+	if err != nil {
+		return nil, err
+	}
+	verRe := regexp.MustCompile(`-v(dev|\d+\.\d+\.\d+)-`)
+	var result []map[string]interface{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "node-agent") {
+			continue
+		}
+		info, _ := e.Info()
+		version := ""
+		if m := verRe.FindStringSubmatch(e.Name()); m != nil {
+			version = m[1]
+		}
+		result = append(result, map[string]interface{}{
+			"name":    e.Name(),
+			"size":    info.Size(),
+			"version": version,
+		})
+	}
+	return result, nil
+}
+
+// ListAgentVersions returns distinct versions from uploaded agent binaries.
+func (s *ManagerStore) ListAgentVersions() ([]string, error) {
+	entries, err := os.ReadDir(s.AgentBinDir())
+	if err != nil {
+		return nil, err
+	}
+	verRe := regexp.MustCompile(`-v(dev|\d+\.\d+\.\d+)-`)
+	seen := map[string]bool{}
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "node-agent") {
+			continue
+		}
+		if m := verRe.FindStringSubmatch(e.Name()); m != nil {
+			v := m[1]
+			if !seen[v] {
+				seen[v] = true
+				versions = append(versions, v)
+			}
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	return versions, nil
+}
+
+func (s *ManagerStore) SaveAgentBinary(name string, data []byte) error {
+	dir := s.AgentBinDir()
+	return os.WriteFile(filepath.Join(dir, name), data, 0o644)
+}
+
+func (s *ManagerStore) DeleteAgentBinary(name string) error {
+	return os.Remove(filepath.Join(s.AgentBinDir(), name))
+}
+
+// ── SMTP Config ──
+
+func (s *ManagerStore) smtpPath() string { return filepath.Join(s.dir, "smtp_config.json") }
+
+func (s *ManagerStore) LoadSMTPConfig() (*notify.Config, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.smtpPath())
+	if os.IsNotExist(err) {
+		return &notify.Config{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cfg notify.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.CertExpiryDays <= 0 {
+		cfg.CertExpiryDays = 7
+	}
+	return &cfg, nil
+}
+
+func (s *ManagerStore) SaveSMTPConfig(cfg *notify.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cfg.CertExpiryDays <= 0 {
+		cfg.CertExpiryDays = 7
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.smtpPath(), data, 0o600)
+}
+
+type ACMEAccountConfig struct {
+	Email       string `json:"email"`
+	CA          string `json:"ca"`
+	KeyType     string `json:"key_type"`
+	AccountKey  string `json:"account_key,omitempty"`  // PEM-encoded private key
+	EABKID      string `json:"eab_kid,omitempty"`
+	EABKey      string `json:"eab_key,omitempty"`
+	Updated     string `json:"updated,omitempty"`
+}
+
+func (s *ManagerStore) acmeConfigPath() string { return filepath.Join(s.dir, "acme_config.json") }
+
+func (s *ManagerStore) LoadACMEAccounts() ([]ACMEAccountConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.acmeConfigPath())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var accounts []ACMEAccountConfig
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+func (s *ManagerStore) SaveACMEAccounts(accounts []ACMEAccountConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveACMEAccountsLocked(accounts)
+}
+
+// saveACMEAccountsLocked writes to disk. Caller must hold s.mu.Lock().
+func (s *ManagerStore) saveACMEAccountsLocked(accounts []ACMEAccountConfig) error {
+	data, err := json.MarshalIndent(accounts, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.acmeConfigPath(), data, 0o600)
+}
+
+// loadACMEAccountsLocked reads from disk. Caller must hold s.mu.Lock().
+func (s *ManagerStore) loadACMEAccountsLocked() ([]ACMEAccountConfig, error) {
+	data, err := os.ReadFile(s.acmeConfigPath())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var accounts []ACMEAccountConfig
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
+// PutACMEAccount atomically reads-modifies-writes an ACME account at index.
+// If index < 0, appends a new account. Prevents concurrent write corruption.
+func (s *ManagerStore) PutACMEAccount(index int, acct ACMEAccountConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts, err := s.loadACMEAccountsLocked()
+	if err != nil {
+		return err
+	}
+	if index >= 0 && index < len(accounts) {
+		accounts[index] = acct
+	} else {
+		accounts = append(accounts, acct)
+	}
+	return s.saveACMEAccountsLocked(accounts)
+}
+
+// DeleteACMEAccount atomically removes an ACME account at index.
+func (s *ManagerStore) DeleteACMEAccount(index int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts, err := s.loadACMEAccountsLocked()
+	if err != nil {
+		return err
+	}
+	if index < 0 || index >= len(accounts) {
+		return fmt.Errorf("ACME account %d not found", index)
+	}
+	accounts = append(accounts[:index], accounts[index+1:]...)
+	return s.saveACMEAccountsLocked(accounts)
+}
+
+
+// ── Rate Limit Config ──
+
+type RateLimitConfig struct {
+	Enabled          bool `json:"enabled"`
+	RequestsPerMin   int  `json:"requests_per_min"`
+	HeartbeatPerMin  int  `json:"heartbeat_per_min"`
+	LoginPerMin      int  `json:"login_per_min"`
+}
+
+func (s *ManagerStore) rateLimitPath() string { return filepath.Join(s.dir, "rate_limit.json") }
+
+func (s *ManagerStore) LoadRateLimitConfig() (*RateLimitConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.rateLimitPath())
+	if os.IsNotExist(err) {
+		return &RateLimitConfig{Enabled: false, RequestsPerMin: 600, HeartbeatPerMin: 120, LoginPerMin: 10}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cfg RateLimitConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.RequestsPerMin <= 0 { cfg.RequestsPerMin = 600 }
+	if cfg.HeartbeatPerMin <= 0 { cfg.HeartbeatPerMin = 120 }
+	if cfg.LoginPerMin <= 0 { cfg.LoginPerMin = 10 }
+	return &cfg, nil
+}
+
+func (s *ManagerStore) SaveRateLimitConfig(cfg *RateLimitConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cfg.RequestsPerMin <= 0 { cfg.RequestsPerMin = 600 }
+	if cfg.HeartbeatPerMin <= 0 { cfg.HeartbeatPerMin = 120 }
+	if cfg.LoginPerMin <= 0 { cfg.LoginPerMin = 10 }
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.rateLimitPath(), data, 0o600)
+}

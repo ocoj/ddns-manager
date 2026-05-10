@@ -1,0 +1,1997 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DDNS-Manager</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#1677ff">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --c-primary:#1677ff;--c-primary-bg:#f0f5ff;--c-primary-hover:#e6f0ff;
+  --c-bg:#f5f7fa;--c-card:#fff;--c-text:#262626;--c-text2:#595959;
+  --c-border:#f0f0f0;--c-input-border:#d9d9d9;--c-th-bg:#fafafa;
+  --c-green:#52c41a;--c-red:#ff4d4f;--c-orange:#faad14;--c-purple:#722ed1;
+  --c-ch0:#1677ff;--c-ch1:#52c41a;--c-ch2:#faad14;--c-ch3:#ff4d4f;--c-ch4:#722ed1;
+  --sidebar-w:200px;--topbar-h:48px;--radius:6px;--shadow:0 1px 2px rgba(0,0,0,.03);
+}
+html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--c-text);background:var(--c-bg)}
+#app{display:flex;height:100vh;overflow:hidden}
+#app.login-page{display:none}
+#sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--c-primary-bg);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
+#main-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#topbar{height:var(--topbar-h);min-height:var(--topbar-h);background:var(--c-card);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 20px;justify-content:space-between}
+#topbar .title{font-size:15px;font-weight:600;color:var(--c-text)}
+#topbar .refresh{font-size:12px;color:var(--c-text2);display:flex;align-items:center;gap:6px}
+#topbar .refresh .dot{width:6px;height:6px;border-radius:50%;background:var(--c-green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#content{flex:1;overflow-y:auto;padding:20px}
+#content>div{display:none}
+#content>div.active{display:block}
+
+.side-logo{padding:20px 16px 16px;border-bottom:1px solid rgba(0,0,0,.06);display:flex;align-items:center;gap:10px}
+.side-logo svg{width:28px;height:28px;flex-shrink:0}
+.side-logo span{font-size:14px;font-weight:700;color:var(--c-primary)}
+.side-nav{flex:1;padding:8px 0}
+.side-nav .item{display:flex;align-items:center;height:48px;padding:0 16px;font-size:13px;color:var(--c-text2);cursor:pointer;border-left:3px solid transparent;transition:all .15s;gap:10px}
+.side-nav .item:hover{background:var(--c-primary-hover)}
+.side-nav .item.active{background:var(--c-card);border-left-color:var(--c-primary);color:var(--c-primary);font-weight:500}
+.side-nav .item svg{width:20px;height:20px;flex-shrink:0}
+.side-footer{padding:12px 16px;font-size:11px;color:var(--c-text2);border-top:1px solid rgba(0,0,0,.06)}
+
+.login-wrap{height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#eef2ff,#c7d2fe)}
+.login-card{background:var(--c-card);border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);padding:40px 36px;width:380px;max-width:90vw;text-align:center}
+.login-card svg{width:48px;height:48px;margin-bottom:8px}
+.login-card h1{font-size:20px;color:var(--c-primary);margin-bottom:4px}
+.login-card .sub{font-size:12px;color:var(--c-text2);margin-bottom:28px}
+.login-card .field{margin-bottom:16px;text-align:left}
+.login-card label{display:block;font-size:12px;color:var(--c-text2);margin-bottom:4px}
+.login-card input{width:100%;height:38px;border:1px solid var(--c-input-border);border-radius:var(--radius);padding:0 12px;font-size:14px;outline:none;transition:border .2s}
+.login-card input:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)}
+.login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;display:none}
+.login-card .err.show{display:block}
+.btn-login{width:100%;height:38px;background:var(--c-primary);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;margin-top:8px}
+.btn-login:hover{opacity:.85}
+.btn-login:disabled{opacity:.6;cursor:not-allowed}
+
+.card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px}
+.card h3{font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:12px}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.card-header h3{margin-bottom:0}
+
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px}
+.stat-card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 20px;text-align:center}
+.stat-card .num{font-size:28px;font-weight:700;color:var(--c-text)}
+.stat-card .lbl{font-size:12px;color:var(--c-text2);margin-top:4px}
+.stat-card .num.green{color:var(--c-green)}
+.stat-card .num.red{color:var(--c-red)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .15s;border:none;gap:6px;white-space:nowrap}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--c-primary);color:#fff}.btn-primary:hover:not(:disabled){opacity:.85}
+.btn-secondary{background:var(--c-card);color:var(--c-primary);border:1px solid var(--c-input-border)}.btn-secondary:hover:not(:disabled){border-color:var(--c-primary)}
+.btn-danger{background:var(--c-card);color:var(--c-red);border:1px solid #ffccc7}.btn-danger:hover:not(:disabled){background:#fff2f0}
+.btn-sm{height:28px;min-width:48px;padding:0 12px;font-size:12px}
+.btn-row{display:flex;gap:8px;justify-content:flex-end}
+.btn-wrap{display:flex;gap:8px;align-items:center}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--c-th-bg);font-size:11px;font-weight:700;color:var(--c-text2);padding:10px 12px;text-transform:uppercase;letter-spacing:.3px}
+td{padding:10px 12px;border-bottom:1px solid var(--c-border)}
+tr:hover td{background:var(--c-bg)}
+th{text-align:left}
+.badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-green{background:#f6ffed;color:var(--c-green);border:1px solid #b7eb8f}
+.badge-red{background:#fff2f0;color:var(--c-red);border:1px solid #ffccc7}
+.badge-orange{background:#fffbe6;color:var(--c-orange);border:1px solid #ffe58f}
+.badge-blue{background:#e6f7ff;color:var(--c-primary);border:1px solid #91d5ff}
+
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:12px;color:var(--c-text2);margin-bottom:4px}
+.form-group input,.form-group select,.form-group textarea{width:100%;height:38px;border:1px solid var(--c-input-border);border-radius:var(--radius);padding:0 12px;font-size:13px;outline:none;transition:border .2s;background:var(--c-card)}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)}
+.form-group textarea{height:auto;padding:8px 12px;font-family:Consolas,Monaco,monospace;font-size:12px;resize:vertical}
+.form-group select{-webkit-appearance:none;appearance:none;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 8L1 3h10z' fill='%238c8c8c'/%3E%3C/svg%3E\");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+.form-inline{display:flex;gap:8px;align-items:flex-end}
+.form-inline .form-group{flex:1}
+.checkbox-row{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.checkbox-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--c-primary);cursor:pointer}
+
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal-box{background:var(--c-card);border-radius:8px;box-shadow:0 6px 30px rgba(0,0,0,.12);width:660px;max-width:90vw;max-height:85vh;overflow-y:auto;padding:24px}
+.modal-box h3{font-size:15px;font-weight:600;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--c-border)}
+.modal-close{float:right;background:none;border:none;font-size:18px;cursor:pointer;color:var(--c-text2);line-height:1}
+.modal-close:hover{color:var(--c-text)}
+
+#toasts{position:fixed;bottom:20px;right:20px;z-index:2000;display:flex;flex-direction:column;gap:8px}
+.toast{padding:10px 20px;border-radius:var(--radius);font-size:13px;color:#fff;animation:slideIn .25s ease;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.toast.success{background:var(--c-green)}.toast.error{background:var(--c-red)}.toast.warning{background:var(--c-orange)}
+@keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+
+.event-list{max-height:320px;overflow-y:auto;font-size:12px}
+.event-item{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--c-border)}
+.event-item:last-child{border-bottom:none}
+.event-time{color:var(--c-text2);white-space:nowrap;min-width:60px;font-family:Consolas,Monaco,monospace}
+.event-node{color:var(--c-primary);min-width:80px;font-weight:500}
+.event-msg{flex:1;word-break:break-all}
+
+.chart-wrap{width:100%;height:260px;position:relative}
+.chart-wrap canvas{width:100%!important;height:100%!important}
+.chart-legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;font-size:12px}
+.chart-legend span{display:flex;align-items:center;gap:4px}
+.chart-legend span::before{content:'';display:inline-block;width:12px;height:3px;border-radius:2px}
+
+.empty{text-align:center;padding:32px;color:var(--c-text2);font-size:13px}
+.mono{font-family:Consolas,Monaco,monospace;font-size:12px}
+.meta-row{display:flex;gap:24px;flex-wrap:wrap;font-size:12px;color:var(--c-text2);margin-bottom:4px}
+.section-title{font-size:13px;font-weight:600;color:var(--c-primary);margin:16px 0 8px;padding-bottom:6px;border-bottom:1px dashed var(--c-border);display:flex;align-items:center;gap:6px}
+.pagination{display:flex;align-items:center;gap:8px;justify-content:center;padding:12px 0}
+.pagination span{font-size:12px;color:var(--c-text2)}
+.tip{font-size:11px;color:var(--c-text2);margin-top:4px}
+.flex-between{display:flex;justify-content:space-between;align-items:center}
+
+@media(max-width:768px){
+  #app:not(.login-page){flex-direction:column}
+  #sidebar{width:100%;min-width:100%;flex-direction:row;flex-wrap:wrap;padding:4px;overflow-x:auto;height:auto}
+  #sidebar .side-logo,#sidebar .side-footer{display:none}
+  .side-nav{display:flex;flex-direction:row;padding:0}
+  .side-nav .item{height:40px;padding:0 10px;border-left:none;border-bottom:2px solid transparent;font-size:12px}
+  .side-nav .item.active{border-bottom-color:var(--c-primary);border-left:none;background:transparent}
+  #topbar{height:40px;min-height:40px;padding:0 12px}
+  .stats-row{grid-template-columns:repeat(3,1fr);gap:8px}
+  .stat-card .num{font-size:20px}
+  .form-row{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div id="app" class="login-page">
+<aside id="sidebar" style="display:none">
+  <div class="side-logo">
+    <img src="/favicon.png" width="32" height="32" alt="logo">
+    <span>DDNS-Manager</span>
+  </div>
+  <nav class="side-nav">
+    <div class="item active" data-page="dashboard"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><path d="M9 16a3 3 0 0 1 6 0"></path><path d="M12 16v-2"></path><circle cx="5" cy="6.5" r="0.5" fill="currentColor"></circle><circle cx="7" cy="6.5" r="0.5" fill="currentColor"></circle></svg> 仪表盘</div>
+    <div class="item" data-page="nodes"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="8" r="3"></circle><circle cx="18" cy="16" r="3"></circle><circle cx="6" cy="12" r="3"></circle><line x1="8.5" y1="10.5" x2="15.5" y2="8"></line><line x1="8.5" y1="13.5" x2="15.5" y2="16"></line></svg> 节点</div>
+    <div class="item" data-page="dns"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a10 10 0 1 0-10-10"></path><path d="M2 12h11"></path><path d="M12 2a15 15 0 0 1 0 20"></path><rect x="15" y="15" width="7" height="6" rx="1"></rect><path d="M17 15v-2a2 2 0 0 1 4 0v2"></path></svg> DNS &amp; 证书</div>
+    <div class="item" data-page="versions"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><path d="M12 17v-4l-2 2"></path><path d="M12 13l2 2"></path></svg> 版本管理</div>
+    <div class="item" data-page="logs"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v14a4 4 0 0 0 8 0V4"></path><path d="M18 22a4 4 0 0 0 4-4V6"></path><line x1="8" y1="10" x2="12" y2="10"></line><line x1="8" y1="14" x2="12" y2="14"></line></svg> 日志</div>
+    <div class="item" data-page="settings"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> 设置</div>
+  </nav>
+  <div class="side-footer">v2.0.1 — build 2026-05-09</div>
+</aside>
+
+<div id="main-area" style="display:none">
+  <div id="topbar"><div class="title" id="page-title">仪表盘</div><div class="refresh"><span class="dot"></span> 自动刷新 · <span id="refresh-timer">00:00</span></div></div>
+  <div id="content">
+    <div id="page-dashboard" class="active">
+      <div class="card" id="sys-charts-card" style="display:none"><div class="card-header"><h3>管理端服务器资源</h3></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">CPU</div><div class="chart-wrap" style="height:180px" id="chart-cpu"></div></div>
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">内存</div><div class="chart-wrap" style="height:180px" id="chart-mem"></div></div>
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">磁盘</div><div class="chart-wrap" style="height:180px" id="chart-disk"></div></div>
+      </div></div>
+      <div id="dashboard-content"></div>
+    </div>
+    <div id="page-nodes"></div>
+    <div id="page-dns"></div>
+    <div id="page-versions"></div>
+    <div id="page-logs"></div>
+    <div id="page-settings"></div>
+  </div>
+</div>
+</div>
+
+<div id="login-wrap" class="login-wrap">
+  <div class="login-card">
+    <img src="/favicon.png" width="48" height="48" alt="logo" style="display:block;margin:0 auto 8px">
+    <h1>DDNS-Manager</h1>
+    <p class="sub">分布式 DDNS 节点管理平台</p>
+    <div class="field"><label>管理员密码</label><input type="password" id="login-pwd" placeholder="输入密码" autofocus onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="err" id="login-err">密码错误</div>
+    <button class="btn-login" id="login-btn" onclick="doLogin()">登 录</button>
+    <p style="margin-top:12px;font-size:11px;color:var(--c-text2)">默认密码: Admin12345 · 首次登录请修改</p>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<div class="modal-overlay" id="modal-node-config"><div class="modal-box"><h3><span id="modal-node-title">节点配置</span><button class="modal-close" onclick="closeModal('modal-node-config')">&times;</button></h3><div id="modal-node-body"></div></div></div>
+<div class="modal-overlay" id="modal-confirm"><div class="modal-box" style="width:400px"><h3 id="modal-confirm-title">确认操作</h3><p id="modal-confirm-msg" style="margin-bottom:16px;font-size:13px"></p><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('modal-confirm')">取消</button><button class="btn btn-danger" id="modal-confirm-btn">确认</button></div></div></div>
+<div class="modal-overlay" id="modal-acme-account"><div class="modal-box" style="width:500px"><h3><span id="modal-acme-title">添加 ACME 帐号</span><button class="modal-close" onclick="closeModal('modal-acme-account')">&times;</button></h3><div class="form-group"><label>Email</label><input id="acme-email" placeholder="admin@example.com"></div><div class="form-group"><label>CA</label><select id="acme-ca"><option>Let's Encrypt</option><option>ZeroSSL</option><option>Google Trust Services</option></select></div><div class="form-group"><label>Key Type</label><select id="acme-keytype"><option>EC256</option><option>RSA2048</option><option>RSA4096</option></select></div><div class="form-group"><label>EAB KID (ZeroSSL 必填)</label><input id="acme-eabkid"></div><div class="form-group"><label>EAB HMAC (ZeroSSL 必填)</label><input id="acme-eabkey"></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-acme-account')">取消</button><button class="btn btn-primary" onclick="saveACMEAccount()">提交</button></div></div></div>
+<div class="modal-overlay" id="modal-acme-issue"><div class="modal-box" style="width:560px"><h3>ACME 申请证书<button class="modal-close" onclick="closeModal('modal-acme-issue')">&times;</button></h3><div class="form-group"><label>帐号</label><select id="acme-issue-account"></select></div><div class="form-group"><label>域名 (逗号分隔)</label><input id="acme-issue-domains" placeholder="example.com,*.example.com"><div class="tip">泛域名(*.example.com)需要 DNS-01 验证，必须选 DNS 提供商</div></div><div class="form-group"><label>DNS 提供商 (DNS-01 必选)</label><select id="acme-issue-dns"><option value="">-- HTTP-01 (非泛域名) --</option></select></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-acme-issue')">取消</button><button class="btn btn-primary" id="acme-issue-btn" onclick="issueACME()">申请</button></div><div id="acme-log" style="display:none;margin-top:12px;background:#1a1a2e;color:#00ff88;padding:10px;border-radius:6px;font:12px Consolas,monospace;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div></div></div>
+<div class="modal-overlay" id="modal-cert-detail"><div class="modal-box" style="width:460px"><h3>证书详情<button class="modal-close" onclick="closeModal('modal-cert-detail')">&times;</button></h3><div id="cert-detail-body" style="font-size:13px;line-height:2"></div></div></div>
+<div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
+<div class="modal-overlay" id="modal-dnskey-add"><div class="modal-box" style="width:420px"><h3>添加 DNS Key<button class="modal-close" onclick="closeModal('modal-dnskey-add')">&times;</button></h3><div class="form-group"><label>名称</label><input id="dnskey-name" placeholder="e.g. 阿里云-生产"><div class="tip">自定义名称，同一供应商可建多个 Key</div></div><div class="form-group"><label>提供商</label><select id="dnskey-provider"><option value="">-- 请选择 --</option><option value="alidns">阿里云 (alidns)</option><option value="aliesa">阿里云国际 (aliesa)</option><option value="tencentcloud">腾讯云 (tencentcloud)</option><option value="dnspod">DNSPod (dnspod)</option><option value="cloudflare">Cloudflare</option><option value="huaweicloud">华为云 (huaweicloud)</option><option value="baiducloud">百度云 (baiducloud)</option><option value="porkbun">Porkbun</option><option value="godaddy">GoDaddy</option><option value="namecheap">Namecheap</option><option value="namesilo">NameSilo</option><option value="dynv6">Dynv6</option><option value="dnsla">DNSLA</option><option value="dynadot">Dynadot</option><option value="vercel">Vercel</option><option value="cloudns">ClouDNS</option><option value="trafficroute">TrafficRoute</option><option value="callback">Callback</option><option value="spaceship">Spaceship</option><option value="edgeone">EdgeOne</option><option value="gcore">Gcore</option><option value="nsone">NS1</option><option value="name_com">Name.com</option><option value="rainyun">Rainyun</option><option value="eranet">Eranet</option><option value="nowcn">NowCN</option><option value="tnethk">TnetHK</option><option value="hipmdnsmgr">HiPM DNS</option></select></div><div class="form-group"><label>Access Key ID</label><input id="dnskey-ak" placeholder=""></div><div class="form-group"><label>Secret Key</label><input id="dnskey-sk" placeholder=""></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-dnskey-add')">取消</button><button class="btn btn-primary" onclick="saveDNSKey()">保存</button></div></div></div>
+
+<script>
+"use strict";
+
+// ========== STATE (with safe localStorage) ==========
+let TOKEN = '';
+try { TOKEN = localStorage.getItem('ddns-token') || ''; } catch(e){}
+let currentPage = 'dashboard';
+let refreshTimer = null;
+let refreshSec = 0;
+let confirmCb = null;
+
+function saveToken(t) {
+  TOKEN = t;
+  try { localStorage.setItem('ddns-token', t); } catch(e){}
+}
+function clearToken() {
+  TOKEN = '';
+  try { localStorage.removeItem('ddns-token'); } catch(e){}
+}
+
+// ========== DATA NORMALIZERS ==========
+function parseConfig(yamlStr) {
+  if (!yamlStr) return null;
+  try { return JSON.parse(yamlStr); } catch(e) { return null; }
+}
+
+function normalizeNode(id, n) {
+  var cfg = parseConfig(n.config_yaml);
+  var st = n.status || {};
+  var hw = n.hardware || {};
+  // 提取域名列表: ipv4.domains + ipv6.domains 去重合并
+  var domains = [];
+  if (cfg) {
+    if (cfg.ipv4 && cfg.ipv4.domains) domains = domains.concat(cfg.ipv4.domains);
+    if (cfg.ipv6 && cfg.ipv6.domains) domains = domains.concat(cfg.ipv6.domains);
+  }
+  return {
+    id: id,
+    name: hw.hostname || id,
+    fingerprint: n.fingerprint || '',
+    ip: st.ipv4 || '',
+    ipv6: st.ipv6 || '',
+    dns_provider: cfg ? (cfg.dns_provider || cfg.dns_key_name || '') : '',
+    domains: domains,
+    version: st.agent_version || '',
+    health: (st.ddns_health && st.ddns_health.status) || '-',
+    online: !!(st.ddns_health && st.ddns_health.running),
+    os: hw.os || '',
+    arch: hw.arch || '',
+    interfaces: hw.interfaces || [],
+    pending: !n.config_yaml || !n.config_sent_at,
+    config: cfg || {},
+    raw: n
+  };
+}
+
+function normalizeNodes(data) {
+  if (!data) return [];
+  var nodes = [];
+  Object.keys(data).forEach(function(id) {
+    nodes.push(normalizeNode(id, data[id]));
+  });
+  return nodes;
+}
+
+function normalizeEvents(events) {
+  if (!events || !events.length) return [];
+  return events.map(function(e) {
+    var t = e.time || '';
+    if (t.indexOf('T') > -1) t = t.split('T')[1].substring(0, 8);
+    return {
+      time: t,
+      node: e.node || e.user || '-',
+      category: e.category || '',
+      action: e.action || '',
+      detail: e.detail || '',
+      status: e.status || '',
+      ip: e.ip || ''
+    };
+  });
+}
+
+// ========== LOGIN ==========
+async function doLogin() {
+  var btn = document.getElementById('login-btn');
+  var pwd = document.getElementById('login-pwd').value;
+  if (!pwd) return;
+  btn.disabled = true;
+  btn.textContent = '登录中...';
+  var errEl = document.getElementById('login-err');
+  errEl.classList.remove('show');
+  try {
+    var r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pwd})
+    });
+    var data = await r.json();
+    if (r.ok && data && data.token) {
+      saveToken(data.token);
+      errEl.classList.remove('show');
+      initApp();
+      if (data.password_changed === false) {
+        toast('首次登录，建议修改默认密码', 'warning');
+      }
+    } else {
+      errEl.textContent = (data && data.error) || '密码错误';
+      errEl.classList.add('show');
+    }
+  } catch (e) {
+    errEl.textContent = '网络错误: ' + (e.message || '无法连接服务器');
+    errEl.classList.add('show');
+  }
+  btn.disabled = false;
+  btn.textContent = '登 录';
+}
+
+// ========== INIT ==========
+function initApp() {
+  document.getElementById('app').classList.remove('login-page');
+  document.getElementById('sidebar').style.display = '';
+  document.getElementById('main-area').style.display = '';
+  document.getElementById('login-wrap').style.display = 'none';
+
+  // 全局脏标记监听: 任何 input/select/textarea 值变化或 checkbox 点击 → markPageDirty
+  // 使用事件代理 (document level) 避免每新增一个输入元素都要手工绑定
+  document.addEventListener('input', function(e) {
+    if (e.target.closest && (e.target.closest('#content') || e.target.closest('.modal-overlay.show'))) {
+      markPageDirty();
+    }
+  });
+  document.addEventListener('change', function(e) {
+    if (e.target.closest && (e.target.closest('#content') || e.target.closest('.modal-overlay.show'))) {
+      markPageDirty();
+    }
+  });
+
+  navigate('dashboard');
+  startAutoRefresh();
+}
+
+// ========== API ==========
+async function api(path, opts) {
+  opts = opts || {};
+  var headers = Object.assign({}, opts.headers || {});
+  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(path, Object.assign({}, opts, {headers: headers}));
+}
+async function apiJSON(path, opts) {
+  var r = await api(path, opts);
+  var data = null;
+  try { data = await r.json(); } catch(e){}
+  if (!r.ok) {
+    // only toast on explicit (non-silent) requests — avoid spamming during auto-refresh
+    var isSilent = opts && opts.silent;
+    if (!isSilent) toast((data && data.error) || '请求失败', 'error');
+  }
+  return {ok: r.ok, status: r.status, data: data};
+}
+
+// ========== ROUTER ==========
+(function() {
+  var items = document.querySelectorAll('.side-nav .item');
+  for (var i = 0; i < items.length; i++) {
+    items[i].addEventListener('click', (function(page) {
+      return function() { navigate(page); };
+    })(items[i].dataset.page));
+  }
+})();
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  页面隔离状态管理器 (Page-Isolated State Manager)
+//
+//  设计原则:
+//    1. 每页独立状态桶 (_pageStore[pageName])，自动捕获/恢复
+//    2. 5秒定时刷新 → 保留当前页编辑 (capture → render → restore)
+//    3. 切换页面      → 目标页从 API 加载，旧页脏数据丢弃
+//    4. 保存成功后    → markPageClean() 标记，下次刷新用 API 数据
+//
+//  自动捕获规则 (无需每加一个输入框就改代码):
+//    a) element.id              → 如 <input id="smtp-host">
+//    b) element.dataset.ssKey   → 如 <input data-ss-key="cert-path-0">
+//    c) 注册表 (className)      → 如 '.node-upgrade-cb' (仅版本页)
+//
+//  ⚠️ 新增输入元素时: 加 id 或 data-ss-key 即自动受保护，无需其他改动
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// _pageStore: { 'settings': {inputs:{}, checks:{}, _page:'settings'} }
+var _pageStore = {};
+// _pageClean: 标记某页数据是否与 API 一致 (保存后为 true, 编辑后为 false)
+var _pageClean = {};
+
+/**
+ * navigate(page) — 页面导航
+ *
+ * 关键行为: 切换到目标页时，删除该页的旧快照，确保从 API 干净加载。
+ * 这防止了「在 settings 改了值→切到 nodes→切回 settings→看到旧编辑」的错觉。
+ */
+function navigate(page) {
+  if (currentPage === page && page !== 'dashboard') return;
+  // leaving dashboard: cleanup system charts timer
+  if (currentPage === 'dashboard' && page !== 'dashboard') {
+    clearTimeout(sysChartsTimer);
+    sysChartsTimer = null;
+    var sc = document.getElementById('sys-charts-card');
+    if (sc) sc.style.display = 'none';
+  }
+  // ★ 核心: 删除目标页旧快照 → 强制从 API 重新加载
+  delete _pageStore[page];
+  delete _pageClean[page];
+  currentPage = page;
+  var items = document.querySelectorAll('.side-nav .item');
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.toggle('active', items[i].dataset.page === page);
+  }
+  var titles = {dashboard:'仪表盘',nodes:'节点',dns:'DNS & 证书',versions:'版本管理',logs:'日志',settings:'设置'};
+  document.getElementById('page-title').textContent = titles[page] || page;
+  var pages = document.querySelectorAll('#content>div');
+  for (var i = 0; i < pages.length; i++) pages[i].classList.remove('active');
+  document.getElementById('page-' + page).classList.add('active');
+  refreshPage();
+}
+
+// ========== AUTO REFRESH ==========
+let refreshInterval = 5; // seconds between full refreshes
+function startAutoRefresh() {
+  clearInterval(refreshTimer);
+  refreshSec = refreshInterval; updateTimer();
+  refreshTimer = setInterval(function() {
+    refreshSec--;
+    updateTimer();
+    if (refreshSec <= 0) {
+      refreshPage(true);
+      refreshSec = refreshInterval;
+    }
+  }, 1000);
+}
+function updateTimer() {
+  var s = String(refreshSec).padStart(2, '0');
+  document.getElementById('refresh-timer').textContent = '00:' + s;
+}
+
+// ========== TOAST ==========
+function toast(msg, type) {
+  type = type || 'success';
+  var ct = document.getElementById('toasts');
+  var t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  ct.appendChild(t);
+  setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(function() { t.remove(); }, 300); }, 2500);
+}
+
+// ========== MODAL ==========
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+function confirmAction(title, msg, cb) {
+  document.getElementById('modal-confirm-title').textContent = title;
+  document.getElementById('modal-confirm-msg').textContent = msg;
+  var btn = document.getElementById('modal-confirm-btn');
+  btn.onclick = function() { closeModal('modal-confirm'); cb(); };
+  openModal('modal-confirm');
+}
+
+// ========== PAGE REFRESH ==========
+
+/**
+ * refreshPage(silent) — 统一页面刷新入口
+ *
+ * 行为矩阵:
+ *   silent=true  (5秒定时器)  → capturePageState → render → restorePageState (当前页编辑保留)
+ *   silent=false (切页/F5)     → render only (从 API 干净加载)
+ *
+ * ⚠️ 不要依赖 silent 做逻辑判断。状态保留完全由 _pageStore 和 _page 标记控制。
+ */
+async function refreshPage(silent) {
+  // 静默刷新时若弹窗打开则跳过, 防止 re-render 干扰模态框内容 (证书详情/节点配置等)
+  if (silent && document.querySelector('.modal-overlay.show')) return;
+  // 仅静默刷新时从 DOM 捕获当前页编辑状态到 _pageStore
+  if (silent) {
+    _pageStore[currentPage] = capturePageState(currentPage);
+  }
+  var fns = {dashboard:loadDashboard, nodes:loadNodes, dns:loadDNS, versions:loadVersions, logs:loadLogs, settings:loadSettings};
+  var fn = fns[currentPage];
+  if (currentPage === 'logs' && window._logFilter) {
+    if (fn) await fn(false, window._logFilter);
+  } else {
+    if (fn) await fn(silent);
+  }
+  // 仅静默刷新时恢复: 检查快照存在 且 快照来自同一页面 (防止跨页污染)
+  if (silent) {
+    restorePageState(currentPage);
+  }
+}
+
+/**
+ * capturePageState(page) — 从 DOM 捕获当前页面所有可编辑元素
+ *
+ * 自动捕获规则 (新增元素无需改此函数):
+ *   1. 有 id 属性         → 按 id 存储, checkbox/radio 加 _chk: 前缀
+ *   2. 有 data-ss-key 属性 → 按 ss-key 存储 (用于无 id 的动态元素)
+ *   3. 注册的 className     → 见 _registeredSelectors (仅 versions 页)
+ *
+ * 同时捕获打开的弹窗模态框内的输入。
+ * 返回的对象始终包含 _page 字段用于跨页校验。
+ */
+function capturePageState(page) {
+  var st = {_page: page};
+
+  // ── 规则1: 按 element.id 捕获 (覆盖 95% 场景) ──
+  var els = document.querySelectorAll('#content input, #content select, #content textarea');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    var key = el.id || el.dataset.ssKey;
+    if (!key) continue; // 既无 id 也无 data-ss-key → 跳过 (需开发者补充)
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      st['_chk:' + key] = el.checked;
+    } else if (el.type === 'file') {
+      continue; // file 类型无法通过 value 恢复
+    } else {
+      st[key] = el.value;
+    }
+  }
+
+  // ── 规则2: 弹窗模态框内同样规则 ──
+  var modals = document.querySelectorAll('.modal-overlay.show input, .modal-overlay.show select, .modal-overlay.show textarea');
+  for (var j = 0; j < modals.length; j++) {
+    var mel = modals[j];
+    var mkey = mel.id || mel.dataset.ssKey;
+    if (!mkey) continue;
+    if (mel.type === 'checkbox' || mel.type === 'radio') {
+      st['_chk:' + mkey] = mel.checked;
+    } else if (mel.type === 'file') {
+      continue;
+    } else {
+      st[mkey] = mel.value;
+    }
+  }
+
+  // ── 规则3: 注册的 className 选择器 (仅 versions 页动态元素) ──
+  // 这些元素无 id, 按 value/data属性 标识
+  var cbs = document.querySelectorAll('.node-upgrade-cb');
+  var cbState = {};
+  for (var k = 0; k < cbs.length; k++) { cbState[cbs[k].value] = cbs[k].checked; }
+  st['_upgradeCBs'] = cbState;
+  var sels = document.querySelectorAll('.upgrade-target');
+  var selState = {};
+  for (var m = 0; m < sels.length; m++) { selState[sels[m].dataset.node] = sels[m].value; }
+  st['_upgradeTargets'] = selState;
+  var sa = document.getElementById('select-all-nodes');
+  if (sa) st['_selectAll'] = sa.checked;
+
+  // 记录当前焦点元素ID (用于刷新后恢复焦点, 避免5秒定时器打断用户输入)
+  var ae = document.activeElement;
+  if (ae && ae.id) st['_focused'] = ae.id;
+
+  return st;
+}
+
+/**
+ * restorePageState(page) — 从 _pageStore 恢复页面编辑状态
+ *
+ * ⚠️ 核心安全校验: 仅当快照._page === page 时才恢复。
+ *    这确保旧页状态不会污染新页 (例如 settings 编辑不会出现在 nodes 页)。
+ *    _pageClean[page] === true 时跳过恢复 (保存后已与 API 同步)。
+ */
+function restorePageState(page) {
+  var st = _pageStore[page];
+  if (!st || st._page !== page) return;      // 安全校验: 快照不属于此页
+  if (_pageClean[page]) return;               // 已保存: 跳过恢复, 用 API 数据
+
+  // 恢复普通输入 (按 id)
+  Object.keys(st).forEach(function(key) {
+    if (key.charAt(0) === '_') return;
+    var el = document.getElementById(key);
+    if (el) {
+      if (el.type === 'checkbox' || el.type === 'radio') return; // 由 _chk: 处理
+      if (el.type === 'file') return;
+      if (st[key] !== undefined && el.value !== st[key]) {
+        el.value = st[key];
+        // 手动触发 input 事件, 让 oninput="autoMatchSMTP()" 等绑定生效
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+    } else {
+      var dsel = document.querySelector('[data-ss-key="' + key + '"]');
+      if (dsel && dsel.type !== 'checkbox' && dsel.type !== 'radio' && dsel.type !== 'file') {
+        if (dsel.value !== st[key]) { dsel.value = st[key]; dsel.dispatchEvent(new Event('input', {bubbles: true})); }
+      }
+    }
+  });
+
+  // 恢复 checkbox/radio (前缀 _chk:)
+  Object.keys(st).forEach(function(key) {
+    if (!key.startsWith('_chk:')) return;
+    var realKey = key.substring(5);
+    var el = document.getElementById(realKey);
+    if (!el) el = document.querySelector('[data-ss-key="' + realKey + '"]');
+    if (el) el.checked = st[key];
+  });
+
+  // 恢复 versions 页动态元素 (className 选择器)
+  if (st['_upgradeCBs']) {
+    var cbs = document.querySelectorAll('.node-upgrade-cb');
+    for (var i = 0; i < cbs.length; i++) {
+      if (st['_upgradeCBs'][cbs[i].value] !== undefined) cbs[i].checked = st['_upgradeCBs'][cbs[i].value];
+    }
+  }
+  if (st['_upgradeTargets']) {
+    var sels = document.querySelectorAll('.upgrade-target');
+    for (var k = 0; k < sels.length; k++) {
+      if (st['_upgradeTargets'][sels[k].dataset.node] !== undefined) sels[k].value = st['_upgradeTargets'][sels[k].dataset.node];
+    }
+  }
+  if (st['_selectAll'] !== undefined) {
+    var sa = document.getElementById('select-all-nodes');
+    if (sa) sa.checked = st['_selectAll'];
+  }
+
+  // 恢复焦点: 刷新前用户在哪个输入框, 刷新后焦点回到同一元素
+  // 这是解决「5秒定时器打断输入」问题的关键
+  if (st['_focused']) {
+    var fel = document.getElementById(st['_focused']);
+    if (fel) {
+      fel.focus();
+      // 将光标移到末尾 (适合继续输入)
+      if (fel.type === 'text' || fel.type === 'password' || fel.type === 'email' || fel.tagName === 'TEXTAREA') {
+        var len = fel.value.length;
+        fel.setSelectionRange(len, len);
+      }
+    }
+  }
+}
+
+/**
+ * markPageClean(page) — 保存成功后调用，标记页面数据与 API 一致
+ * 调用位置: saveSMTP() / saveRateLimit() / changePassword() / 等所有保存函数末尾
+ *
+ * ⚠️ 新增保存函数时务必在成功回调中调用此函数，否则下次刷新会回退编辑前的值。
+ */
+function markPageClean(page) {
+  _pageClean[page || currentPage] = true;
+}
+
+/**
+ * markPageDirty(page) — 用户编辑后调用，标记页面数据已变更
+ * 当前实现: 任何 DOM 输入变化自动触发 (通过全局事件代理)
+ */
+function markPageDirty() {
+  _pageClean[currentPage] = false;
+}
+
+// ==================== DASHBOARD ====================
+var _accessWindow = 60; // 流量曲线默认时间范围 (分钟)
+
+async function loadDashboard(silent) {
+  if (!silent) document.getElementById('dashboard-content').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var sr = await apiJSON('/api/admin/stats');
+    var nr = await apiJSON('/api/admin/nodes');
+    var ar = await apiJSON('/api/admin/access-stats?window=' + _accessWindow);
+    var lr = await apiJSON('/api/admin/logs?limit=10');
+    var stats = sr.data || {};
+    var nodes = normalizeNodes(nr.data);
+    var access = ar.data || {};
+    var events = normalizeEvents((lr.data && lr.data.events) || []);
+    if (!sr.ok && !nr.ok) return;
+    renderDashboard(stats, nodes, events, access);
+    if (!silent) loadSystemCharts();
+  } catch(e) {
+    if (!silent) document.getElementById('dashboard-content').innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+function renderDashboard(stats, nodes, events, access) {
+  var online = stats.nodes_online || 0;
+  var total = stats.nodes_total || nodes.length;
+  var offline = total - online;
+  var healthy = 0;
+  nodes.forEach(function(n) { if (n.health === 'OK') healthy++; });
+  var h = '';
+  h += '<div class="stats-row">';
+  h += '<div class="stat-card"><div class="num">' + total + '</div><div class="lbl">节点总数</div></div>';
+  h += '<div class="stat-card"><div class="num green">' + online + '</div><div class="lbl">在线</div></div>';
+  h += '<div class="stat-card"><div class="num" style="color:var(--c-primary)">' + healthy + '</div><div class="lbl">健康</div></div>';
+  h += '<div class="stat-card"><div class="num red">' + offline + '</div><div class="lbl">离线</div></div>';
+  h += '</div>';
+
+  h += '<div class="card"><div class="card-header"><h3>节点列表</h3></div>';
+  h += '<table><thead><tr><th style="width:auto">节点</th><th style="width:auto">IP</th><th style="width:auto">域名</th><th style="width:50px">健康</th><th style="width:80px">版本</th><th style="width:90px">状态</th></tr></thead><tbody>';
+  if (nodes.length === 0) {
+    h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
+  } else {
+    nodes.forEach(function(n) {
+      var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 3).join(', ') + (n.domains.length > 3 ? ' +' + (n.domains.length-3) : '') : '-';
+      var ipHtml = he(n.ip || '-');
+      if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
+      h += '<tr><td><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
+      h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
+      h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      h += '<td>' + healthBadge(n.health) + '</td>';
+      h += '<td class="mono">' + he(n.version || '-') + '</td>';
+      h += '<td>' + statusBadge(n.online) + '</td></tr>';
+    });
+  }
+  h += '</tbody></table></div>';
+
+  h += '<div class="card"><div class="card-header"><h3>最近事件</h3></div><div class="event-list">';
+  if (events.length === 0) {
+    h += '<div class="empty">暂无事件</div>';
+  } else {
+    events.forEach(function(e) {
+      var badgeCls = e.status === 'error' ? 'badge-red' : (e.status === 'success' ? 'badge-green' : 'badge-blue');
+      h += '<div class="event-item"><span class="event-time">' + he(e.time) + '</span>';
+      h += '<span class="event-node">' + he(e.node) + '</span>';
+      h += '<span class="event-msg"><span class="badge ' + badgeCls + '" style="margin-right:4px">' + he(e.category) + '</span>' + he(e.action) + ' ' + he(e.detail) + '</span></div>';
+    });
+  }
+  h += '</div></div>';
+
+  // Access charts — 时间范围选择器
+  var winOpts = [{v:60,l:'60分钟'},{v:120,l:'2小时'},{v:300,l:'5小时'},{v:1440,l:'24小时'},{v:2880,l:'48小时'}];
+  var winHtml = '<select id="access-window" onchange="changeAccessWindow()" style="height:28px;border:1px solid var(--c-input-border);border-radius:4px;padding:0 8px;font-size:12px">';
+  winOpts.forEach(function(o) { winHtml += '<option value="' + o.v + '"' + (_accessWindow === o.v ? ' selected' : '') + '>' + o.l + '</option>'; });
+  winHtml += '</select>';
+
+  if (access && access.timestamps && access.timestamps.length > 0) {
+    h += '<div class="card"><div class="card-header"><h3>总请求数动态曲线</h3>' + winHtml + '</div><div class="chart-wrap" id="chart-total"></div></div>';
+    var topIps = access.top_ips || [];
+    if (topIps.length > 0) {
+      var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1'];
+      var leg = '<div class="chart-legend">';
+      topIps.forEach(function(ip, i) {
+        leg += '<span style="color:' + (colors[i] || '#999') + '">' + he(ip.ip) + ' (共' + ip.total + ')</span>';
+      });
+      leg += '</div>';
+      var winHtml2 = '<select onchange="changeAccessWindow()" style="height:28px;border:1px solid var(--c-input-border);border-radius:4px;padding:0 8px;font-size:12px">';
+      winOpts.forEach(function(o) { winHtml2 += '<option value="' + o.v + '"' + (_accessWindow === o.v ? ' selected' : '') + '>' + o.l + '</option>'; });
+      winHtml2 += '</select>';
+      h += '<div class="card"><div class="card-header"><h3>Top ' + topIps.length + ' IP 请求数动态曲线</h3>' + winHtml2 + '</div>' + leg + '<div class="chart-wrap" id="chart-ips"></div></div>';
+    }
+  }
+
+  document.getElementById('dashboard-content').innerHTML = h;
+
+  // Draw access line charts after DOM update
+  if (access && access.timestamps && access.timestamps.length > 0) {
+    requestAnimationFrame(function() {
+      drawLineChart('chart-total', access.timestamps, [{label:'\u603b\u8bf7\u6c42',series:access.total_series||[],color:'#1677ff'}]);
+      var topIps = access.top_ips || [];
+      if (topIps.length > 0) {
+        var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1'];
+        var seriesList = topIps.map(function(ip, i) {
+          return {label: ip.ip, series: ip.series || [], color: colors[i] || '#999'};
+        });
+        drawLineChart('chart-ips', access.timestamps, seriesList);
+      }
+    });
+  }
+}
+
+var sysChartsTimer = null;
+function loadSystemCharts() {
+  var card = document.getElementById('sys-charts-card');
+  if (!card) return;
+  card.style.display = 'block';
+  apiJSON('/api/admin/system-info').then(function(si) {
+    if (!si || !si.data) return;
+    var d = si.data;
+    // 始终绘制CPU饼图 (含0%), 不再用>0门控导致重启后空白60s
+    drawPieChart('chart-cpu', [{label:'使用',value:d.cpu_percent||0},{label:'空闲',value:100-(d.cpu_percent||0)}], (d.cpu_percent||0).toFixed(0)+'%');
+    if (d.memory_total > 0) {
+      var memPct = d.memory_used/d.memory_total*100;
+      drawPieChart('chart-mem', [{label:'已用',value:memPct},{label:'可用',value:100-memPct}], formatBytes(d.memory_total));
+    }
+    if (d.disk_total > 0) {
+      var diskPct = d.disk_used/d.disk_total*100;
+      drawPieChart('chart-disk', [{label:'已用',value:diskPct},{label:'可用',value:100-diskPct}], formatBytes(d.disk_total));
+    }
+  }).catch(function(){});
+  clearTimeout(sysChartsTimer);
+  sysChartsTimer = setTimeout(loadSystemCharts, 30000);
+}
+
+function healthBadge(h) {
+  if (h === 'OK' || h === 'ok') return '<span class="badge badge-green">OK</span>';
+  return '<span class="badge badge-red">' + he(h || '-') + '</span>';
+}
+function statusBadge(online) {
+  return online ? '<span class="badge badge-green">在线</span>' : '<span class="badge badge-red">离线</span>';
+}
+
+// 流量曲线时间范围切换: 重新请求API并重绘图表
+async function changeAccessWindow() {
+  var sel = document.getElementById('access-window');
+  if (!sel) return;
+  var v = parseInt(sel.value) || 60;
+  if (v === _accessWindow) return;
+  _accessWindow = v;
+  // 更新两个下拉框同步
+  var sels = document.querySelectorAll('#chart-total select, #chart-ips select');
+  for (var i = 0; i < sels.length; i++) sels[i].value = v;
+  // 重新获取数据
+  var ar = await apiJSON('/api/admin/access-stats?window=' + _accessWindow);
+  var access = ar.data || {};
+  if (access.timestamps && access.timestamps.length > 0) {
+    drawLineChart('chart-total', access.timestamps, [{label:'\u603b\u8bf7\u6c42',series:access.total_series||[],color:'#1677ff'}]);
+    var topIps = access.top_ips || [];
+    if (topIps.length > 0) {
+      var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1'];
+      drawLineChart('chart-ips', access.timestamps, topIps.map(function(ip, i) { return {label:ip.ip, series:ip.series||[], color:colors[i]||'#999'}; }));
+    }
+  }
+}
+
+// ==================== CANVAS CHART ====================
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0';
+  if (bytes >= 1099511627776) return (bytes/1099511627776).toFixed(1) + 'TB';
+  if (bytes >= 1073741824) return (bytes/1073741824).toFixed(1) + 'GB';
+  if (bytes >= 1048576) return (bytes/1048576).toFixed(1) + 'MB';
+  return (bytes/1024).toFixed(1) + 'KB';
+}
+
+function drawPieChart(containerId, segments, totalLabel) {
+  var ct = document.getElementById(containerId);
+  if (!ct) return;
+  // reuse existing canvas instead of recreating DOM
+  var canvas = ct.querySelector('canvas');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = ct.getBoundingClientRect();
+  var W = rect.width, H = rect.height;
+  if (W <= 0 || H <= 0) return;
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    ct.appendChild(canvas);
+  }
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  var cx = W / 2, cy = H / 2;
+  var outerR = Math.min(W, H) / 2 - 8;
+  var innerR = outerR * 0.55; // donut hole
+  var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1','#13c2c2','#eb2f96'];
+
+  var total = 0;
+  segments.forEach(function(s) { total += s.value; });
+  if (total === 0) {
+    ctx.fillStyle = '#d9d9d9';
+    ctx.beginPath(); ctx.arc(cx, cy, outerR, 0, Math.PI * 2); ctx.fill();
+    if (innerR > 0) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx, cy, innerR, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#8c8c8c'; ctx.font = '12px -apple-system,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('N/A', cx, cy + 4);
+    return;
+  }
+
+  var startAngle = -Math.PI / 2;
+  segments.forEach(function(s, i) {
+    var sliceAngle = (s.value / total) * Math.PI * 2;
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(startAngle) * innerR, cy + Math.sin(startAngle) * innerR);
+    ctx.arc(cx, cy, outerR, startAngle, startAngle + sliceAngle);
+    ctx.arc(cx, cy, innerR, startAngle + sliceAngle, startAngle, true);
+    ctx.closePath();
+    ctx.fill();
+    startAngle += sliceAngle;
+  });
+
+  // center text: show totalLabel (e.g. "2.1GB") on line 1, percentage on line 2
+  ctx.fillStyle = '#262626';
+  ctx.font = 'bold 15px -apple-system,sans-serif';
+  ctx.textAlign = 'center';
+  if (totalLabel) ctx.fillText(totalLabel, cx, cy - 4);
+  ctx.font = '11px -apple-system,sans-serif';
+  ctx.fillStyle = '#8c8c8c';
+  ctx.fillText(total.toFixed(1) + '%', cx, cy + 14);
+
+  // legend — reuse existing element
+  var legendEl = ct.querySelector('.chart-legend');
+  if (!legendEl) {
+    legendEl = document.createElement('div');
+    legendEl.className = 'chart-legend';
+    legendEl.style.marginTop = '4px';
+    legendEl.style.justifyContent = 'center';
+    ct.appendChild(legendEl);
+  }
+  legendEl.innerHTML = '';
+  segments.forEach(function(s, i) {
+    var pct = total > 0 ? (s.value / total * 100).toFixed(1) : '0';
+    legendEl.innerHTML += '<span style="color:' + (colors[i % colors.length]) + '">' + s.label + ' ' + pct + '%</span>';
+  });
+}
+
+function drawLineChart(containerId, labels, seriesList) {
+  var ct = document.getElementById(containerId);
+  if (!ct) return;
+  ct.innerHTML = '';
+  var canvas = document.createElement('canvas');
+  ct.appendChild(canvas);
+  var dpr = window.devicePixelRatio || 1;
+  var rect = ct.getBoundingClientRect();
+  var W = rect.width, H = rect.height;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  var pad = {top: 20, right: 16, bottom: 36, left: 44};
+  var pw = W - pad.left - pad.right;
+  var ph = H - pad.top - pad.bottom;
+
+  var maxY = 0;
+  seriesList.forEach(function(s) { s.series.forEach(function(v) { if (v > maxY) maxY = v; }); });
+  if (maxY === 0) maxY = 10;
+  var yTicks = 5;
+  var yStep = Math.ceil(maxY / yTicks);
+  maxY = yStep * yTicks;
+
+  ctx.strokeStyle = '#f0f0f0';
+  ctx.lineWidth = 1;
+  ctx.font = '10px -apple-system,sans-serif';
+  ctx.fillStyle = '#8c8c8c';
+  ctx.textAlign = 'right';
+  for (var i = 0; i <= yTicks; i++) {
+    var y = pad.top + (ph * i / yTicks);
+    var val = maxY - (maxY * i / yTicks);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+    ctx.fillText(String(val), pad.left - 6, y + 4);
+  }
+
+  var maxLabels = 12;
+  var step = Math.ceil(labels.length / maxLabels);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8c8c8c';
+  for (var i = 0; i < labels.length; i += step) {
+    var x = pad.left + (pw * i / (labels.length - 1 || 1));
+    ctx.fillText(labels[i], x, H - pad.bottom + 16);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top + ph);
+    ctx.lineTo(x, pad.top + ph + 4);
+    ctx.strokeStyle = '#d9d9d9';
+    ctx.stroke();
+  }
+
+  seriesList.forEach(function(sl) {
+    ctx.strokeStyle = sl.color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    sl.series.forEach(function(v, i) {
+      var x = pad.left + (pw * i / (sl.series.length - 1 || 1));
+      var y = pad.top + ph - (ph * v / maxY);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = sl.color;
+    sl.series.forEach(function(v, i) {
+      var x = pad.left + (pw * i / (sl.series.length - 1 || 1));
+      var y = pad.top + ph - (ph * v / maxY);
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  });
+}
+
+// ==================== NODES ====================
+async function loadNodes(silent) {
+  if (!silent) document.getElementById('page-nodes').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var r = await apiJSON('/api/admin/nodes');
+    if (!r.ok) return;
+    var nodes = normalizeNodes(r.data);
+    renderNodes(nodes);
+  } catch(e) {
+    if (!silent) document.getElementById('page-nodes').innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+function renderNodes(nodes) {
+  var h = '<div class="card"><div class="card-header"><h3>节点列表 (' + nodes.length + ')</h3></div>';
+  h += '<table><thead><tr><th style="width:auto">节点名称</th><th style="width:150px">IP</th><th style="width:120px">系统</th><th style="width:auto">域名</th><th style="width:50px">健康</th><th style="width:80px">版本</th><th style="width:90px">状态</th><th style="width:100px">操作</th></tr></thead><tbody>';
+  if (nodes.length === 0) {
+    h += '<tr><td colspan="8" class="empty">暂无节点</td></tr>';
+  } else {
+    nodes.forEach(function(n) {
+      var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 2).join(', ') + (n.domains.length > 2 ? ' +' + (n.domains.length-2) : '') : '-';
+      var ipHtml = he(n.ip || '-');
+      if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
+      h += '<tr>';
+      h += '<td><b>' + he(n.name) + '</b><div class="meta-row">' + he(n.fingerprint.substring(0,16)) + '...</div></td>';
+      h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
+      h += '<td class="mono" style="font-size:12px">' + he(n.os) + ' / ' + he(n.arch) + '</td>';
+      h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      h += '<td>' + healthBadge(n.health) + '</td>';
+      h += '<td class="mono">' + he(n.version || '-') + '</td>';
+      h += '<td>' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
+      h += '<td><div class="btn-wrap">';
+      h += '<button class="btn btn-sm btn-secondary" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
+      h += '<button class="btn btn-sm btn-danger" onclick="deleteNode(\'' + n.id + '\',\'' + jsStr(n.name) + '\')">删除</button>';
+      h += '</div></td></tr>';
+    });
+  }
+  h += '</tbody></table></div>';
+  document.getElementById('page-nodes').innerHTML = h;
+}
+
+function deleteNode(id, name) {
+  confirmAction('删除节点', '确定要删除节点 ' + name + ' 吗？', function() {
+    apiJSON('/api/admin/nodes/' + id, {method: 'DELETE'}).then(function(r) {
+      if (r.ok) { toast('节点已删除'); loadNodes(); }
+    });
+  });
+}
+
+// ==================== NODE CONFIG ====================
+async function openNodeConfig(id) {
+  var nr = await apiJSON('/api/admin/nodes');
+  if (!nr.ok) return;
+  var nodes = normalizeNodes(nr.data);
+  var node = nodes.find(function(n) { return n.id === id; });
+  if (!node) { toast('未找到节点', 'error'); return; }
+  var dkr = await apiJSON('/api/admin/dns-keys');
+  var keys = dkr.data || {};
+  var providers = Object.keys(keys);
+  var cr = await apiJSON('/api/admin/certs');
+  var certs = (cr.data && cr.data.certs) || [];
+
+  document.getElementById('modal-node-title').textContent = '节点配置: ' + node.name;
+  var cfg = node.config || {};
+  var ipv4 = cfg.ipv4 || {}, ipv6 = cfg.ipv6 || {};
+  var bindings = cfg.cert_bindings || [];
+
+  var h = '';
+  h += '<div class="form-group"><label>DNS Key</label><select id="ncfg-dns">';
+  var curDns = cfg.dns_key_name || cfg.dns_provider || '';
+  var foundDns = false;
+  if (providers.length === 0) {
+    h += '<option value="">-- 无 --</option>';
+  } else {
+    providers.forEach(function(p) {
+      var k = keys[p];
+      var name = (k && k.name) || p;
+      var prov = (k && k.provider) || p;
+      var label = name + ' (' + prov + ')';
+      // 同时匹配 key 名称和显示名，防止 DNS Key 重命名后预选失效
+      var matched = (p === curDns) || (k && k.name === curDns) || (k && k.provider === curDns);
+      if (matched) foundDns = true;
+      h += '<option value="' + he(p) + '"' + (matched ? ' selected' : '') + '>' + he(label) + '</option>';
+    });
+    // 如果当前引用的 DNS Key 已不存在，提示用户
+    if (!foundDns && curDns) {
+      h += '<option value="" disabled style="color:var(--c-red)">⚠ DNS密钥 "' + he(curDns) + '" 已丢失，请重新选择</option>';
+    }
+  }
+  h += '</select></div>';
+  h += ipSection('IPv4', 'ipv4', ipv4, node);
+  h += ipSection('IPv6', 'ipv6', ipv6, node);
+
+  h += '<div class="section-title">证书绑定</div>';
+  h += '<div id="ncfg-certs">';
+  bindings.forEach(function(b, i) { h += certBindingRow(i, b, certs); });
+  h += '</div>';
+  h += '<button class="btn btn-sm btn-secondary" style="margin-bottom:16px" onclick="addCertBinding()">+ 添加证书绑定</button>';
+
+  h += '<div class="section-title">高级</div>';
+  h += '<div class="form-group"><label>TTL</label><select id="ncfg-ttl">';
+  ['60','120','300','600','1800','3600'].forEach(function(t) {
+    h += '<option value="' + t + '"' + (String(cfg.ttl || '600') === t ? ' selected' : '') + '>' + t + 's</option>';
+  });
+  h += '</select></div>';
+  h += '<div class="btn-row" style="margin-top:16px"><button class="btn btn-secondary" onclick="closeModal(\'modal-node-config\')">取消</button><button class="btn btn-primary" onclick="saveNodeConfig(\'' + id + '\')">保存并下发</button></div>';
+
+  document.getElementById('modal-node-body').innerHTML = h;
+  toggleIPSection('ipv4');
+  toggleIPSection('ipv6');
+  openModal('modal-node-config');
+  window._ncfgNode = node;
+  window._ncfgCerts = certs;
+}
+
+function ipSection(title, prefix, cfg, node) {
+  var ifaces = node.interfaces || [];
+  var enable = cfg.enable !== false;
+  var gettype = cfg.gettype || 'url';
+  var h = '<div class="section-title">' + title + ' <label class="checkbox-row" style="margin-left:8px"><input type="checkbox" id="ncfg-' + prefix + '-enable"' + (enable ? ' checked' : '') + ' onchange="toggleIPSection(\'' + prefix + '\')"> 启用</label></div>';
+  h += '<div id="ncfg-' + prefix + '-section">';
+  h += '<div class="form-group"><label>获取方式</label><select id="ncfg-' + prefix + '-type" onchange="toggleIPSection(\'' + prefix + '\')">';
+  ['url','netInterface','cmd'].forEach(function(t) {
+    h += '<option value="' + t + '"' + (gettype === t ? ' selected' : '') + '>' + ({url:'URL',netInterface:'网卡',cmd:'命令'}[t]) + '</option>';
+  });
+  h += '</select></div>';
+  var defUrl = prefix === 'ipv4' ? 'http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org' : 'http://api6.ipify.org,http://checkip.amazonaws.com,http://icanhazip.com';
+  h += '<div class="form-group" id="ncfg-' + prefix + '-url"><label>URL</label><input id="ncfg-' + prefix + '-urlval" value="' + he(cfg.url || '') + '" placeholder="' + he(defUrl) + '"><div class="tip">逗号分隔，留空使用默认</div></div>';
+  h += '<div class="form-group" id="ncfg-' + prefix + '-iface"><label>网卡</label><select id="ncfg-' + prefix + '-ifaceval">';
+  if (ifaces.length === 0) {
+    h += '<option value="">-- 无 --</option>';
+  } else {
+    ifaces.forEach(function(ifc) {
+      var label = ifc.name + (ifc.ipv4 ? ' (' + ifc.ipv4 + ')' : '');
+      h += '<option value="' + he(ifc.name) + '"' + (ifc.name === cfg.netinterface ? ' selected' : '') + '>' + he(label) + '</option>';
+    });
+  }
+  h += '</select></div>';
+  if (prefix === 'ipv6') h += '<div class="form-group" id="ncfg-ipv6-regex"><label>IPv6 正则 (可选)</label><input id="ncfg-ipv6-regexval" value="' + he(cfg.ipv6reg || '') + '" placeholder="多IP过滤正则"></div>';
+  h += '<div class="form-group" id="ncfg-' + prefix + '-cmd"><label>命令</label><input id="ncfg-' + prefix + '-cmdval" value="' + he(cfg.cmd || '') + '" placeholder="curl -s ifconfig.me"></div>';
+  var domains = cfg.domains || [];
+  h += '<div class="form-group"><label>域名</label><div id="ncfg-' + prefix + '-domains">';
+  domains.forEach(function(d, i) { h += domainRow(prefix, i, d); });
+  h += '</div><button class="btn btn-sm btn-secondary" style="margin-top:4px" onclick="addDomain(\'' + prefix + '\')">+ 添加</button></div>';
+  h += '</div>';
+  return h;
+}
+
+function domainRow(prefix, i, val) {
+  return '<div class="form-inline" style="margin-bottom:4px"><input value="' + he(val || '') + '" data-prefix="' + prefix + '" data-idx="' + i + '" class="domain-input" style="flex:1" placeholder="example.com"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
+}
+function addDomain(prefix) {
+  var ct = document.getElementById('ncfg-' + prefix + '-domains');
+  var div = document.createElement('div');
+  div.innerHTML = domainRow(prefix, Date.now(), '');
+  ct.appendChild(div.firstElementChild);
+}
+function certBindingRow(i, b, certs) {
+  var arr = certs || window._ncfgCerts || [];
+  var h = '<div class="form-inline" style="margin-bottom:6px"><select class="ncfg-cert-name" style="flex:1">';
+  var cur = b.bundle_name || '';
+  arr.forEach(function(c) {
+    var n = c.bundle_name || c.name || '';
+    h += '<option value="' + he(n) + '"' + (n === cur ? ' selected' : '') + '>' + he(n) + '</option>';
+  });
+  if (arr.length === 0) h += '<option value="">-- 无 --</option>';
+  h += '</select>';
+  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="/etc/nginx/certs/" style="flex:1">';
+  h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
+  return h;
+}
+function addCertBinding() {
+  var ct = document.getElementById('ncfg-certs');
+  var div = document.createElement('div');
+  div.innerHTML = certBindingRow(Date.now(), {}, window._ncfgCerts || []);
+  ct.appendChild(div.firstElementChild);
+}
+function toggleIPSection(prefix) {
+  var enable = document.getElementById('ncfg-' + prefix + '-enable');
+  var type = document.getElementById('ncfg-' + prefix + '-type');
+  if (!enable && !type) return;
+  var en = enable ? enable.checked : true;
+  var tp = type ? type.value : 'url';
+  var section = document.getElementById('ncfg-' + prefix + '-section');
+  if (section) section.style.display = en ? '' : 'none';
+  ['url','iface','cmd'].forEach(function(t) {
+    var el = document.getElementById('ncfg-' + prefix + '-' + t);
+    if (el) el.style.display = (en && tp === t) ? '' : 'none';
+  });
+  if (prefix === 'ipv6') {
+    var re = document.getElementById('ncfg-ipv6-regex');
+    if (re) re.style.display = (en && tp === 'netInterface') ? '' : 'none';
+  }
+}
+
+async function saveNodeConfig(id) {
+  var ipv4 = readIPConfig('ipv4'), ipv6 = readIPConfig('ipv6');
+  var dns = document.getElementById('ncfg-dns').value;
+  var ttl = document.getElementById('ncfg-ttl').value;
+  var certBindings = [];
+  document.querySelectorAll('#ncfg-certs .form-inline').forEach(function(row) {
+    var name = row.querySelector('.ncfg-cert-name');
+    var path = row.querySelector('.ncfg-cert-path');
+    if (name && name.value) certBindings.push({bundle_name: name.value, deploy_path: path ? path.value : ''});
+  });
+  var body = {dns_key_name: dns, dns_provider: dns, ttl: ttl, ipv4: ipv4, ipv6: ipv6, cert_bindings: certBindings};
+  var r = await apiJSON('/api/admin/nodes/' + id + '/config', {method: 'PUT', body: body});
+  if (r.ok) { toast('配置已保存'); closeModal('modal-node-config'); loadNodes(true); markPageClean(); }
+}
+
+function readIPConfig(prefix) {
+  var enable = document.getElementById('ncfg-' + prefix + '-enable');
+  var type = document.getElementById('ncfg-' + prefix + '-type');
+  var en = enable ? enable.checked : true, tp = type ? type.value : 'url';
+  var domains = [];
+  document.querySelectorAll('#ncfg-' + prefix + '-domains .domain-input').forEach(function(inp) {
+    if (inp.value.trim()) domains.push(inp.value.trim());
+  });
+  var cfg = {
+    enable: en, gettype: tp,
+    url: document.getElementById('ncfg-' + prefix + '-urlval') ? document.getElementById('ncfg-' + prefix + '-urlval').value : '',
+    netinterface: document.getElementById('ncfg-' + prefix + '-ifaceval') ? document.getElementById('ncfg-' + prefix + '-ifaceval').value : '',
+    cmd: document.getElementById('ncfg-' + prefix + '-cmdval') ? document.getElementById('ncfg-' + prefix + '-cmdval').value : '',
+    domains: domains
+  };
+  if (prefix === 'ipv6') {
+    var re = document.getElementById('ncfg-ipv6-regexval');
+    cfg.ipv6reg = re ? re.value : '';
+  }
+  return cfg;
+}
+
+// ==================== DNS & CERTS ====================
+async function loadDNS(silent) {
+  if (!silent) document.getElementById('page-dns').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var dkr = await apiJSON('/api/admin/dns-keys');
+    var cr = await apiJSON('/api/admin/certs');
+    var ar = await apiJSON('/api/admin/acme/all').catch(function() { return {ok:true,data:{accounts:[]}}; });
+    renderDNS(dkr.data, cr.data, ar.data);
+  } catch(e) { if (!silent) document.getElementById('page-dns').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function renderDNS(keysMap, certData, acData) {
+  var keys = keysMap || {};
+  var certs = Array.isArray(certData) ? certData : [];
+  var accts = (acData && acData.accounts) || [];
+  var h = '';
+
+  h += '<div class="card"><div class="card-header"><h3>DNS Keys</h3><button class="btn btn-sm btn-primary" onclick="addDNSKey()">+ 新增</button></div>';
+  var providers = Object.keys(keys);
+  if (providers.length === 0) {
+    h += '<div class="empty">暂无 DNS Key</div>';
+  } else {
+    h += '<table><thead><tr><th>名称</th><th>提供商</th><th>Access Key</th><th>使用节点</th><th>操作</th></tr></thead><tbody>';
+    providers.forEach(function(p) {
+      var k = keys[p];
+      var name = k.name || p;
+      var prov = k.provider || p;
+      h += '<tr><td><b>' + he(name) + '</b></td>';
+      h += '<td>' + he(prov) + '</td>';
+      h += '<td class="mono">' + he((k.access_key_id || '').substring(0,12)) + '...</td>';
+      h += '<td>' + he((k.used_by_nodes || []).join(', ') || '-') + '</td>';
+      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(p) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(p) + '\')">删除</button></div></td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+
+  h += '<div class="card"><div class="card-header"><h3>证书</h3><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openModal(\'modal-cert-upload\')">上传证书</button><button class="btn btn-sm btn-primary" onclick="openModal(\'modal-acme-issue\')">ACME 申请</button></div></div>';
+  if (certs.length === 0) {
+    h += '<div class="empty">暂无证书</div>';
+  } else {
+    h += '<table><thead><tr><th>名称</th><th>SAN</th><th>到期</th><th>剩余</th><th>操作</th></tr></thead><tbody>';
+    certs.forEach(function(c) {
+      var name = c.bundle_name || c.name || '';
+      var exp = c.expiry || '';
+      var expDate = exp ? new Date(exp) : null;
+      var isValidDate = expDate && !isNaN(expDate.getTime());
+      var days = isValidDate ? Math.floor((expDate - Date.now()) / 86400000) : '-';
+      var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
+      h += '<tr><td><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
+      h += '<td><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
+      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+
+  h += '<div class="card"><div class="card-header"><h3>ACME 帐号</h3><button class="btn btn-sm btn-primary" onclick="openACMEAccount(-1)">+ 添加帐号</button></div>';
+  if (accts.length === 0) {
+    h += '<div class="empty">暂无 ACME 帐号</div>';
+  } else {
+    h += '<table><thead><tr><th>Email</th><th>CA</th><th>Key</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    accts.forEach(function(a, i) {
+      h += '<tr><td>' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
+      h += '<td>' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
+      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+
+  document.getElementById('page-dns').innerHTML = h;
+  loadACMEAccountsForIssue();
+}
+
+async function addDNSKey() {
+  window._dnskey_edit = null;
+  document.getElementById('modal-dnskey-add').querySelector('h3').textContent = '添加 DNS Key';
+  document.getElementById('dnskey-name').value = '';
+  document.getElementById('dnskey-name').disabled = false;
+  document.getElementById('dnskey-provider').value = '';
+  document.getElementById('dnskey-provider').disabled = false;
+  document.getElementById('dnskey-ak').value = '';
+  document.getElementById('dnskey-sk').value = '';
+  document.getElementById('dnskey-sk').placeholder = '';
+  document.getElementById('dnskey-sk').style.fontStyle = '';
+  document.querySelector('#modal-dnskey-add .btn-primary').textContent = '保存';
+  openModal('modal-dnskey-add');
+}
+async function editDNSKey(keyName) {
+  // load existing key data and open edit modal
+  var r = await apiJSON('/api/admin/dns-keys');
+  var keys = r.data || {};
+  var k = keys[keyName];
+  if (!k) { toast('Key 不存在', 'error'); return; }
+  window._dnskey_edit = keyName;
+  document.getElementById('modal-dnskey-add').querySelector('h3').textContent = '编辑 DNS Key';
+  document.getElementById('dnskey-name').value = k.name || keyName;
+  document.getElementById('dnskey-name').disabled = true; // name is fixed on edit
+  document.getElementById('dnskey-provider').value = k.provider || '';
+  document.getElementById('dnskey-provider').disabled = true; // provider is fixed on edit
+  document.getElementById('dnskey-ak').value = k.access_key_id || '';
+  document.getElementById('dnskey-sk').value = '';
+  document.getElementById('dnskey-sk').placeholder = '留空则不变';
+  document.getElementById('dnskey-sk').style.fontStyle = 'italic';
+  document.querySelector('#modal-dnskey-add .btn-primary').textContent = '更新';
+  openModal('modal-dnskey-add');
+}
+async function saveDNSKey() {
+  var isEdit = !!window._dnskey_edit;
+  var name = isEdit ? window._dnskey_edit : document.getElementById('dnskey-name').value.trim();
+  var provider = document.getElementById('dnskey-provider').value;
+  var ak = document.getElementById('dnskey-ak').value;
+  var sk = document.getElementById('dnskey-sk').value;
+  if (!name) { toast('请输入名称', 'error'); return; }
+  if (!provider) { toast('请选择提供商', 'error'); return; }
+  if (!ak) { toast('请输入 Access Key ID', 'error'); return; }
+  if (!sk) { sk = ''; if (!isEdit) { toast('请输入 Secret Key', 'error'); return; } }
+  var body = {name: name, provider: provider, access_key_id: ak, access_key_secret: sk};
+  var r = await apiJSON('/api/admin/dns-keys', {method: 'POST', body: body});
+  if (r.ok) { toast(isEdit ? 'DNS Key 已更新' : 'DNS Key 已添加'); closeModal('modal-dnskey-add'); loadDNS(); markPageClean(); }
+}
+async function deleteDNSKey(keyName) {
+  confirmAction('删除 DNS Key', '确定删除 ' + keyName + ' 的 DNS Key？', function() {
+    apiJSON('/api/admin/dns-keys/' + encodeURIComponent(keyName), {method: 'DELETE'}).then(function(r) {
+      if (r.ok) { toast('DNS Key 已删除'); loadDNS(); }
+    });
+  });
+}
+async function deleteCert(name) {
+  confirmAction('删除证书', '确定删除证书 ' + name + '？', function() {
+    apiJSON('/api/admin/certs/' + encodeURIComponent(name), {method: 'DELETE'}).then(function(r) {
+      if (r.ok) { toast('证书已删除'); loadDNS(); }
+    });
+  });
+}
+async function renewCert(name) {
+  confirmAction('续订证书', '确定强制续订 ' + name + '？', function() {
+    apiJSON('/api/admin/certs/' + encodeURIComponent(name) + '/renew', {method: 'POST'}).then(function(r) {
+      if (r.ok) { toast('续订已提交'); loadDNS(); }
+      else toast(r.data ? (r.data.error || '续订失败') : '续订失败', 'error');
+    });
+  });
+}
+async function downloadCert(name) {
+  try {
+    var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/download');
+    if (!r.ok) { toast('下载失败', 'error'); return; }
+    var blob = await r.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name + '.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { toast('下载失败', 'error'); }
+}
+async function showCertDetail(name) {
+  var r = await apiJSON('/api/admin/certs/' + encodeURIComponent(name));
+  if (!r.ok) return;
+  var d = r.data || {};
+  var isACME = !!(d.acme || name.indexOf('acme-') === 0);
+  var rows = [];
+  if (d.subject) rows.push(['证书主体 (CN)', he(d.subject)]);
+  if (d.issuer) rows.push(['颁发组织', he(d.issuer)]);
+  if (d.not_before) rows.push(['生效时间', he(d.not_before)]);
+  if (d.not_after) rows.push(['过期时间', he(d.not_after)]);
+  if (d.dns_names && d.dns_names.length) rows.push(['SAN 域名', he(d.dns_names.join(', '))]);
+  rows.push(['申请方式', isACME ? '<span class="badge badge-blue">ACME</span>' : '<span class="badge badge-green">手动上传</span>']);
+  if (isACME && d.dns_provider) rows.push(['DNS 账号', he(d.dns_provider)]);
+  if (isACME && d.ca) rows.push(['CA', he(d.ca)]);
+  if (isACME && d.email) rows.push(['ACME 账号', he(d.email)]);
+  if (d.hash) rows.push(['Hash', '<span class="mono">' + he(d.hash.substring(0,16)) + '...</span>']);
+  var h = '<table style="font-size:13px"><tbody>';
+  rows.forEach(function(r) {
+    h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap;vertical-align:top">' + r[0] + '</td><td style="padding:6px 0">' + r[1] + '</td></tr>';
+  });
+  h += '</tbody></table>';
+  document.getElementById('cert-detail-body').innerHTML = h;
+  openModal('modal-cert-detail');
+}
+async function uploadCert() {
+  var name = document.getElementById('cupload-name').value.trim();
+  var files = document.getElementById('cupload-files').files;
+  if (!name) { toast('请输入证书名称', 'error'); return; }
+  if (!files || files.length === 0) { toast('请选择证书文件', 'error'); return; }
+  var fd = new FormData();
+  fd.append('name', name);
+  for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
+  var btn = document.getElementById('cupload-btn');
+  btn.disabled = true; btn.textContent = '上传中...';
+  try {
+    var r = await api('/api/admin/certs', {method: 'POST', body: fd});
+    var data = await r.json();
+    if (r.ok) { toast('证书已上传: ' + (data.name || name)); closeModal('modal-cert-upload'); loadDNS(); markPageClean(); }
+    else toast((data && data.error) || '上传失败', 'error');
+  } catch(e) { toast('上传失败: ' + (e.message || '网络错误'), 'error'); }
+  btn.disabled = false; btn.textContent = '上传';
+  document.getElementById('cupload-name').value = '';
+  document.getElementById('cupload-files').value = '';
+}
+async function loadACMEAccountsForIssue() {
+  var r = await apiJSON('/api/admin/acme/all').catch(function() { return {ok:true,data:{accounts:[]}}; });
+  var accts = (r.data && r.data.accounts) || [];
+  var sel = document.getElementById('acme-issue-account');
+  var prevAcc = sel.value; // preserve selection
+  sel.innerHTML = '';
+  if (accts.length === 0) sel.innerHTML = '<option value="">-- 暂无帐号 --</option>';
+  else accts.forEach(function(a, i) { sel.innerHTML += '<option value="' + i + '">' + he(a.email) + ' (' + he(a.ca) + ')</option>'; });
+  if (prevAcc) sel.value = prevAcc; // restore
+  // populate DNS provider dropdown
+  apiJSON('/api/admin/dns-keys').then(function(dkr) {
+    var keys = dkr.data || {};
+    var ds = document.getElementById('acme-issue-dns');
+    var prevDNS = ds.value; // preserve
+    ds.innerHTML = '<option value="">-- HTTP-01 (非泛域名) --</option>';
+    Object.keys(keys).forEach(function(k) {
+      var v = keys[k];
+      var name = v.name || k;
+      var prov = v.provider || k;
+      ds.innerHTML += '<option value="' + he(k) + '">' + he(name + ' (' + prov + ')') + '</option>';
+    });
+    if (prevDNS) ds.value = prevDNS; // restore
+  });
+}
+function openACMEAccount(index) {
+  if (index >= 0) {
+    apiJSON('/api/admin/acme/all').then(function(r) {
+      if (!r.ok) return;
+      var accts = (r.data && r.data.accounts) || [];
+      var a = accts[index];
+      if (!a) return;
+      document.getElementById('modal-acme-title').textContent = '编辑 ACME 帐号';
+      document.getElementById('acme-email').value = a.email || '';
+      document.getElementById('acme-ca').value = a.ca || 'Let\u0027s Encrypt';
+      document.getElementById('acme-keytype').value = a.key_type || 'EC256';
+      document.getElementById('acme-eabkid').value = a.eab_kid || '';
+      document.getElementById('acme-eabkey').value = a.eab_key || '';
+      document.getElementById('modal-acme-account').dataset.index = index;
+      openModal('modal-acme-account');
+    });
+  } else {
+    document.getElementById('modal-acme-title').textContent = '添加 ACME 帐号';
+    document.getElementById('acme-email').value = '';
+    document.getElementById('acme-ca').value = 'Let\u0027s Encrypt';
+    document.getElementById('acme-keytype').value = 'EC256';
+    document.getElementById('acme-eabkid').value = '';
+    document.getElementById('acme-eabkey').value = '';
+    document.getElementById('modal-acme-account').dataset.index = '-1';
+    openModal('modal-acme-account');
+  }
+}
+async function saveACMEAccount() {
+  var idx = document.getElementById('modal-acme-account').dataset.index || '-1';
+  var body = {
+    email: document.getElementById('acme-email').value,
+    ca: document.getElementById('acme-ca').value,
+    key_type: document.getElementById('acme-keytype').value,
+    eab_kid: document.getElementById('acme-eabkid').value,
+    eab_key: document.getElementById('acme-eabkey').value
+  };
+  var r = await apiJSON('/api/admin/acme/accounts/' + idx, {method: 'PUT', body: body});
+  if (r.ok) {
+    var msg = 'ACME 帐号已保存';
+    if (r.data && r.data.registered === false) msg += ' (注册待确认)';
+    toast(msg); closeModal('modal-acme-account'); loadDNS(); loadACMEAccountsForIssue(); markPageClean();
+  }
+}
+async function deleteACMEAccount(index, email) {
+  confirmAction('删除 ACME 帐号', '确定删除帐号 ' + email + '？', function() {
+    apiJSON('/api/admin/acme/accounts/' + index, {method: 'DELETE'}).then(function(r) {
+      if (r.ok) { toast('已删除'); loadDNS(); loadACMEAccountsForIssue(); }
+    });
+  });
+}
+async function issueACME() {
+  var accountIdx = document.getElementById('acme-issue-account').value;
+  var domains = document.getElementById('acme-issue-domains').value;
+  var dnsProvider = document.getElementById('acme-issue-dns') ? document.getElementById('acme-issue-dns').value : '';
+  if (!domains) { toast('请输入域名', 'error'); return; }
+  var body = {domains: domains.split(',').map(function(s) { return s.trim(); }).filter(Boolean)};
+  if (accountIdx !== '') body.account_index = String(accountIdx);
+  if (dnsProvider) body.dns_provider = dnsProvider;
+  // show log panel
+  var logEl = document.getElementById('acme-log');
+  logEl.style.display = 'block';
+  logEl.textContent = '正在申请...\n';
+  var btn = document.getElementById('acme-issue-btn');
+  if (btn.disabled) return; // prevent double submit
+  btn.disabled = true; btn.textContent = '申请中...';
+  try {
+    var r = await apiJSON('/api/admin/acme/issue', {method: 'POST', body: body});
+    if (r.ok) {
+      toast('ACME 申请已提交');
+      loadDNS(); markPageClean();
+    }
+    // show log regardless of success/failure
+    var logText = '';
+    if (r.data && r.data.log) logText = r.data.log;
+    else if (r.data && r.data.error) logText = r.data.error;
+    logEl.textContent = (logText || JSON.stringify(r.data, null, 2)) + '\n--- 完成 ---';
+  } catch(e) {
+    logEl.textContent += '\n请求失败: ' + (e.message || '网络错误');
+  }
+  btn.disabled = false; btn.textContent = '申请';
+}
+
+// ==================== VERSIONS ====================
+async function loadVersions(silent) {
+  if (!silent) document.getElementById('page-versions').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var vr = await apiJSON('/api/admin/agent-version');
+    var br = await apiJSON('/api/admin/agent-binaries');
+    var nr = await apiJSON('/api/admin/nodes');
+    var nodes = normalizeNodes(nr.data);
+    renderVersions(vr.data, br.data, nodes);
+  } catch(e) { if (!silent) document.getElementById('page-versions').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function renderVersions(verData, binData, nodes) {
+  var forced = (verData && verData.latest_version) || '';
+  var bins = (binData && Array.isArray(binData)) ? binData : [];
+
+  // collect available versions from uploaded binaries
+  var availVers = [];
+  bins.forEach(function(b) { if (b.version && availVers.indexOf(b.version) === -1) availVers.push(b.version); });
+
+  var h = '';
+  h += '<div class="card"><div class="card-header"><h3>Agent 版本</h3></div>';
+  h += '<div class="form-inline"><div class="form-group" style="flex:0 1 200px"><label>强制版本</label><select id="ver-force"><option value="">不强制</option>';
+  availVers.forEach(function(v) {
+    h += '<option value="' + he(v) + '"' + (forced === v ? ' selected' : '') + '>' + he(v) + '</option>';
+  });
+  h += '</select></div>';
+  h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="saveForcedVersion()">保存</button></div></div>';
+  h += '</div>';
+
+  h += '<div class="card"><div class="card-header"><h3>一键部署</h3></div>';
+  h += '<div class="form-inline">';
+  h += '<div class="form-group" style="flex:0 1 160px"><label>版本</label><select id="deploy-ver">';
+  availVers.forEach(function(v) { h += '<option value="' + he(v) + '">' + he(v) + '</option>'; });
+  if (availVers.length === 0) h += '<option value="dev">dev</option>';
+  h += '</select></div>';
+  h += '<div class="form-group" style="flex:0 1 180px"><label>系统</label><select id="deploy-os"><option value="linux-amd64">Linux (amd64)</option><option value="linux-arm64">Linux (arm64)</option><option value="linux-armv7">Linux (armv7)</option><option value="windows-amd64">Windows (amd64)</option></select></div>';
+  h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="copyDeployCmd()">复制部署命令</button></div>';
+  h += '</div></div>';
+
+  h += '<div class="card"><div class="card-header"><h3>已上传二进制</h3><button class="btn btn-sm btn-primary" onclick="document.getElementById(\'bin-upload\').click()">+ 上传</button></div>';
+  h += '<input type="file" id="bin-upload" style="display:none" onchange="uploadBinary(this)">';
+  if (bins.length === 0) {
+    h += '<div class="empty">暂无</div>';
+  } else {
+    h += '<table><thead><tr><th>文件名</th><th>大小</th><th>版本</th><th>操作</th></tr></thead><tbody>';
+    bins.forEach(function(b) {
+      var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
+      h += '<tr><td class="mono">' + he(b.name || '') + '</td><td>' + sizeStr + '</td><td>' + he(b.version || '-') + '</td>';
+      h += '<td><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
+    });
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+
+  if (nodes.length > 0) {
+    h += '<div class="card"><div class="card-header"><h3>节点版本</h3></div>';
+    h += '<table><thead><tr><th><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th>节点</th><th>系统</th><th>状态</th><th>当前版本</th><th>目标版本</th><th>升级状态</th></tr></thead><tbody>';
+    var trigData = {};
+    try { trigData = JSON.parse(localStorage.getItem('ddns_upg') || '{}'); } catch(e) {}
+    window._upgTrig = trigData;
+    nodes.forEach(function(n) {
+      var osName = n.os || '-';
+      var online = n.online;
+      var statusBadge = online ? '<span class="badge badge-green">在线</span>' : '<span class="badge badge-red">离线</span>';
+      var curVer = n.version || '-';
+      var trig = trigData[n.id] || null;
+      var upgStatus = '';
+      if (trig) {
+        if (curVer === trig.ver) { upgStatus = 'ok'; delete trigData[n.id]; localStorage.setItem('ddns_upg', JSON.stringify(trigData)); window._upgTrig = trigData; }
+        else if ((Date.now() - trig.ts) > 1800000) { upgStatus = 'fail'; }
+        else { upgStatus = 'pending'; }
+      }
+      var statusCell = !upgStatus ? '-' : (upgStatus === 'ok' ? '<span class="badge badge-green">完成</span>' : (upgStatus === 'fail' ? '<span class="badge badge-red">超时</span>' : ('<span class="badge badge-orange">等待中 ' + Math.floor((Date.now()-trig.ts)/60000) + 'm</span>')));
+      var trigVer = trig ? trig.ver : '';
+      h += '<tr><td><input type="checkbox" class="node-upgrade-cb" value="' + he(n.id) + '"' + (!online ? ' disabled' : '') + '></td>';
+      h += '<td><b>' + he(n.name) + '</b></td>';
+      h += '<td style="font-size:12px;color:var(--c-text2)">' + he(osName) + '</td>';
+      h += '<td>' + statusBadge + '</td>';
+      h += '<td class="mono">' + he(curVer) + '</td>';
+      h += '<td><select class="upgrade-target" data-node="' + he(n.id) + '"><option value="">-</option>';
+      availVers.forEach(function(v) {
+        h += '<option value="' + he(v) + '"' + (trigVer === v ? ' selected' : '') + '>' + he(v) + '</option>';
+      });
+      h += '</select></td>';
+      h += '<td style="font-size:12px">' + statusCell + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<div class="btn-wrap" style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="batchUpgrade()">批量升级</button></div></div>';
+  }
+
+  document.getElementById('page-versions').innerHTML = h;
+}
+
+function getDeployCmd() {
+  var os = document.getElementById('deploy-os').value;
+  var ver = document.getElementById('deploy-ver').value;
+  var origin = window.location.origin;
+  var isWin = os.indexOf('win') === 0;
+  var agentBin = 'node-agent' + (ver ? '-v' + ver : '') + '-' + os + (isWin ? '.exe' : '');
+  var instBin = 'ddns-installer' + (ver ? '-v' + ver : '') + '-' + os + (isWin ? '.exe' : '');
+  if (isWin) {
+    var ps = 'powershell -Command "';
+    ps += '[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true};';
+    ps += ' if (Test-Path C:\\ddns-manager\\agent.yaml) {';
+    ps += ' sc.exe stop node-agent;';
+    ps += ' Start-Sleep -Seconds 3;';
+    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + agentBin + ' -OutFile C:\\ddns-manager\\node-agent.exe -UseBasicParsing }';
+    ps += ' catch { Write-Host (\'Download failed: \' + $_.Exception.Message); exit 1 };';
+    ps += ' sc.exe start node-agent';
+    ps += ' } else {';
+    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + instBin + ' -OutFile $env:TEMP\\ddns-installer.exe -UseBasicParsing }';
+    ps += ' catch { Write-Host (\'Download failed: \' + $_.Exception.Message); exit 1 };';
+    ps += ' Start-Process $env:TEMP\\ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
+    ps += '}"';
+    return ps;
+  }
+  var sh = 'if [ -f /opt/ddns-manager/agent.yaml ]; then ';
+  sh += 'sudo systemctl stop node-agent.timer 2>/dev/null; ';
+  sh += 'curl -fsSLk ' + origin + '/bin/' + agentBin + ' -o /opt/ddns-manager/node-agent && ';
+  sh += 'chmod +x /opt/ddns-manager/node-agent && ';
+  sh += 'sudo systemctl start node-agent.timer 2>/dev/null; ';
+  sh += 'else ';
+  sh += 'curl -fsSLk ' + origin + '/bin/' + instBin + ' -o /tmp/ddns-installer && ';
+  sh += 'chmod +x /tmp/ddns-installer && ';
+  sh += '/tmp/ddns-installer -manager-url ' + origin + ' -name $(hostname); ';
+  sh += 'fi';
+  return sh;
+}
+
+async function copyDeployCmd() {
+  var cmd = getDeployCmd();
+  try { await navigator.clipboard.writeText(cmd); toast('已复制'); }
+  catch(e) { prompt('复制命令:', cmd); }
+}
+
+async function saveForcedVersion() {
+  var v = document.getElementById('ver-force').value;
+  var r = await apiJSON('/api/admin/agent-version', {method: 'POST', body: {latest_version: v}});
+  if (r.ok) { toast('版本已保存'); markPageClean(); }
+}
+async function uploadBinary(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var fd = new FormData(); fd.append('file', file);
+  var r = await api('/api/admin/agent-binaries', {method: 'POST', body: fd});
+  if (r.ok) { toast('已上传'); loadVersions(); }
+  input.value = '';
+}
+async function deleteBinary(name) {
+  confirmAction('删除二进制', '确定删除 ' + name + '？', function() {
+    apiJSON('/api/admin/agent-binaries/' + encodeURIComponent(name), {method: 'DELETE'}).then(function(r) {
+      if (r.ok) { toast('已删除'); loadVersions(); }
+    });
+  });
+}
+async function batchUpgrade() {
+  var cbs = document.querySelectorAll('.node-upgrade-cb:checked');
+  if (cbs.length === 0) { toast('请选择节点', 'warning'); return; }
+  clearInterval(refreshTimer);
+  if (!window._upgTrig) window._upgTrig = {};
+  var count = 0;
+  for (var i = 0; i < cbs.length; i++) {
+    var nodeId = cbs[i].value;
+    var sel = document.querySelector('.upgrade-target[data-node="' + nodeId + '"]');
+    var targetVer = sel ? sel.value : '';
+    if (!targetVer) continue;
+    // store trigger: version + timestamp for real status tracking
+    window._upgTrig[nodeId] = {ver: targetVer, ts: Date.now()};
+    localStorage.setItem('ddns_upg', JSON.stringify(window._upgTrig));
+    // update status cell directly
+    var row = cbs[i].closest('tr');
+    if (row) {
+      var statusCell = row.querySelector('td:last-child');
+      if (statusCell) statusCell.innerHTML = '<span class="badge badge-orange">等待中</span>';
+    }
+    try {
+      await apiJSON('/api/admin/agent-version', {method: 'POST', body: {latest_version: targetVer}});
+      count++;
+    } catch(e) {
+      window._upgTrig[nodeId] = {ver: targetVer, ts: 0}; // ts=0 marks as failed
+      if (statusCell) statusCell.innerHTML = '<span class="badge badge-red">失败</span>';
+    }
+  }
+  startAutoRefresh();
+  if (count > 0) { toast('已触发 ' + count + ' 个节点升级，等待心跳确认'); loadVersions(); }
+  else toast('未选择目标版本', 'warning');
+}
+
+// ==================== LOGS ====================
+async function loadLogs(silent, filter) {
+  if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var url = '/api/admin/logs?limit=100';
+    if (filter) {
+      if (filter.node) url += '&node=' + encodeURIComponent(filter.node);
+      if (filter.category) url += '&category=' + encodeURIComponent(filter.category);
+      if (filter.from) url += '&from=' + encodeURIComponent(filter.from);
+      if (filter.to) url += '&to=' + encodeURIComponent(filter.to);
+    }
+    var r = await apiJSON(url);
+    if (!r.ok) return;
+    // also load nodes for the node filter dropdown
+    var nr = await apiJSON('/api/admin/nodes').catch(function(){ return {ok:true,data:{}}; });
+    var nodeNames = [];
+    if (nr.data) {
+      Object.keys(nr.data).forEach(function(id) {
+        var hw = nr.data[id].hardware || {};
+        var host = hw.hostname || id;
+        nodeNames.push({id: id, label: host + ' (' + id + ')'});
+      });
+    }
+    window._logNodeNames = nodeNames;
+    renderLogs(r.data, filter);
+  } catch(e) { if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+function renderLogs(data, filter) {
+  var events = normalizeEvents((data && data.events) || []);
+  var categories = (data && data.categories) || [];
+  var nodeNames = window._logNodeNames || [];
+  var f = filter || {};
+  var h = '';
+  h += '<div class="card"><div class="card-header"><h3>系统日志</h3></div>';
+  h += '<div class="form-inline" style="margin-bottom:12px;gap:6px;align-items:flex-end">';
+  h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node" style="height:30px"><option value="">全部</option>';
+  nodeNames.forEach(function(n) {
+    h += '<option value="' + he(n.id) + '"' + (f.node === n.id ? ' selected' : '') + '>' + he(n.label) + '</option>';
+  });
+  h += '</select></div>';
+  h += '<div class="form-group" style="flex:0 1 110px"><label>分类</label><select id="log-filter-cat" style="height:30px"><option value="">全部</option>';
+  categories.forEach(function(c) {
+    h += '<option value="' + he(c) + '"' + (f.category === c ? ' selected' : '') + '>' + he(c) + '</option>';
+  });
+  h += '</select></div>';
+  h += '<div class="form-group" style="flex:0 1 120px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="height:30px;font-size:11px"></div>';
+  h += '<div class="form-group" style="flex:0 1 120px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="height:30px;font-size:11px"></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary btn-sm" onclick="applyLogFilter()">搜索</button></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-secondary btn-sm" onclick="downloadLogs()">下载</button></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-danger btn-sm" onclick="cleanupLogs()">清理</button></div>';
+  h += '</div>';
+  h += '<table><thead><tr><th>时间</th><th>节点</th><th>分类</th><th>内容</th></tr></thead><tbody>';
+  if (events.length === 0) {
+    h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';
+  } else {
+    events.forEach(function(l) {
+      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
+      h += '<tr><td class="event-time">' + he(l.time) + '</td><td>' + he(l.node || '-') + '</td>';
+      h += '<td><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
+      h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
+    });
+  }
+  h += '</tbody></table></div>';
+  document.getElementById('page-logs').innerHTML = h;
+}
+function getLogFilter() {
+  return {
+    node: document.getElementById('log-filter-node') ? document.getElementById('log-filter-node').value : '',
+    category: document.getElementById('log-filter-cat') ? document.getElementById('log-filter-cat').value : '',
+    from: document.getElementById('log-filter-from') ? document.getElementById('log-filter-from').value : '',
+    to: document.getElementById('log-filter-to') ? document.getElementById('log-filter-to').value : ''
+  };
+}
+function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f); }
+async function cleanupLogs() {
+  confirmAction('清理日志', '确定清理旧日志？', function() {
+    apiJSON('/api/admin/logs/cleanup', {method: 'POST'}).then(function(r) {
+      if (r.ok) { toast('已清理'); loadLogs(); }
+    });
+  });
+}
+async function downloadLogs() {
+  try {
+    var r = await api('/api/admin/logs/download');
+    if (!r.ok) { toast('下载失败', 'error'); return; }
+    var blob = await r.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'ddns-manager-logs.tar.gz';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('下载完成');
+  } catch(e) { toast('下载失败', 'error'); }
+}
+
+// ==================== SETTINGS ====================
+async function loadSettings(silent) {
+  if (!silent) document.getElementById('page-settings').innerHTML = '<div class="empty">加载中...</div>';
+  try {
+    var sr = await apiJSON('/api/admin/smtp');
+    var rr = await apiJSON('/api/admin/rate-limit');
+    renderSettings(sr.data || {}, rr.data || {});
+  } catch(e) { if (!silent) document.getElementById('page-settings').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+function renderSettings(smtp, rl) {
+  var h = '';
+  h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>新密码</label><input type="password" id="set-new-pwd" style="width:200px"></div>';
+  h += '<div class="form-group"><label>确认密码</label><input type="password" id="set-confirm-pwd" style="width:200px"></div>';
+  h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="changePassword()">保存</button></div></div>';
+
+  h += '<div class="card"><div class="card-header"><h3>SMTP 邮件通知</h3></div>';
+  // 第一行: 发件人 + 授权码
+  h += '<div class="form-row"><div class="form-group"><label>发件人</label><input id="smtp-user" value="' + he(smtp.username || '') + '" placeholder="user@qq.com" oninput="autoMatchSMTP()"></div>';
+  h += '<div class="form-group"><label>授权码</label><input type="password" id="smtp-pass" value="' + he(smtp.password || '') + '" placeholder="留空不变"></div></div>';
+  // 第二行: SMTP服务器(智能匹配下拉) + 端口
+  h += '<div class="form-row"><div class="form-group"><label>SMTP 服务器</label><select id="smtp-host-sel" onchange="onSMTPHostChange()"><option value="">-- 自动匹配或手动选择 --</option></select><input id="smtp-host" value="' + he(smtp.host || '') + '" placeholder="smtp.qq.com" style="display:none;margin-top:4px"></div>';
+  h += '<div class="form-group"><label>端口</label><input id="smtp-port" value="' + he(smtp.port || '465') + '" style="width:100px"></div></div>';
+  // 第三行: 收件人 + 管理端域名
+  h += '<div class="form-row"><div class="form-group"><label>收件人</label><input id="smtp-to" value="' + he(smtp.to || '') + '" placeholder="admin@example.com"></div>';
+  h += '<div class="form-group"><label>管理端域名</label><input id="smtp-mgr-url" value="' + he(smtp.manager_url || '') + '" placeholder="如 https://manager.example.com:30443"><div class="tip">邮件中可点击的管理端链接，留空使用服务器 IP:端口</div></div></div>';
+  h += '<div class="form-group"><label>证书告警天数</label><input id="smtp-cert-days" value="' + he(smtp.cert_expiry_days || '7') + '" style="width:80px"></div></div>';
+  h += '<div style="margin:12px 0"><b style="font-size:12px;color:var(--c-text2)">通知事件:</b></div><div class="form-row">';
+  var evs = [{k:'notify_heartbeat_fail',v:'心跳失败'},{k:'notify_security',v:'安全事件'},{k:'notify_config_change',v:'配置变更'},{k:'notify_system_error',v:'系统错误'},{k:'notify_cert_expiry',v:'证书到期'}];
+  evs.forEach(function(ev) {
+    h += '<label class="checkbox-row"><input type="checkbox" id="smtp-' + ev.k + '" class="smtp-event" value="' + ev.k + '"' + (smtp[ev.k] ? ' checked' : '') + '> ' + ev.v + '</label>';
+  });
+  h += '</div><div class="btn-row" style="margin-top:16px"><button class="btn btn-secondary" onclick="testSMTP()">测试发送</button><button class="btn btn-primary" onclick="saveSMTP()">保存</button></div></div>';
+
+  h += '<div class="card"><div class="card-header"><h3>访问限流</h3></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>全局 (req/min)</label><input id="rl-global" value="' + he(rl.requests_per_min || '600') + '" style="width:90px"></div>';
+  h += '<div class="form-group"><label>心跳 (req/min)</label><input id="rl-heartbeat" value="' + he(rl.heartbeat_per_min || '120') + '" style="width:90px"></div>';
+  h += '<div class="form-group"><label>登录 (req/min)</label><input id="rl-login" value="' + he(rl.login_per_min || '10') + '" style="width:90px"></div></div>';
+  h += '<label class="checkbox-row" style="margin:8px 0"><input type="checkbox" id="rl-enabled"' + (rl.enabled ? ' checked' : '') + '> 启用限流</label>';
+  h += '<div class="tip">基于真实客户端IP，兼容NPM反代</div>';
+  h += '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" onclick="saveRateLimit()">保存</button></div></div>';
+
+  document.getElementById('page-settings').innerHTML = h;
+  initSMTPDropdown();
+}
+
+async function changePassword() {
+  var p1 = document.getElementById('set-new-pwd').value;
+  var p2 = document.getElementById('set-confirm-pwd').value;
+  if (!p1) { toast('请输入新密码', 'error'); return; }
+  if (p1 !== p2) { toast('两次密码不一致', 'error'); return; }
+  var r = await apiJSON('/api/admin/change-password', {method: 'POST', body: {new_password: p1}});
+  if (r.ok) { toast('密码已修改'); markPageClean(); document.getElementById('set-new-pwd').value = ''; document.getElementById('set-confirm-pwd').value = ''; }
+}
+async function saveSMTP() {
+  var hostEl = document.getElementById('smtp-host');
+  var selEl = document.getElementById('smtp-host-sel');
+  // 获取host: 如果下拉可见取下拉值(自定义时读输入框), 如果下拉隐藏取输入框值
+  var host = selEl.offsetParent ? (selEl.value === '__custom__' ? hostEl.value : selEl.value) : hostEl.value;
+  var body = {
+    host: host || '',
+    port: parseInt(document.getElementById('smtp-port').value) || 465,
+    username: document.getElementById('smtp-user').value,
+    password: document.getElementById('smtp-pass').value,
+    to: document.getElementById('smtp-to').value,
+    manager_url: document.getElementById('smtp-mgr-url').value,
+    cert_expiry_days: parseInt(document.getElementById('smtp-cert-days').value) || 7
+  };
+  var cbs = document.querySelectorAll('.smtp-event:checked');
+  for (var i = 0; i < cbs.length; i++) body[cbs[i].value] = true;
+  var r = await apiJSON('/api/admin/smtp', {method: 'POST', body: body});
+  if (r.ok) { toast('SMTP 已保存'); markPageClean(); }
+  else { toast('保存失败: ' + ((r.data && r.data.error) || r.status || '未知错误'), 'error'); }
+}
+async function testSMTP() {
+  var r = await apiJSON('/api/admin/smtp/test', {method: 'POST'});
+  if (r.ok) toast('测试邮件已发送');
+  else toast('发送失败: ' + ((r.data && r.data.error) || r.status || '未知错误'), 'error');
+}
+
+// ── SMTP 服务器智能匹配 ──
+// 邮箱域名 → SMTP 服务器映射表 (常见国内/国际邮箱)
+var SMTP_MAP = {
+  'qq.com':      {host:'smtp.qq.com', port:465},
+  '163.com':     {host:'smtp.163.com', port:465},
+  '126.com':     {host:'smtp.126.com', port:465},
+  'outlook.com': {host:'smtp.office365.com', port:587},
+  'hotmail.com': {host:'smtp.office365.com', port:587},
+  'live.com':    {host:'smtp.office365.com', port:587},
+  'gmail.com':   {host:'smtp.gmail.com', port:587},
+  'aliyun.com':  {host:'smtp.aliyun.com', port:465},
+  'foxmail.com': {host:'smtp.qq.com', port:465},
+  'yeah.net':    {host:'smtp.yeah.net', port:465},
+  'sina.com':    {host:'smtp.sina.com', port:465},
+  'sina.cn':     {host:'smtp.sina.cn', port:465},
+  'sohu.com':    {host:'smtp.sohu.com', port:465}
+};
+
+function initSMTPDropdown() {
+  var sel = document.getElementById('smtp-host-sel');
+  if (!sel || sel.options.length > 1) return; // 已初始化
+  var hosts = {};
+  Object.keys(SMTP_MAP).forEach(function(k) {
+    var h = SMTP_MAP[k].host;
+    if (!hosts[h]) { hosts[h] = true; sel.appendChild(new Option(h, h)); }
+  });
+  sel.appendChild(new Option('─ 其他(自定义) ─', '__custom__'));
+  // 恢复已保存值
+  var savedHost = document.getElementById('smtp-host').value;
+  if (savedHost) {
+    var found = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === savedHost) { sel.value = savedHost; found = true; break; }
+    }
+    if (!found) { sel.value = '__custom__'; showCustomSMTPHost(true); }
+  }
+}
+
+function autoMatchSMTP() {
+  var email = document.getElementById('smtp-user').value.trim();
+  var at = email.lastIndexOf('@');
+  if (at < 0) return;
+  var domain = email.substring(at + 1).toLowerCase();
+  var m = SMTP_MAP[domain];
+  if (!m) return;
+  var sel = document.getElementById('smtp-host-sel');
+  var hostInput = document.getElementById('smtp-host');
+  var portInput = document.getElementById('smtp-port');
+  // 自动匹配
+  sel.value = m.host;
+  showCustomSMTPHost(false);
+  hostInput.value = m.host;
+  portInput.value = m.port;
+}
+
+function onSMTPHostChange() {
+  var sel = document.getElementById('smtp-host-sel');
+  showCustomSMTPHost(sel.value === '__custom__');
+}
+
+function showCustomSMTPHost(show) {
+  var sel = document.getElementById('smtp-host-sel');
+  var hostInput = document.getElementById('smtp-host');
+  if (show) {
+    sel.style.display = 'none';
+    hostInput.style.display = '';
+  } else {
+    sel.style.display = '';
+    hostInput.style.display = 'none';
+    if (sel.value !== '__custom__' && sel.value) hostInput.value = sel.value;
+  }
+}
+async function saveRateLimit() {
+  var body = {
+    enabled: document.getElementById('rl-enabled').checked,
+    requests_per_min: parseInt(document.getElementById('rl-global').value) || 600,
+    heartbeat_per_min: parseInt(document.getElementById('rl-heartbeat').value) || 120,
+    login_per_min: parseInt(document.getElementById('rl-login').value) || 10
+  };
+  var r = await apiJSON('/api/admin/rate-limit', {method: 'POST', body: body});
+  if (r.ok) { toast('限流已保存'); markPageClean(); }
+}
+
+// ========== HELPERS ==========
+function he(str) {
+  if (!str) return '';
+  var d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+// jsStr escapes for use inside JS string literals (onclick handlers)
+function jsStr(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n');
+}
+</script>
+</body>
+</html>

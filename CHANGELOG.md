@@ -6,8 +6,50 @@
 
 #### 自升级稳定性修复
 
-- **B1 自升级 defer-in-loop 连接泄漏** — `selfUpgrade` 下载重试循环中用闭包包装每次尝试，确保 `defer resp.Body.Close()` 每次迭代后立即执行（非闭包包装会导致 defer 跨迭代累积，造成 TCP 连接泄漏 + double-close panic）
-- **B3 ELF OS/ABI 校验过严** — `validateAgentBinary` 接受 OS/ABI=0x10 (Clang/LLVM) 及 System V (0x00) 的合法 Linux 二进制，不再仅限 0x03 (GNU/Linux)
+- **B1 自升级 defer-in-loop 连接泄漏** — `selfUpgrade` 下载重试循环中用闭包包装每次尝试
+- **B3 ELF OS/ABI 校验过严** — 接受 0x00/0x03/0x10 的合法 Linux 二进制
+- **B4 daemon 模式首次心跳延迟 5 分钟** — `main()` 启动后立即 `go doHeartbeat()`
+
+#### 部署命令修复
+
+- **B2 install.sh 硬编码密码** — 移除 `/api/admin/agent-version` 认证请求
+- **B5 installer fallback 名称过期** — 移除非 Go 标准架构名
+
+#### 可观测性修复
+
+- **B6 证书推送失败静默** — `LoadCertBundle` 失败时记录日志
+
+### ⚡ 升级退避增强
+
+- **失败计数 + 永久放弃** — `UpgJob.RetryCount`，推送 ≥5 次未完成 → 永久放弃 + error 日志
+- **版本变更自动重置** — `handleSetAgentVersion` 版本变更全量清空退避
+- **同版本重设恢复** — 同版本保存时清理已放弃节点（RetryCount≥5），已完成节点保留
+
+### 🎨 Web UI 增强
+
+- **饼图环壁收窄 50%** — `innerR` 0.55→0.78，移动端中心文字空间更大
+- **全列表排序** — 仪表盘/节点/DNS/证书/ACME/版本页，点击表头排序，▲/▼ 指示器
+- **排序状态保持** — 5 秒自动刷新不丢失排序，切页自动清除
+- **侧边栏 + 登录页 logo 高清化** — 引用 128×128 `logo.png` 替代 32×32 `favicon.png`，Retina 显示清晰
+- **PWA 图标升级** — `DDNS-Manager.png` 生成 192/512 高清图标，透明背景
+
+### 🧪 测试
+
+- `TestValidateAgentBinaryELFOSABI` — OS/ABI 合法性 (6 子测试)
+- `TestSelfUpgradeNoDeferInLoop` — 闭包包装验证
+- `TestDaemonModeImmediateHeartbeat` — 首次心跳验证
+
+### 📊 部署
+
+| 服务器 | 版本 | 状态 |
+|--------|------|------|
+| Manager (10.0.0.1) | v1.5.6 | 🟢 |
+| client-a (10.0.0.2) | v1.5.6 | 🟢 DDNS=OK |
+| client-b (10.0.0.3) | v1.5.6 | 🟢 DDNS=OK |
+
+---
+
+## v1.5.5 — 2026-05-10/11
 - **B4 daemon 模式首次心跳延迟 5 分钟** — `main()` 中 daemon 启动后立即 `go doHeartbeat()`，不等首个 ticker tick，确保 DNS 更新无空窗
 
 #### 部署命令修复

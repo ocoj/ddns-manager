@@ -106,6 +106,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		// 避免网络状况差时每次心跳都重试下载 (864次/天)
 		now := time.Now().UTC()
 		shouldPush := true
+		abandon := false
 		if agentCfg.UpgradeState != nil {
 			if job, ok := agentCfg.UpgradeState[nodeID]; ok {
 				// 已完成: 不再推送
@@ -118,7 +119,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 						shouldPush = false
 					}
 				}
+				// 推送≥5次仍未完成 → 永久放弃（二进制404/网络不可达）
+				// 放弃后管理员在 WebUI 重新设置版本即可恢复重试
+				if job.TargetVer == agentCfg.LatestVersion && job.RetryCount >= 5 {
+					shouldPush = false
+					abandon = true
+				}
 			}
+		}
+		if abandon {
+			s.logMgr.LogWithNode("upgrade", "升级已放弃", nodeID,
+				fmt.Sprintf("ver=%s 5次推送均失败，请检查 /bin/ 目录", agentCfg.LatestVersion), "error")
 		}
 		if shouldPush {
 			manifest, _ := s.store.LoadAgentManifest()
@@ -128,14 +139,15 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				if safeName != "" && safeName == f {
 					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
 						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
-						// 记录推送时间
+						// 记录推送时间 + 递增计数
 						if agentCfg.UpgradeState == nil {
 							agentCfg.UpgradeState = make(map[string]store.UpgJob)
 						}
-						agentCfg.UpgradeState[nodeID] = store.UpgJob{
-							TargetVer: agentCfg.LatestVersion,
-							Triggered: now.Format(time.RFC3339),
-						}
+						job := agentCfg.UpgradeState[nodeID]
+						job.TargetVer = agentCfg.LatestVersion
+						job.Triggered = now.Format(time.RFC3339)
+						job.RetryCount++
+						agentCfg.UpgradeState[nodeID] = job
 						s.store.SaveAgentConfig(agentCfg)
 					}
 				}

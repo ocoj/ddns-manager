@@ -285,6 +285,26 @@ func (s *Server) handleSetAgentVersion(w http.ResponseWriter, r *http.Request) {
 	if cfg == nil {
 		cfg = &store.AgentConfig{}
 	}
+
+	// 版本退避自动管理：
+	// - 版本变更 → 全量清空退避（新版本一切重来）
+	// - 同版本重设 → 仅清理已放弃节点（RetryCount>=5），已完成/进行中保留
+	if req.LatestVersion != cfg.LatestVersion && cfg.LatestVersion != "" {
+		cfg.UpgradeState = make(map[string]store.UpgJob)
+	} else if req.LatestVersion == cfg.LatestVersion && cfg.UpgradeState != nil {
+		var resetCount int
+		for id, job := range cfg.UpgradeState {
+			if job.Completed == "" && job.RetryCount >= 5 {
+				delete(cfg.UpgradeState, id)
+				resetCount++
+			}
+		}
+		if resetCount > 0 {
+			s.logMgr.Log("upgrade", "已重置",
+				fmt.Sprintf("版本=%s 节点=%d(已放弃→重试)", req.LatestVersion, resetCount), "info")
+		}
+	}
+
 	cfg.LatestVersion = req.LatestVersion
 	s.store.SaveAgentConfig(cfg)
 	jsonOK(w, map[string]string{"status": "ok"})

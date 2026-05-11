@@ -358,10 +358,14 @@ type AgentConfig struct {
 }
 
 // UpgJob tracks an agent upgrade trigger for dedup and UI status.
+// RetryCount limits push attempts (max 5) to prevent infinite 404 loops
+// when the binary is missing from /bin/. An abandoned job is retried when
+// handleSetAgentVersion is called (new version or same-version re-save).
 type UpgJob struct {
-	TargetVer string `json:"target_ver"` // 目标版本
-	Triggered string `json:"triggered"`  // 触发时间 RFC3339
-	Completed string `json:"completed,omitempty"` // 完成时间 (agent 心跳确认后写入)
+	TargetVer  string `json:"target_ver"`             // 目标版本
+	Triggered  string `json:"triggered"`              // 触发时间 RFC3339
+	Completed  string `json:"completed,omitempty"`    // 完成时间 (agent 心跳确认后写入)
+	RetryCount int    `json:"retry_count,omitempty"`  // 已推送次数 (用于永久放弃判定)
 }
 
 func (s *ManagerStore) agentManifestPath() string { return filepath.Join(s.dir, "agent_manifest.json") }

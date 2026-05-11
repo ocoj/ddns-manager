@@ -82,6 +82,8 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{background:var(--c-th-bg);font-size:11px;font-weight:700;color:var(--c-text2);padding:10px 12px;text-transform:uppercase;letter-spacing:.3px}
+th.sortable:hover{background:#e6f0ff;color:var(--c-primary)}
+th.sortable{transition:background .15s,color .15s}
 td{padding:10px 12px;border-bottom:1px solid var(--c-border)}
 tr:hover td{background:var(--c-bg)}
 th{text-align:left}
@@ -339,6 +341,57 @@ let refreshTimer = null;
 let refreshSec = 0;
 let confirmCb = null;
 
+// ========== TABLE SORT STATE ==========
+// Sort state persists across 5s auto-refreshes but resets on page switch.
+// Keyed by page name; stores {col: 'column-key', dir: 'asc'|'desc'}.
+var _sortState = {};
+
+// sortData sorts an array of objects by _sortState[page].col
+function sortData(data, page) {
+  var st = _sortState[page];
+  if (!st || !st.col) return;
+  data.sort(function(a, b) {
+    var va = a[st.col], vb = b[st.col];
+    // numeric sort: numbers stored as numbers or numeric strings
+    var na = Number(va), nb = Number(vb);
+    if (!isNaN(na) && !isNaN(nb) && (typeof va === 'number' || typeof vb === 'number')) { va = na; vb = nb; }
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    if (va < vb) return st.dir === 'asc' ? -1 : 1;
+    if (va > vb) return st.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+// enhanceSortHeaders adds click handlers to <th data-sort> elements after render.
+// Clicking a sortable header re-fetches data from API (via loadPage) and re-renders
+// with new sort direction, ensuring data freshness while maintaining sort continuity.
+function enhanceSortHeaders(tableEl, page, loadFn) {
+  if (!tableEl) return;
+  var ths = tableEl.querySelectorAll('th[data-sort]');
+  for (var i = 0; i < ths.length; i++) {
+    (function(th) {
+      var col = th.dataset.sort;
+      th.style.cursor = 'pointer';
+      th.style.userSelect = 'none';
+      th.classList.add('sortable');
+      var st = _sortState[page];
+      var indicator = st && st.col === col ? (st.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      // strip old indicator before appending new one
+      th.innerHTML = th.innerHTML + indicator;
+      th.addEventListener('click', function() {
+        if (!_sortState[page] || _sortState[page].col !== col) {
+          _sortState[page] = {col: col, dir: 'asc'};
+        } else {
+          _sortState[page].dir = _sortState[page].dir === 'asc' ? 'desc' : 'asc';
+        }
+        // Full reload — fresh data, sort reapplied in render
+        loadFn(false);
+      });
+    })(ths[i]);
+  }
+}
+
 function saveToken(t) {
   TOKEN = t;
   try { localStorage.setItem('ddns-token', t); } catch(e){}
@@ -560,6 +613,8 @@ function navigate(page) {
   // ★ 核心: 删除目标页旧快照 → 强制从 API 重新加载
   delete _pageStore[page];
   delete _pageClean[page];
+  // Clear all sort state on page switch — each page has independent sort order
+  _sortState = {};
   currentPage = page;
   var items = document.querySelectorAll('.side-nav .item');
   for (var i = 0; i < items.length; i++) {
@@ -829,6 +884,8 @@ function renderDashboard(stats, nodes, events, access) {
   var offline = total - online;
   var healthy = 0;
   nodes.forEach(function(n) { if (n.health === 'OK') healthy++; });
+  // Apply saved sort state before rendering (survives 5s auto-refresh)
+  sortData(nodes, 'dashboard');
   var h = '';
   h += '<div class="stats-row">';
   h += '<div class="stat-card"><div class="num">' + total + '</div><div class="lbl">节点总数</div></div>';
@@ -838,12 +895,16 @@ function renderDashboard(stats, nodes, events, access) {
   h += '</div>';
 
   h += '<div class="card"><div class="card-header"><h3>节点列表</h3></div>';
-  h += '<table><thead><tr><th style="width:auto">节点</th><th style="width:auto">IP</th><th style="width:auto">域名</th><th style="width:50px">健康</th><th style="width:80px">版本</th><th style="width:90px">状态</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th style="width:auto" data-sort="name">节点</th><th style="width:auto" data-sort="ip">IP</th><th style="width:auto" data-sort="domainsStr">域名</th><th style="width:50px" data-sort="healthSort">健康</th><th style="width:80px" data-sort="version">版本</th><th style="width:90px" data-sort="status">状态</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
   } else {
     nodes.forEach(function(n) {
       var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 3).join(', ') + (n.domains.length > 3 ? ' +' + (n.domains.length-3) : '') : '-';
+      // sort-friendly computed fields
+      n.domainsStr = (n.domains && n.domains.length) ? n.domains[0] : '\uffff'; // first domain for sort (fallback high)
+      n.status = n.online ? '\u0001在线' : '\u0002离线'; // prefix ensures consistent sort order
+      n.healthSort = {OK:'\u0001',ERR:'\u0002',DOWN:'\u0003','-':'\u0004'}[n.health] || '\u0005';
       var ipHtml = he(n.ip || '-');
       if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
       h += '<tr><td><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
@@ -893,6 +954,10 @@ function renderDashboard(stats, nodes, events, access) {
   }
 
   document.getElementById('dashboard-content').innerHTML = h;
+
+  // Enhance sortable headers on dashboard node table
+  var dashTable = document.querySelector('#dashboard-content table');
+  enhanceSortHeaders(dashTable, 'dashboard', loadDashboard);
 
   // Draw access line charts after DOM update
   if (access && access.timestamps && access.timestamps.length > 0) {
@@ -997,7 +1062,7 @@ function drawPieChart(containerId, segments, totalLabel) {
 
   var cx = W / 2, cy = canvasH / 2;
   var outerR = Math.min(W, canvasH) / 2 - 8;
-  var innerR = outerR * 0.55; // donut hole
+  var innerR = outerR * 0.78; // donut hole — thin ring (22% outerR), wide center for text readability on mobile
   var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1','#13c2c2','#eb2f96'];
 
   var total = 0;
@@ -1146,11 +1211,19 @@ async function loadNodes(silent) {
 }
 
 function renderNodes(nodes) {
+  // Apply saved sort state before rendering
+  sortData(nodes, 'nodes');
   var h = '<div class="card"><div class="card-header"><h3>节点列表 (' + nodes.length + ')</h3></div>';
-  h += '<table><thead><tr><th style="width:auto">节点名称</th><th style="width:150px">IP</th><th style="width:120px">系统</th><th style="width:auto">域名</th><th style="width:50px">健康</th><th style="width:80px">版本</th><th style="width:90px">状态</th><th style="width:100px">操作</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th style="width:auto" data-sort="name">节点名称</th><th style="width:150px" data-sort="ip">IP</th><th style="width:120px" data-sort="os">系统</th><th style="width:auto" data-sort="domainsStr">域名</th><th style="width:50px" data-sort="healthSort">健康</th><th style="width:80px" data-sort="version">版本</th><th style="width:90px" data-sort="online">状态</th><th style="width:100px">操作</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="8" class="empty">暂无节点</td></tr>';
   } else {
+    // Add sort-friendly computed fields before rendering loop
+    nodes.forEach(function(n) {
+      n.domainsStr = (n.domains && n.domains.length) ? n.domains[0] : '\uffff';
+      n.health = n.health || '-';
+      n.healthSort = {'OK':'\u0001','ERR':'\u0002','DOWN':'\u0003','-':'\u0004'}[n.health] || '\u0005';
+    });
     nodes.forEach(function(n) {
       var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 2).join(', ') + (n.domains.length > 2 ? ' +' + (n.domains.length-2) : '') : '-';
       var ipHtml = he(n.ip || '-');
@@ -1171,6 +1244,8 @@ function renderNodes(nodes) {
   }
   h += '</tbody></table></div>';
   document.getElementById('page-nodes').innerHTML = h;
+  var nodesTable = document.querySelector('#page-nodes table');
+  enhanceSortHeaders(nodesTable, 'nodes', loadNodes);
 }
 
 function deleteNode(id, name) {
@@ -1379,23 +1454,32 @@ function renderDNS(keysMap, certData, acData) {
   var keys = keysMap || {};
   var certs = Array.isArray(certData) ? certData : [];
   var accts = (acData && acData.accounts) || [];
+
+  // Convert keys map to sortable array
+  var keyArr = [];
+  Object.keys(keys).forEach(function(p) {
+    var k = keys[p];
+    keyArr.push({key: p, name: k.name || p, provider: k.provider || p, ak: k.access_key_id || '', nodes: (k.used_by_nodes || []).join(', ') || '-'});
+  });
+  sortData(keyArr, 'dns-keys');
+  sortData(certs, 'dns-certs');
+  sortData(accts, 'dns-acme');
   var h = '';
 
   h += '<div class="card"><div class="card-header"><h3>DNS Keys</h3><button class="btn btn-sm btn-primary" onclick="addDNSKey()">+ 新增</button></div>';
-  var providers = Object.keys(keys);
-  if (providers.length === 0) {
+  if (keyArr.length === 0) {
     h += '<div class="empty">暂无 DNS Key</div>';
   } else {
-    h += '<table><thead><tr><th>名称</th><th>提供商</th><th>Access Key</th><th>使用节点</th><th>操作</th></tr></thead><tbody>';
-    providers.forEach(function(p) {
-      var k = keys[p];
-      var name = k.name || p;
-      var prov = k.provider || p;
+    h += '<table><thead><tr><th data-sort="name">名称</th><th data-sort="provider">提供商</th><th>Access Key</th><th data-sort="nodes">使用节点</th><th>操作</th></tr></thead><tbody>';
+    keyArr.forEach(function(item) {
+      var k = item;
+      var name = k.name;
+      var prov = k.provider;
       h += '<tr><td><b>' + he(name) + '</b></td>';
       h += '<td>' + he(prov) + '</td>';
-      h += '<td class="mono">' + he((k.access_key_id || '').substring(0,12)) + '...</td>';
-      h += '<td>' + he((k.used_by_nodes || []).join(', ') || '-') + '</td>';
-      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(p) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(p) + '\')">删除</button></div></td></tr>';
+      h += '<td class="mono">' + he((k.ak || '').substring(0,12)) + '...</td>';
+      h += '<td>' + he(k.nodes) + '</td>';
+      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1405,13 +1489,15 @@ function renderDNS(keysMap, certData, acData) {
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
-    h += '<table><thead><tr><th>名称</th><th>SAN</th><th>到期</th><th>剩余</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">名称</th><th>SAN</th><th data-sort="expiry">到期</th><th data-sort="daysLeft">剩余</th><th>操作</th></tr></thead><tbody>';
     certs.forEach(function(c) {
       var name = c.bundle_name || c.name || '';
       var exp = c.expiry || '';
       var expDate = exp ? new Date(exp) : null;
       var isValidDate = expDate && !isNaN(expDate.getTime());
       var days = isValidDate ? Math.floor((expDate - Date.now()) / 86400000) : '-';
+      c.daysLeft = days === '-' ? 99999 : days; // sort-friendly: far-future for no-expiry
+      c.name = c.bundle_name || c.name || '';
       var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
       h += '<tr><td><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
       h += '<td><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
@@ -1425,7 +1511,7 @@ function renderDNS(keysMap, certData, acData) {
   if (accts.length === 0) {
     h += '<div class="empty">暂无 ACME 帐号</div>';
   } else {
-    h += '<table><thead><tr><th>Email</th><th>CA</th><th>Key</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="email">Email</th><th data-sort="ca">CA</th><th>Key</th><th data-sort="registered">状态</th><th>操作</th></tr></thead><tbody>';
     accts.forEach(function(a, i) {
       h += '<tr><td>' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
       h += '<td>' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
@@ -1436,6 +1522,11 @@ function renderDNS(keysMap, certData, acData) {
   h += '</div>';
 
   document.getElementById('page-dns').innerHTML = h;
+  // Enhance sortable headers on DNS Keys, Certs, ACME tables
+  var dnsTables = document.querySelectorAll('#page-dns table');
+  if (dnsTables[0]) enhanceSortHeaders(dnsTables[0], 'dns-keys', loadDNS);
+  if (dnsTables[1]) enhanceSortHeaders(dnsTables[1], 'dns-certs', loadDNS);
+  if (dnsTables[2]) enhanceSortHeaders(dnsTables[2], 'dns-acme', loadDNS);
   loadACMEAccountsForIssue();
 }
 
@@ -1709,6 +1800,9 @@ async function loadVersions(silent) {
 function renderVersions(verData, binData, nodes) {
   var forced = (verData && verData.latest_version) || '';
   var bins = (binData && Array.isArray(binData)) ? binData : [];
+  // Apply sort to node list before rendering
+  sortData(nodes, 'versions-nodes');
+  sortData(bins, 'versions-bins');
 
   // collect available versions from uploaded binaries
   var availVers = [];
@@ -1739,7 +1833,7 @@ function renderVersions(verData, binData, nodes) {
   if (bins.length === 0) {
     h += '<div class="empty">暂无</div>';
   } else {
-    h += '<table><thead><tr><th>文件名</th><th>大小</th><th>版本</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">文件名</th><th data-sort="size">大小</th><th data-sort="version">版本</th><th>操作</th></tr></thead><tbody>';
     bins.forEach(function(b) {
       var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
       h += '<tr><td class="mono">' + he(b.name || '') + '</td><td>' + sizeStr + '</td><td>' + he(b.version || '-') + '</td>';
@@ -1751,7 +1845,7 @@ function renderVersions(verData, binData, nodes) {
 
   if (nodes.length > 0) {
     h += '<div class="card"><div class="card-header"><h3>节点版本</h3></div>';
-    h += '<table><thead><tr><th><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th>节点</th><th>系统</th><th>状态</th><th>当前版本</th><th>目标版本</th><th>升级状态</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th data-sort="name">节点</th><th data-sort="os">系统</th><th data-sort="online">状态</th><th data-sort="version">当前版本</th><th>目标版本</th><th>升级状态</th></tr></thead><tbody>';
     // 从服务端读取升级状态 (替代 localStorage，跨设备一致)
     var trigData = window._upgState || {};
     nodes.forEach(function(n) {
@@ -1794,6 +1888,9 @@ function renderVersions(verData, binData, nodes) {
   }
 
   document.getElementById('page-versions').innerHTML = h;
+  var verTables = document.querySelectorAll('#page-versions table');
+  if (verTables[0]) enhanceSortHeaders(verTables[0], 'versions-bins', loadVersions);
+  if (verTables[1]) enhanceSortHeaders(verTables[1], 'versions-nodes', loadVersions);
 }
 
 function getDeployCmd() {

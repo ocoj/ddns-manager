@@ -272,12 +272,20 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		_, err = io.Copy(f, resp.Body)
 		return err
 	}); err != nil {
-		// fallback: try common names
+		// fallback: try common names — 仅使用 Go 标准架构名（build.sh 产出格式）
+		// ❌ 不再尝试 node-agent-v2 / node-agent-linux-x86_64 等已废弃名称
 		fmt.Println("失败，尝试备选名称...")
-		for _, name := range []string{
-			"node-agent-latest", "node-agent-v2",
-			"node-agent-linux-amd64", "node-agent-linux-x86_64", "node-agent-windows-amd64.exe",
-		} {
+		fallbackNames := []string{"node-agent-latest"}
+		if runtime.GOOS == "windows" {
+			fallbackNames = append(fallbackNames,
+				"node-agent-latest-windows-amd64.exe",
+				"node-agent-windows-amd64.exe")
+		} else {
+			fallbackNames = append(fallbackNames,
+				"node-agent-latest-linux-amd64",
+				"node-agent-linux-amd64")
+		}
+		for _, name := range fallbackNames {
 			u := baseURL + "/bin/" + name
 			fmt.Printf("  尝试 %s ... ", u)
 			resp, err := client.Get(u)
@@ -296,6 +304,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		}
 	}
 
+	// 最终检查：确保有可用二进制
 	if _, err := os.Stat(agentBin); err != nil {
 		log.Fatalf("下载失败: 管理端 /bin/ 目录缺少 %s 系统的 agent 二进制", goos)
 	}

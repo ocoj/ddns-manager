@@ -156,6 +156,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	for _, binding := range rec.CertBindings {
 		bundle, err := s.store.LoadCertBundle(binding.BundleName)
 		if err != nil {
+			// 证书加载失败记录日志，便于排查部署问题
+			s.logMgr.LogWithNode("cert", "证书加载失败", nodeID,
+				fmt.Sprintf("bundle=%s err=%v", binding.BundleName, err), "warning")
 			continue
 		}
 		if h, ok := req.Status.CertHashes[binding.DeployPath]; ok && h == bundle.Hash {

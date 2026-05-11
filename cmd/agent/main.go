@@ -521,8 +521,11 @@ func validateAgentBinary(path string) error {
 	if data[5] != 1 {
 		return fmt.Errorf("not little-endian")
 	}
-	if data[7] != 0 && data[7] != 3 {
-		return fmt.Errorf("not a Linux binary (OS/ABI=%d)", data[7])
+	// OS/ABI: 0=System V (generic), 3=GNU/Linux, 0x10=Linux (Clang/LLVM)
+	// 某些交叉编译器输出 ABI=0，也是合法 Linux 二进制
+	osabi := data[7]
+	if osabi != 0 && osabi != 3 && osabi != 0x10 {
+		return fmt.Errorf("not a Linux binary (OS/ABI=%d)", osabi)
 	}
 	elfType := binary.LittleEndian.Uint16(data[16:18])
 	if elfType != 2 && elfType != 3 {
@@ -564,45 +567,43 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	tmpFile := exePath + ".new"
 
 	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟
+	// ⚠️ 使用闭包包装每次尝试，确保 defer resp.Body.Close() 每次迭代后立即执行
+	// （在循环中直接 defer 会累积到函数返回，造成连接泄漏和 double-close）
 	var downloadErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
-			log.Printf("自升级: 重试 %d/3 ...", attempt+1)
+	downloadErr = func() error {
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+				log.Printf("自升级: 重试 %d/3 ...", attempt+1)
+			}
+			hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute) // 2分钟超时（~15MB二进制），网络差时不再无限等待
+			resp, err := hc.Get(url)
+			if err != nil {
+				log.Printf("自升级: 下载失败 (尝试 %d/3): %v", attempt+1, err)
+				continue
+			}
+			// defer 在闭包内 — 函数返回时立即执行，不会跨迭代累积
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				log.Printf("自升级: HTTP %d (尝试 %d/3)", resp.StatusCode, attempt+1)
+				return fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
+			f2, err := os.Create(tmpFile)
+			if err != nil {
+				return fmt.Errorf("create tmp: %w", err)
+			}
+			defer f2.Close()
+			// Limit download to 100MB to prevent disk exhaustion from a compromised Manager
+			if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
+				return fmt.Errorf("write: %w", err)
+			}
+			return nil // 成功
 		}
-		hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute) // 2分钟超时（~15MB二进制），网络差时不再无限等待
-		resp, err := hc.Get(url)
-		if err != nil {
-			downloadErr = err
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			downloadErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			resp.Body.Close()
-			continue
-		}
-		f2, err := os.Create(tmpFile)
-		if err != nil {
-			downloadErr = fmt.Errorf("create tmp: %w", err)
-			resp.Body.Close()
-			continue
-		}
-		// Limit download to 100MB to prevent disk exhaustion from a compromised Manager
-		if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
-			f2.Close()
-			resp.Body.Close()
-			downloadErr = fmt.Errorf("write: %w", err)
-			continue
-		}
-		f2.Close()
-		resp.Body.Close()
-		downloadErr = nil
-		break
-	}
+		return fmt.Errorf("下载: 所有重试均已失败")
+	}()
 	if downloadErr != nil {
 		os.Remove(tmpFile)
-		return fmt.Errorf("download: %w (重试3次)", downloadErr)
+		return fmt.Errorf("自升级下载: %w", downloadErr)
 	}
 
 	if err := validateAgentBinary(tmpFile); err != nil {
@@ -949,9 +950,17 @@ func main() {
 		} else {
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, os.Interrupt)
+			log.Printf("[daemon] %s 已启动, 版本=%s", runtime.GOOS, version)
+			// 启动时立即执行一次心跳 + DNS 更新，不等 5 分钟
+			// （daemon 重启后若等首个 tick，DNS 会中断 5 分钟）
+			go func() {
+				log.Println("[daemon] 执行首次心跳...")
+				if err := doHeartbeat(cfg); err != nil {
+					log.Printf("首次心跳失败: %v", err)
+				}
+			}()
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
-			log.Printf("[daemon] %s 已启动, 版本=%s", runtime.GOOS, version)
 			for {
 				select {
 				case <-ticker.C:

@@ -73,29 +73,35 @@ if [ -z "$VERSION" ]; then
     INSTALLER_NAME="ddns-installer-linux-${GOARCH}"
     if ! curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$INSTALLER_NAME" 2>/dev/null; then
         # 管理端不提供 /bin/ 目录列表，直接试备选名称（按优先级）
-        echo "备选名称重试..."
-        # 构建版本化备选名称，从管理端获取最新版本号
-        LATEST_VER=$(curl -fsS "$MANAGER/api/admin/agent-version" -H "Authorization: Bearer $(echo -n 'admin:Admin12345' | base64)" 2>/dev/null | grep -o '"latest_version":"[^"]*"' | cut -d'"' -f4 || true)
+        # ⚠️ 不调用 /api/admin/agent-version — 需要管理员认证，密码已改后必然失败
+        # 改为按优先级逐个尝试版本化命名（latest → 版本化 → 纯架构名）
+        echo "主名称下载失败，尝试备选..."
         for pattern in \
-            "ddns-installer-v${LATEST_VER}-linux-${GOARCH}" \
-            "ddns-installer-latest" \
-            "ddns-installer-latest-linux-${GOARCH}"; do
+            "ddns-installer-linux-${GOARCH}" \
+            "ddns-installer-latest-linux-${GOARCH}" \
+            "ddns-installer-latest"; do
             [ -z "$pattern" ] && continue
+            printf "  尝试 %s ... " "$pattern"
             if curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$pattern" 2>/dev/null; then
-                [ -s "$TMP_INSTALLER" ] && break
+                if [ -s "$TMP_INSTALLER" ]; then
+                    echo "[OK]"
+                    break
+                fi
             fi
+            echo "失败"
         done
     fi
 else
-    curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/ddns-installer-$VERSION-$OS-$GOARCH"
+    curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/ddns-installer-v${VERSION}-linux-${GOARCH}" 2>/dev/null || true
 fi
 
 if [ ! -s "$TMP_INSTALLER" ]; then
-    # last resort: try common patterns
-    echo "尝试备选名称..."
+    # 最后兜底：只用 Go 标准架构名尝试（不再使用 x86_64/v2 等旧名）
+    echo "尝试兜底名称..."
     for pattern in \
         "ddns-installer-linux-amd64" \
-        "ddns-installer-linux-x86_64" \
+        "ddns-installer-linux-arm64" \
+        "ddns-installer-linux-arm" \
         "ddns-installer-latest"; do
         if curl -fsSL --connect-timeout 30 -o "$TMP_INSTALLER" "$MANAGER/bin/$pattern" 2>/dev/null; then
             [ -s "$TMP_INSTALLER" ] && break

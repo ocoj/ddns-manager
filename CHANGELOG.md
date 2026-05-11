@@ -1,6 +1,54 @@
 # CHANGELOG
 
-## v1.5.5 — 2026-05-10
+## v1.5.6 — 2026-05-11
+
+### 🔴 关键 Bug 修复（6 项）
+
+#### 自升级稳定性修复
+
+- **B1 自升级 defer-in-loop 连接泄漏** — `selfUpgrade` 下载重试循环中用闭包包装每次尝试，确保 `defer resp.Body.Close()` 每次迭代后立即执行（非闭包包装会导致 defer 跨迭代累积，造成 TCP 连接泄漏 + double-close panic）
+- **B3 ELF OS/ABI 校验过严** — `validateAgentBinary` 接受 OS/ABI=0x10 (Clang/LLVM) 及 System V (0x00) 的合法 Linux 二进制，不再仅限 0x03 (GNU/Linux)
+- **B4 daemon 模式首次心跳延迟 5 分钟** — `main()` 中 daemon 启动后立即 `go doHeartbeat()`，不等首个 ticker tick，确保 DNS 更新无空窗
+
+#### 部署命令修复
+
+- **B2 install.sh 硬编码密码** — 移除对 `/api/admin/agent-version` 的认证请求（密码已改后必然 401），改为按优先级逐个尝试版本化下载名
+- **B5 installer fallback 名称过期** — Go 安装器备选名不再尝试 `node-agent-v2`/`node-agent-linux-x86_64` 等已废弃名称，仅使用 Go 标准架构名
+
+#### 可观测性修复
+
+- **B6 证书推送失败静默** — `handleHeartbeat` 中 `LoadCertBundle` 失败时记录日志（bundle 名 + 错误原因），不再沉默跳过
+
+### 🧪 新增测试
+
+- `TestValidateAgentBinaryELFOSABI` — 验证 ELF OS/ABI 合法性 (0x00/0x03/0x10 接受, 0x09 拒绝, ET_DYN 接受, ARM64 架构匹配)
+- `TestSelfUpgradeNoDeferInLoop` — 验证 selfUpgrade 下载循环使用闭包包装
+- `TestDaemonModeImmediateHeartbeat` — 验证 daemon 模式启动时立即执行首次心跳
+
+### 📊 部署验证
+
+| 服务器 | 版本 | 状态 |
+|--------|------|------|
+| Manager (10.0.0.1) | v1.5.6 | 🟢 在线 |
+| client-a (10.0.0.2) | v1.5.6 | 🟢 DDNS=OK |
+| client-b (10.0.0.3) | → v1.5.6 | 🔄 下次心跳自动升级 |
+
+---
+
+## v1.5.5 — 2026-05-10/11
+
+### 📱 移动端响应式适配
+
+- **侧边栏抽屉化** — 移动端侧边栏改为 fixed 抽屉 (260px)，左滑入 + 半透明遮罩，点遮罩/菜单项关闭
+- **汉堡菜单** — Topbar 新增 ☰ 按钮，仅 `≤768px` 显示，桌面端 `display:none` 不受影响
+- **表格横滚** — 所有 `<table>` 移动端 `display:block;overflow-x:auto`，无需改 JS
+- **统计卡片自适应** — `grid-template-columns:repeat(auto-fit,minmax(140px,1fr))` 自动换行
+- **表单折叠** — `form-inline` 加 `flex-wrap:wrap`，`form-group` 移动端满宽
+- **触控优化** — `@media(pointer:coarse)` 按钮最小 44px，只在触摸设备生效
+- **弹窗适配** — 移动端 `max-width:94vw;padding:16px` 留呼吸空间
+- **图表 legend 溢出修复** — canvas 高度从 CSS `!important` 100% 改为 JS 固定 180px，容器 `min-height` 自然扩展
+
+**桌面端影响: NONE** — 所有改动在 `@media(max-width:768px)` 内，桌面像素级不变。
 
 ### 🛠️ 部署命令修复 + 客户端质量
 

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
 <title>DDNS-Manager</title>
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="manifest" href="/manifest.json">
@@ -27,6 +27,8 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 #topbar .title{font-size:15px;font-weight:600;color:var(--c-text)}
 #topbar .refresh{font-size:12px;color:var(--c-text2);display:flex;align-items:center;gap:6px}
 #topbar .refresh .dot{width:6px;height:6px;border-radius:50%;background:var(--c-green);animation:pulse 2s infinite}
+.hamburger{display:none}
+#nav-overlay{display:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 #content{flex:1;overflow-y:auto;padding:20px}
 #content>div{display:none}
@@ -121,7 +123,7 @@ th{text-align:left}
 .event-msg{flex:1;word-break:break-all}
 
 .chart-wrap{width:100%;height:260px;position:relative}
-.chart-wrap canvas{width:100%!important;height:100%!important}
+.chart-wrap canvas{width:100%!important}
 .chart-legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;font-size:12px}
 .chart-legend span{display:flex;align-items:center;gap:4px}
 .chart-legend span::before{content:'';display:inline-block;width:12px;height:3px;border-radius:2px}
@@ -136,16 +138,84 @@ th{text-align:left}
 .flex-between{display:flex;justify-content:space-between;align-items:center}
 
 @media(max-width:768px){
-  #app:not(.login-page){flex-direction:column}
-  #sidebar{width:100%;min-width:100%;flex-direction:row;flex-wrap:wrap;padding:4px;overflow-x:auto;height:auto}
-  #sidebar .side-logo,#sidebar .side-footer{display:none}
-  .side-nav{display:flex;flex-direction:row;padding:0}
-  .side-nav .item{height:40px;padding:0 10px;border-left:none;border-bottom:2px solid transparent;font-size:12px}
-  .side-nav .item.active{border-bottom-color:var(--c-primary);border-left:none;background:transparent}
-  #topbar{height:40px;min-height:40px;padding:0 12px}
-  .stats-row{grid-template-columns:repeat(3,1fr);gap:8px}
+  /* ===== 布局 ===== */
+  #app{flex-direction:column}
+  #main-area{flex:1}
+  #content{padding:10px 8px}
+
+  /* ===== 侧边栏 → 抽屉 ===== */
+  #sidebar{
+    display:none!important;position:fixed;top:0;left:-270px;width:260px;height:100vh;z-index:1000;
+    background:var(--c-card);box-shadow:2px 0 12px rgba(0,0,0,.15);
+    transition:left .25s ease;overflow-y:auto;
+  }
+  #sidebar.open{display:block!important;left:0}
+  #sidebar .side-logo{display:flex}
+  #sidebar .side-footer{display:block}
+  .side-nav .item{height:48px;padding:0 20px;border-left:3px solid transparent;font-size:14px}
+  .side-nav .item.active{border-left-color:var(--c-primary);border-bottom:none;background:var(--c-primary-hover)}
+
+  /* 遮罩 */
+  #nav-overlay{
+    display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:999;
+  }
+  #nav-overlay.show{display:block}
+
+  /* ===== Topbar ===== */
+  #topbar{height:44px;min-height:44px;padding:0 10px;width:100%!important;box-sizing:border-box}
+  #topbar .title{font-size:14px}
+  #topbar .refresh{font-size:11px;gap:4px}
+  .hamburger{display:flex;align-items:center;justify-content:center;width:36px;height:36px;
+    border:none;background:none;font-size:22px;color:var(--c-text);cursor:pointer;margin-right:8px;border-radius:var(--radius)}
+  .hamburger:hover{background:var(--c-bg)}
+
+  /* ===== 卡片 ===== */
+  .card{padding:12px 14px;margin-bottom:12px;max-width:100%}
+  .card-header{flex-wrap:wrap;gap:6px}
+  .card-header h3{font-size:13px}
+
+  /* ===== 统计卡片 — 2列布局 ===== */
+  .stats-row{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+  .stat-card{padding:10px 12px}
   .stat-card .num{font-size:20px}
-  .form-row{grid-template-columns:1fr}
+  .stat-card .lbl{font-size:11px}
+
+  /* ===== 图表 — 保持桌面默认尺寸, canvas 内文本需要空间 ===== */
+
+  /* ===== 表格 — 卡片内横滚 ===== */
+  .card{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{min-width:100%;white-space:nowrap;border-collapse:collapse}
+  th,td{padding:7px 8px;font-size:11px;white-space:nowrap}
+
+  /* ===== 表单 ===== */
+  .form-inline{flex-wrap:wrap;gap:8px}
+  .form-group{flex:1 1 100%!important;min-width:0}
+  .form-group label{font-size:12px}
+  .form-group input,.form-group select{width:100%}
+
+  /* ===== 按钮 ===== */
+  .btn-wrap{flex-wrap:wrap;gap:6px}
+  .btn-sm{height:28px;min-width:40px;padding:0 8px;font-size:11px}
+
+  /* ===== 标签/徽章 — 触控目标 ===== */
+  .badge{padding:3px 10px;font-size:11px;min-height:22px}
+  .event-item{gap:6px;padding:8px 0;align-items:center}
+  .event-node{min-width:60px;font-size:11px}
+
+  /* ===== 弹窗 ===== */
+  .modal-box{max-width:94vw!important;padding:14px;border-radius:8px;max-height:90vh}
+  .modal-box h3{font-size:14px;margin-bottom:12px}
+
+  /* ===== 事件列表 ===== */
+  .event-list{max-height:180px;font-size:11px}
+
+  /* ===== 触控优化 (仅触摸设备) ===== */
+  @media(pointer:coarse){
+    .btn,.btn-sm{min-height:44px}
+    .side-nav .item{min-height:48px}
+    .badge{min-height:28px;display:inline-flex;align-items:center}
+    .event-item{min-height:44px}
+  }
 }
 </style>
 </head>
@@ -211,18 +281,19 @@ th{text-align:left}
   </g>
 </svg> 设置</div>
   </nav>
-  <div class="side-footer">v2.0.1 — build 2026-05-09</div>
+  <div class="side-footer">v1.5.5-m — build 2026-05-11</div>
 </aside>
 
+<div id="nav-overlay" onclick="toggleSidebar()"></div>
 <div id="main-area" style="display:none">
-  <div id="topbar"><div class="title" id="page-title">仪表盘</div><div class="refresh"><span class="dot"></span> 自动刷新 · <span id="refresh-timer">00:00</span></div></div>
+  <div id="topbar"><button class="hamburger" onclick="toggleSidebar()" aria-label="菜单">&#9776;</button><div class="title" id="page-title">仪表盘</div><div class="refresh"><span class="dot"></span> 自动刷新 · <span id="refresh-timer">00:00</span></div></div>
   <div id="content">
     <div id="page-dashboard" class="active">
       <div class="card" id="sys-charts-card" style="display:none"><div class="card-header"><h3>管理端服务器资源</h3></div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
-      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">CPU</div><div class="chart-wrap" style="height:180px" id="chart-cpu"></div></div>
-      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">内存</div><div class="chart-wrap" style="height:180px" id="chart-mem"></div></div>
-      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">磁盘</div><div class="chart-wrap" style="height:180px" id="chart-disk"></div></div>
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">CPU</div><div class="chart-wrap" style="min-height:180px" id="chart-cpu"></div></div>
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">内存</div><div class="chart-wrap" style="min-height:180px" id="chart-mem"></div></div>
+      <div style="text-align:center"><div style="font-size:12px;color:var(--c-text2);margin-bottom:4px">磁盘</div><div class="chart-wrap" style="min-height:180px" id="chart-disk"></div></div>
       </div></div>
       <div id="dashboard-content"></div>
     </div>
@@ -426,10 +497,28 @@ async function apiJSON(path, opts) {
   var items = document.querySelectorAll('.side-nav .item');
   for (var i = 0; i < items.length; i++) {
     items[i].addEventListener('click', (function(page) {
-      return function() { navigate(page); };
+      return function() {
+        navigate(page);
+        if (window.innerWidth <= 768) closeSidebar();
+      };
     })(items[i].dataset.page));
   }
 })();
+// ========== MOBILE SIDEBAR ==========
+function toggleSidebar() {
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('nav-overlay');
+  if (!sb || !ov) return;
+  sb.classList.toggle('open');
+  ov.classList.toggle('show');
+}
+function closeSidebar() {
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('nav-overlay');
+  if (!sb) return;
+  sb.classList.remove('open');
+  if (ov) ov.classList.remove('show');
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  页面隔离状态管理器 (Page-Isolated State Manager)
@@ -891,22 +980,23 @@ function drawPieChart(containerId, segments, totalLabel) {
   var canvas = ct.querySelector('canvas');
   var dpr = window.devicePixelRatio || 1;
   var rect = ct.getBoundingClientRect();
-  var W = rect.width, H = rect.height;
-  if (W <= 0 || H <= 0) return;
+  // Canvas 固定 180px, legend 在下方自然流 — 不再用 height:100%
+  var W = rect.width, canvasH = 180;
+  if (W <= 0) return;
   if (!canvas) {
     canvas = document.createElement('canvas');
     ct.appendChild(canvas);
   }
   canvas.width = W * dpr;
-  canvas.height = H * dpr;
+  canvas.height = canvasH * dpr;
   canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
+  canvas.style.height = canvasH + 'px';
   var ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, canvasH);
 
-  var cx = W / 2, cy = H / 2;
-  var outerR = Math.min(W, H) / 2 - 8;
+  var cx = W / 2, cy = canvasH / 2;
+  var outerR = Math.min(W, canvasH) / 2 - 8;
   var innerR = outerR * 0.55; // donut hole
   var colors = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1','#13c2c2','#eb2f96'];
 
@@ -943,19 +1033,21 @@ function drawPieChart(containerId, segments, totalLabel) {
   ctx.fillStyle = '#8c8c8c';
   ctx.fillText(total.toFixed(1) + '%', cx, cy + 14);
 
-  // legend — reuse existing element
+  // legend — rendered as DOM, container uses min-height so it naturally fits
   var legendEl = ct.querySelector('.chart-legend');
   if (!legendEl) {
     legendEl = document.createElement('div');
     legendEl.className = 'chart-legend';
-    legendEl.style.marginTop = '4px';
-    legendEl.style.justifyContent = 'center';
     ct.appendChild(legendEl);
   }
+  legendEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:4px;font-size:12px;padding:2px 0';
   legendEl.innerHTML = '';
   segments.forEach(function(s, i) {
     var pct = total > 0 ? (s.value / total * 100).toFixed(1) : '0';
-    legendEl.innerHTML += '<span style="color:' + (colors[i % colors.length]) + '">' + s.label + ' ' + pct + '%</span>';
+    var span = document.createElement('span');
+    span.style.color = colors[i % colors.length];
+    span.textContent = s.label + ' ' + pct + '%';
+    legendEl.appendChild(span);
   });
 }
 

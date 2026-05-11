@@ -1906,17 +1906,17 @@ function getDeployCmd() {
     ps += '[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true};';
     ps += ' if (Test-Path C:\\ddns-manager\\agent.yaml) {';
     ps += ' sc.exe stop node-agent;';
-    ps += ' for ($i=0; $i -lt 15; $i++) {';
+    ps += ' for (`$i=0; `$i -lt 15; `$i++) {';
     ps += '   Start-Sleep -Seconds 2;';
-    ps += '   if ((sc.exe query node-agent | Select-String STOPPED) -ne $null) { break }';
+    ps += '   if ((sc.exe query node-agent | Select-String STOPPED) -ne `$null) { break }';
     ps += ' };';
     ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + agentBin + ' -OutFile C:\\ddns-manager\\node-agent.exe -UseBasicParsing }';
-    ps += ' catch { Write-Host (\'Download failed: \' + $_.Exception.Message); exit 1 };';
+    ps += ' catch { Write-Host (\'Download failed: \' + `$_.Exception.Message); exit 1 };';
     ps += ' sc.exe start node-agent';
     ps += ' } else {';
-    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + instBin + ' -OutFile $env:TEMP\\ddns-installer.exe -UseBasicParsing }';
-    ps += ' catch { Write-Host (\'Download failed: \' + $_.Exception.Message); exit 1 };';
-    ps += ' Start-Process $env:TEMP\\ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
+    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + instBin + ' -OutFile `$env:TEMP\\ddns-installer.exe -UseBasicParsing }';
+    ps += ' catch { Write-Host (\'Download failed: \' + `$_.Exception.Message); exit 1 };';
+    ps += ' Start-Process `$env:TEMP\\ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
     ps += '}"';
     return ps;
   }

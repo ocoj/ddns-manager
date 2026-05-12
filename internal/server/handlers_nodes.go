@@ -84,12 +84,21 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("ddns=%s ipv4=%s", h.Status, req.Status.IPv4), "info")
 	resp := model.HeartbeatResp{OK: true, Timestamp: time.Now().UTC().Format(time.RFC3339)}
 
+	// 审批门控: 未审批节点只更新状态，不推送配置/证书/升级
+	if !rec.Approved {
+		s.store.PutNode(nodeID, rec)
+		jsonOK(w, resp)
+		return
+	}
+
 	// config push: render ddns-go YAML from saved config + DNS keys, push if changed
 	if rec.ConfigYAML != "" {
 		rendered, cfgHash, renderErr := renderDDNSConfig(rec.ConfigYAML, s.store)
 		if renderErr != nil {
 			s.logMgr.LogWithNode("config", "配置渲染失败", nodeID,
 				renderErr.Error(), "error")
+			// 回传错误给 Agent，便于诊断
+			resp.ConfigError = renderErr.Error()
 		} else if rendered != "" && req.ConfigHash != cfgHash {
 			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
 				fmt.Sprintf("%d bytes", len(rendered)), "success")
@@ -101,7 +110,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	goos, goarch := detectPlatform(rec)
 	agentCfg, _ := s.store.LoadAgentConfig()
-	if agentCfg != nil && agentCfg.LatestVersion != "" && agentCfg.LatestVersion != req.Status.AgentVersion {
+	if agentCfg != nil && agentCfg.LatestVersion != "" && agentCfg.LatestVersion != req.Status.AgentVersion && goos != "" && goarch != "" {
 		// 升级退避: 同一目标版本 30 分钟内不重复推送
 		// 避免网络状况差时每次心跳都重试下载 (864次/天)
 		now := time.Now().UTC()
@@ -182,6 +191,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				encFiles[name] = ct
 			}
 		}
+		if len(encFiles) == 0 {
+			// 所有文件加密失败 — 跳过此 binding，下个心跳重试
+			s.logMgr.LogWithNode("cert", "加密失败", nodeID,
+				fmt.Sprintf("bundle=%s 所有文件加密失败", binding.BundleName), "warning")
+			continue
+		}
 		resp.CertUpdates = append(resp.CertUpdates, &model.CertUpdate{
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: binding.DeployPath,
@@ -232,6 +247,7 @@ func (s *Server) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 	if req.Notes != nil {
 		rec.Notes = *req.Notes
 	}
+	rec.Approved = true // 审批通过，节点开始接收配置/证书推送
 	s.store.PutNode(id, rec)
 	s.logMgr.LogWithNode("节点", "已审批", id, "", "info")
 	jsonOK(w, map[string]string{"status": "approved"})
@@ -274,6 +290,29 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]string{"status": "saved"})
 }
+// handleNodeFingerprint returns the fingerprint of a registered node.
+// Public endpoint (no auth) — used by the installer to check for name conflicts
+// and distinguish same-machine reinstall (fingerprint match) from name hijacking.
+// Only exposes node_id + fingerprint + exists; no secrets or configs.
+func (s *Server) handleNodeFingerprint(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	nodes, err := s.store.LoadNodes()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rec, ok := nodes[id]
+	if !ok {
+		jsonOK(w, map[string]interface{}{"exists": false})
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"exists":      true,
+		"node_id":     id,
+		"fingerprint": rec.Fingerprint,
+	})
+}
+
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	// Use atomic DeleteNode (write-locked read-modify-write) to prevent TOCTOU race
@@ -434,25 +473,27 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 // 用于 manifest (agent_manifest.json) 键查找和 AgentUpdate.URL 构建。
 // 注意：goarch 使用 Go 标准命名 (amd64/arm64/arm)，不是 deb 命名 (x86_64/aarch64/armhf)。
 // 构建脚本 (scripts/build.sh) 产出的文件名也使用此命名约定。
+// 返回 ("", "") 表示硬件信息未知，调用方应跳过升级推送。
 func detectPlatform(rec *model.NodeRecord) (goos, goarch string) {
-	goos, goarch = "linux", "amd64" // 默认值改为 amd64 (Go 标准命名)
-	if rec.Hardware != nil {
-		if strings.Contains(strings.ToLower(rec.Hardware.OS), "windows") {
-			goos = "windows"
-		}
-		switch rec.Hardware.Arch {
-		case "amd64":
-			goarch = "amd64" // Go 标准命名，不再映射为 x86_64
-		case "arm64":
-			goarch = "arm64"
-		case "386":
-			goarch = "i386"
-		case "arm":
-			goarch = "arm" // Go 标准命名 (对应 armv6l/armv7l)
-		default:
-			if rec.Hardware.Arch != "" {
-				goarch = rec.Hardware.Arch
-			}
+	if rec.Hardware == nil {
+		return "", "" // 硬件信息未知 — 无法确定平台
+	}
+	goos = "linux"
+	if strings.Contains(strings.ToLower(rec.Hardware.OS), "windows") {
+		goos = "windows"
+	}
+	switch rec.Hardware.Arch {
+	case "amd64":
+		goarch = "amd64" // Go 标准命名，不再映射为 x86_64
+	case "arm64":
+		goarch = "arm64"
+	case "386":
+		goarch = "i386"
+	case "arm":
+		goarch = "arm" // Go 标准命名 (对应 armv6l/armv7l)
+	default:
+		if rec.Hardware.Arch != "" {
+			goarch = rec.Hardware.Arch
 		}
 	}
 	return

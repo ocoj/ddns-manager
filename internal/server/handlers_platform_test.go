@@ -21,15 +21,15 @@ func TestDetectPlatform_Amd64NotMapped(t *testing.T) {
 	}
 }
 
-// TestDetectPlatform_EmptyHardware 边界: 新注册节点Hardware为nil时的默认值
+// TestDetectPlatform_EmptyHardware 边界: Hardware为nil时返回空字符串，调用方应跳过升级推送
 func TestDetectPlatform_EmptyHardware(t *testing.T) {
 	rec := &model.NodeRecord{} // Hardware = nil
 	goos, goarch := detectPlatform(rec)
-	if goos != "linux" {
-		t.Errorf("预期默认 goos=linux, 实际 %s", goos)
+	if goos != "" {
+		t.Errorf("Hardware为nil时预期 goos=\"\" (空), 实际 %q — 调用方应跳过升级", goos)
 	}
-	if goarch != "amd64" {
-		t.Errorf("预期默认 goarch=amd64, 实际 %s", goarch)
+	if goarch != "" {
+		t.Errorf("Hardware为nil时预期 goarch=\"\" (空), 实际 %q — 调用方应跳过升级", goarch)
 	}
 }
 

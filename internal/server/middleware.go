@@ -17,6 +17,7 @@ type rateLimiter struct {
 	buckets  map[string]*tokenBucket
 	interval time.Duration
 	capacity int
+	stop     chan struct{} // 关闭以停止 cleanupLoop goroutine
 }
 
 type tokenBucket struct {
@@ -26,8 +27,12 @@ type tokenBucket struct {
 
 
 func newRateLimiter(reqPerMin int) *rateLimiter {
-	rl := &rateLimiter{buckets: make(map[string]*tokenBucket), interval: time.Minute, capacity: reqPerMin}
-	// start periodic cleanup to prevent unbounded map growth
+	rl := &rateLimiter{
+		buckets:  make(map[string]*tokenBucket),
+		interval: time.Minute,
+		capacity: reqPerMin,
+		stop:     make(chan struct{}),
+	}
 	go rl.cleanupLoop()
 	return rl
 }
@@ -35,8 +40,13 @@ func newRateLimiter(reqPerMin int) *rateLimiter {
 func (rl *rateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.cleanupStale()
+	for {
+		select {
+		case <-ticker.C:
+			rl.cleanupStale()
+		case <-rl.stop:
+			return
+		}
 	}
 }
 
@@ -115,6 +125,14 @@ func (s *Server) reloadRateLimit(cfg *store.RateLimitConfig) {
 	if cfg == nil { return }
 	s.rateLock.Lock()
 	defer s.rateLock.Unlock()
+
+	// 停止旧清理循环，防止 goroutine 泄漏
+	for _, old := range []*rateLimiter{s.globalLimiter, s.heartbeatLimiter, s.loginLimiter} {
+		if old != nil {
+			close(old.stop)
+		}
+	}
+
 	if cfg.Enabled {
 		s.globalLimiter = newRateLimiter(cfg.RequestsPerMin)
 		s.heartbeatLimiter = newRateLimiter(cfg.HeartbeatPerMin)
@@ -146,6 +164,20 @@ func (s *Server) rateLimitMiddleware(h http.HandlerFunc, isHeartbeat, isLogin bo
 			return
 		}
 		if !isHeartbeat && !isLogin && globalLim != nil && !globalLim.allow(ip) {
+			jsonErr(w, 429, "rate limit exceeded")
+			return
+		}
+		h(w, r)
+	}
+}
+
+// pingRateLimitMiddleware applies a lightweight rate limit to /api/ping.
+// Fixed at 1000 req/min per IP — high enough for legitimate use (installer checks),
+// low enough to prevent HTTP flood abuse.
+func (s *Server) pingRateLimitMiddleware(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r)
+		if s.pingLimiter != nil && !s.pingLimiter.allow(ip) {
 			jsonErr(w, 429, "rate limit exceeded")
 			return
 		}

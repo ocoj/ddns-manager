@@ -75,7 +75,7 @@ build_windows() {
 
     # versioned copy: node-agent-v{VERSION}-windows-amd64.exe
     ver_out="$BUILD_DIR/node-agent-v${VER_NUM}-windows-${arch}.exe"
-    cp "$out" "$ver_out"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
 
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
     echo "  ✅ $ver_out (versioned)"
@@ -122,7 +122,7 @@ build_linux() {
 
     # versioned copy: node-agent-v{VERSION}-linux-amd64
     ver_out="$BUILD_DIR/node-agent-v${VER_NUM}-linux-${arch}"
-    cp "$out" "$ver_out"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
 
     chmod +x "$out" "$ver_out"
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
@@ -143,7 +143,7 @@ build_manager() {
         go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
 
     ver_out="$BUILD_DIR/ddns-manager-v${VER_NUM}-linux-${arch}"
-    cp "$out" "$ver_out"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
 
     chmod +x "$out" "$ver_out"
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
@@ -169,7 +169,7 @@ build_installer() {
         GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
     fi
     ver_out="$BUILD_DIR/ddns-installer-v${VER_NUM}-linux-${arch}"
-    cp "$out" "$ver_out"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
     chmod +x "$out" "$ver_out"
     echo "  OK $out"
     echo "  OK $ver_out (versioned)"
@@ -183,9 +183,47 @@ build_installer_win() {
     out="$BUILD_DIR/ddns-installer-windows-${goarch}.exe"
     GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
     ver_out="$BUILD_DIR/ddns-installer-v${VER_NUM}-windows-${goarch}.exe"
-    cp "$out" "$ver_out"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
     echo "  OK $out"
     echo "  OK $ver_out (versioned)"
+}
+
+# ── Windows ZIP 安装包 ──
+
+pack_windows_zip() {
+    echo ""
+    echo "-- Packing Windows Install ZIP --"
+
+    # 生成 install.bat（替换版本号占位符）
+    local bat_template="$PROJECT_DIR/build/install.bat.in"
+    local bat_out="$BUILD_DIR/install.bat"
+    sed "s/__VERSION__/${VER_NUM}/g" "$bat_template" > "$bat_out"
+    echo "  OK install.bat (v${VER_NUM})"
+
+    # 生成 README.txt（替换版本号占位符）
+    local readme_src="$PROJECT_DIR/build/README.txt.in"
+    local readme_out="$BUILD_DIR/README.txt"
+    sed "s/__VERSION__/${VER_NUM}/g" "$readme_src" > "$readme_out"
+    echo "  OK README.txt (v${VER_NUM})"
+
+    # 打包 zip: installer.exe + node-agent.exe + install.bat + README.txt
+    local zip_name="ddns-manager-install-v${VER_NUM}-windows-amd64.zip"
+    local zip_path="$BUILD_DIR/$zip_name"
+    local installer_exe="$BUILD_DIR/ddns-installer-v${VER_NUM}-windows-amd64.exe"
+    local agent_exe="$BUILD_DIR/node-agent-v${VER_NUM}-windows-amd64.exe"
+
+    if command -v zip &>/dev/null; then
+        cd "$BUILD_DIR"
+        zip -j "$zip_path" \
+            "$(basename "$installer_exe")" \
+            "$(basename "$agent_exe")" \
+            "install.bat" \
+            "README.txt"
+        echo "  OK $zip_name ($(du -h "$zip_path" | cut -f1))"
+    else
+        echo "  WARN zip command not found — skipping ZIP packaging"
+        echo "  Install with: apt install zip"
+    fi
 }
 
 # ── Build all ──
@@ -200,6 +238,7 @@ build_installer amd64
 build_installer arm64
 build_installer arm
 build_installer_win amd64
+pack_windows_zip
 
 echo ""
 echo "============================================"

@@ -34,6 +34,7 @@ type HeartbeatResp struct {
 	CertUpdates []*CertUpdate `json:"cert_updates,omitempty"`
 	AgentUpdate *AgentUpdate  `json:"agent_update,omitempty"`
 	Config      *ConfigPush   `json:"config,omitempty"`
+	ConfigError string        `json:"config_error,omitempty"` // 配置渲染失败原因
 	Error       string        `json:"error,omitempty"`
 }
 
@@ -47,6 +48,7 @@ type NodeRecord struct {
 	PasswordHash string        `json:"password_hash"`
 	CreatedAt    time.Time     `json:"created_at"`
 	LastSeen     time.Time     `json:"last_seen"`
+	Approved     bool          `json:"approved"`            // 审批状态: 注册后需管理员审批才能接收配置/证书推送
 	CertBindings []CertBinding `json:"cert_bindings"`
 	ConfigYAML   string        `json:"config_yaml,omitempty"`
 	ConfigHash   string        `json:"config_hash,omitempty"`
@@ -150,4 +152,27 @@ type AgentConfig struct {
 	CertPath        string             `json:"cert_path" yaml:"cert_path"`
 	VerifySSL       bool               `json:"verify_ssl" yaml:"verify_ssl"`
 	IISCertBindings []CertToIISBinding `json:"iis_cert_bindings,omitempty" yaml:"iis_cert_bindings,omitempty"`
+}
+
+// KnownDNSProviders returns the canonical list of supported DNS provider names.
+// Must be kept in sync with agent/dns_updater.go:providerRegistry.
+func KnownDNSProviders() []string {
+	return []string{
+		"alidns", "aliesa", "tencentcloud", "trafficroute", "dnspod",
+		"dnsla", "cloudflare", "huaweicloud", "callback", "baiducloud",
+		"porkbun", "godaddy", "namecheap", "namesilo", "vercel",
+		"dynadot", "dynv6", "spaceship", "nowcn", "eranet",
+		"tnethk", "gcore", "edgeone", "nsone", "name_com",
+		"rainyun", "hipmdnsmgr", "cloudns",
+	}
+}
+
+// IsKnownDNSProvider checks if a provider name is known.
+func IsKnownDNSProvider(name string) bool {
+	for _, p := range KnownDNSProviders() {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }

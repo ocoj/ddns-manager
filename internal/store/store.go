@@ -17,10 +17,18 @@ import (
 	"github.com/kk/ddns-manager/internal/notify"
 )
 
-// ManagerStore is the central data store.
+// ManagerStore is the central data store with in-memory cache.
+// Nodes and DNS keys are cached in memory after first load; writes update both
+// the cache and the backing file. This avoids per-heartbeat JSON file I/O.
 type ManagerStore struct {
 	mu     sync.RWMutex
 	dir    string
+
+	// In-memory caches — populated on first read, kept in sync by write methods.
+	// Protected by mu (reads hold RLock, writes hold Lock).
+	nodesCache   map[string]*model.NodeRecord
+	dnsKeysCache map[string]*model.DNSKeyRecord
+	cacheLoaded  bool // false until first LoadNodes/LoadDNSKeys populates caches
 }
 
 // NewStore opens or initialises the data directory.
@@ -37,30 +45,74 @@ func NewStore(dir string) (*ManagerStore, error) {
 
 func (s *ManagerStore) nodesPath() string { return filepath.Join(s.dir, "nodes.json") }
 
-func (s *ManagerStore) LoadNodes() (map[string]*model.NodeRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// loadNodesToCache reads nodes.json into memory cache (called under write lock on first access).
+func (s *ManagerStore) loadNodesToCache() error {
 	nodes := map[string]*model.NodeRecord{}
 	data, err := os.ReadFile(s.nodesPath())
 	if os.IsNotExist(err) {
-		return nodes, nil
+		s.nodesCache = nodes
+		s.cacheLoaded = true
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := json.Unmarshal(data, &nodes); err != nil {
-		return nil, fmt.Errorf("nodes.json: %w", err)
+		return fmt.Errorf("nodes.json: %w", err)
 	}
-	return nodes, nil
+	s.nodesCache = nodes
+	s.cacheLoaded = true
+	return nil
 }
 
-// saveNodesLocked writes nodes to disk. Caller must hold s.mu.Lock().
+func (s *ManagerStore) LoadNodes() (map[string]*model.NodeRecord, error) {
+	s.mu.RLock()
+	// Fast path: return shallow copy of cached map (no file I/O per heartbeat)
+	if s.cacheLoaded && s.nodesCache != nil {
+		out := make(map[string]*model.NodeRecord, len(s.nodesCache))
+		for k, v := range s.nodesCache {
+			out[k] = v
+		}
+		s.mu.RUnlock()
+		return out, nil
+	}
+	s.mu.RUnlock()
+
+	// Slow path: first access — populate cache from disk
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Double-check: another goroutine may have loaded while we waited for write lock
+	if s.cacheLoaded && s.nodesCache != nil {
+		out := make(map[string]*model.NodeRecord, len(s.nodesCache))
+		for k, v := range s.nodesCache {
+			out[k] = v
+		}
+		return out, nil
+	}
+	if err := s.loadNodesToCache(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]*model.NodeRecord, len(s.nodesCache))
+	for k, v := range s.nodesCache {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// saveNodesLocked writes nodes to disk and updates in-memory cache.
+// Caller must hold s.mu.Lock().
 func (s *ManagerStore) saveNodesLocked(nodes map[string]*model.NodeRecord) error {
 	data, err := json.MarshalIndent(nodes, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.nodesPath(), data, 0o600)
+	if err := os.WriteFile(s.nodesPath(), data, 0o600); err != nil {
+		return err
+	}
+	// Update in-memory cache (the caller's map becomes the cache)
+	s.nodesCache = nodes
+	s.cacheLoaded = true
+	return nil
 }
 
 func (s *ManagerStore) SaveNodes(nodes map[string]*model.NodeRecord) error {
@@ -97,16 +149,16 @@ func (s *ManagerStore) DeleteNode(id string) error {
 func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	nodes := map[string]*model.NodeRecord{}
-	data, err := os.ReadFile(s.nodesPath())
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &nodes); err != nil {
-			return fmt.Errorf("nodes.json: %w", err)
+
+	// Ensure cache is loaded (first access after restart)
+	if !s.cacheLoaded || s.nodesCache == nil {
+		if err := s.loadNodesToCache(); err != nil {
+			return err
 		}
 	}
+
+	// Operate on in-memory cache directly (no file I/O for read)
+	nodes := s.nodesCache
 	if del {
 		if _, ok := nodes[id]; !ok {
 			return fmt.Errorf("node %q not found", id)
@@ -115,6 +167,7 @@ func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del boo
 	} else {
 		nodes[id] = rec
 	}
+	// Write-through: persist to disk + update cache atomically
 	return s.saveNodesLocked(nodes)
 }
 
@@ -272,30 +325,93 @@ func (s *ManagerStore) SaveAdminState(st *AdminState) error {
 
 func (s *ManagerStore) dnsKeysPath() string { return filepath.Join(s.dir, "dns_keys.json") }
 
-func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
+// loadDNSKeysToCache reads dns_keys.json into memory cache (called under write lock).
+func (s *ManagerStore) loadDNSKeysToCache() error {
 	keys := map[string]*model.DNSKeyRecord{}
 	data, err := os.ReadFile(s.dnsKeysPath())
 	if os.IsNotExist(err) {
-		return keys, nil
+		s.dnsKeysCache = keys
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := json.Unmarshal(data, &keys); err != nil {
-		return nil, fmt.Errorf("dns_keys.json: %w", err)
+		return fmt.Errorf("dns_keys.json: %w", err)
 	}
 	// backward compat: old keys use provider as key, fill Name/Provider if empty
 	for k, v := range keys {
 		if v.Name == "" { v.Name = k }
 		if v.Provider == "" { v.Provider = k }
 	}
-	return keys, nil
+	s.dnsKeysCache = keys
+	return nil
+}
+
+func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
+	s.mu.RLock()
+	// Fast path: return shallow copy of cached map
+	if s.dnsKeysCache != nil {
+		out := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
+		for k, v := range s.dnsKeysCache {
+			out[k] = v
+		}
+		s.mu.RUnlock()
+		return out, nil
+	}
+	s.mu.RUnlock()
+
+	// Slow path: populate from disk
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dnsKeysCache != nil {
+		out := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
+		for k, v := range s.dnsKeysCache {
+			out[k] = v
+		}
+		return out, nil
+	}
+	if err := s.loadDNSKeysToCache(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
+	for k, v := range s.dnsKeysCache {
+		out[k] = v
+	}
+	return out, nil
 }
 
 func (s *ManagerStore) SaveDNSKeys(keys map[string]*model.DNSKeyRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Write-through: persist + update cache
+	s.dnsKeysCache = keys
+	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+}
+
+// DeleteDNSKeyAtomic removes a DNS key under write lock.
+// Prevents TOCTOU race between LoadDNSKeys→delete→SaveDNSKeys.
+func (s *ManagerStore) DeleteDNSKeyAtomic(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Ensure cache is loaded
+	if s.dnsKeysCache == nil {
+		if err := s.loadDNSKeysToCache(); err != nil {
+			return err
+		}
+	}
+
+	if _, ok := s.dnsKeysCache[name]; !ok {
+		return fmt.Errorf("DNS key %q not found", name)
+	}
+	delete(s.dnsKeysCache, name)
+
+	data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -422,6 +538,30 @@ func (s *ManagerStore) SaveAgentConfig(cfg *AgentConfig) error {
 		return err
 	}
 	return os.WriteFile(s.agentConfigPath(), data, 0o600)
+}
+
+// UpdateAgentConfigAtomic reads the config, applies the mutation under write lock,
+// and saves — preventing TOCTOU races between concurrent set-version operations.
+func (s *ManagerStore) UpdateAgentConfigAtomic(fn func(*AgentConfig)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cfg := &AgentConfig{}
+	data, err := os.ReadFile(s.agentConfigPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return fmt.Errorf("agent_config.json: %w", err)
+		}
+	}
+	fn(cfg)
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.agentConfigPath(), out, 0o600)
 }
 
 // ── Agent Binaries ──

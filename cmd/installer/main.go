@@ -1,5 +1,6 @@
 // ddns-manager installer — lightweight install wizard (no ddns-go deps).
-// Downloads the full agent binary from the manager during installation.
+// Packs self + node-agent into a zip for offline Windows deployment.
+// On Linux, downloads the full agent binary from the manager during installation.
 package main
 
 import (
@@ -28,7 +29,7 @@ import (
 
 var version = "dev"
 
-// base paths
+// base paths — set per-platform defaults, overridden by user input
 var (
 	agentBaseDir    string
 	agentConfigPath string
@@ -68,19 +69,17 @@ func main() {
 func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	reader := bufio.NewReader(os.Stdin)
 
+	// Windows: set console to UTF-8 for proper CJK display
 	if runtime.GOOS == "windows" {
 		exec.Command("chcp", "65001").Run()
 	}
 
-	// 统一使用 Go 标准架构名 (amd64/arm64/arm)，不再映射为 x86_64/i386
-	// 构建脚本产物与下载 URL 均以此为标准，避免名称不匹配导致 404
+	// Normalize arch name to Go standard naming (build.sh output format)
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 	switch goarch {
 	case "386":
-		goarch = "i386" // 历史兼容：Go → deb 命名
-	case "arm":
-		// runtime.GOARCH 对 armv7 也是 "arm"，保持不变
+		goarch = "i386" // historical compat: Go → deb naming
 	}
 
 	hostname, _ := os.Hostname()
@@ -105,24 +104,52 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	fmt.Println("+==========================================+")
 	fmt.Printf("  系统: %s  主机名: %s\n\n", osName, hostname)
 
-	// Step 0/5: detect & clean old ddns-go
-	stepWait(0, 5, "检测旧 ddns-go 服务")
-	ddnsInfo := detectOldDDNS()
-	if ddnsInfo != "" {
-		fmt.Printf("  [!] 检测到旧 ddns-go: %s\n", ddnsInfo)
-		fmt.Print("  是否完全清除（服务+程序+配置）？[y/N]: ")
-		confirm, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
-			fmt.Println("  [FAIL] 用户取消")
-			os.Exit(1)
-		}
-		cleanOldDDNS()
-		fmt.Println("  [OK] 已清除")
-	} else {
-		fmt.Println("  [OK] 未检测到旧 ddns-go")
+	// ================================================================
+	// Step 0/5: 环境检查 — 旧版清理 + ddns-go 冲突检测
+	// ================================================================
+	stepWait(0, 5, "环境检查")
+
+	// 0a. 检测并清理旧版 ddns-manager (自动，不询问)
+	oldDDNSManagerFound := cleanOldDDNSManager()
+	if oldDDNSManagerFound {
+		fmt.Println("  [OK] 旧版 ddns-manager 已清理，配置已保留")
 	}
 
-	// Step 1/5: manager URL + connectivity test
+	// 0b. 检测并处理 ddns-go 冲突
+	ddnsGoConflict := detectDDNSGoFull()
+	if len(ddnsGoConflict) > 0 {
+		fmt.Println()
+		fmt.Println("  +-------------------------------------------+")
+		fmt.Println("  |  [!] 检测到已安装 ddns-go                    |")
+		fmt.Println("  |                                            |")
+		fmt.Println("  |  ddns-go 与本软件使用相同的 DNS 更新机制      |")
+		fmt.Println("  |  同时运行可能导致:                            |")
+		fmt.Println("  |    · DNS 记录被反复覆写                      |")
+		fmt.Println("  |    · DNS API 调用频率超限                    |")
+		fmt.Println("  |    · 域名解析异常                            |")
+		fmt.Println("  |                                            |")
+		fmt.Println("  |  检测到以下残留:                              |")
+		for _, item := range ddnsGoConflict {
+			fmt.Printf("  |    · %s\n", item)
+		}
+		fmt.Println("  |                                            |")
+		fmt.Println("  |  是否清除 ddns-go？[y/N]: _                  |")
+		fmt.Println("  +-------------------------------------------+")
+		fmt.Print("  > ")
+		confirm, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
+			fmt.Println("  [FAIL] 用户取消安装 — ddns-go 冲突未解决")
+			os.Exit(1)
+		}
+		cleanDDNSGoFull()
+		fmt.Println("  [OK] ddns-go 已完全清除")
+	} else {
+		fmt.Println("  [OK] 未检测到 ddns-go 冲突")
+	}
+
+	// ================================================================
+	// Step 1/5: 管理端地址 + 连通性测试
+	// ================================================================
 	stepWait(1, 5, "管理端地址")
 	if managerURL == "" {
 		for {
@@ -130,12 +157,13 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 			managerURL, _ = reader.ReadString('\n')
 			managerURL = strings.TrimSpace(managerURL)
 			if managerURL == "" {
+				fmt.Println("  [!] 地址不能为空")
 				continue
 			}
 			fmt.Printf("  测试连接 %s/api/ping ... ", strings.TrimRight(managerURL, "/"))
 			resp, err := client.Get(strings.TrimRight(managerURL, "/") + "/api/ping")
 			if err != nil {
-				fmt.Printf("失败: %v\n  请重试\n", err)
+				fmt.Printf("失败: %v\n", err)
 				continue
 			}
 			resp.Body.Close()
@@ -159,7 +187,9 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	}
 	baseURL := strings.TrimRight(managerURL, "/")
 
-	// Step 2/5: install directory
+	// ================================================================
+	// Step 2/5: 安装目录
+	// ================================================================
 	stepWait(2, 5, "安装目录")
 	if installDir == "" {
 		fmt.Printf("  安装目录 [默认 %s]: ", agentBaseDir)
@@ -171,7 +201,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	}
 	for installDir != "" {
 		if !filepath.IsAbs(installDir) {
-			fmt.Printf("  [!] 路径格式不正确，必须是绝对路径 (如 %s)\n", agentBaseDir)
+			fmt.Printf("  [!] 必须是绝对路径 (如 %s)\n", agentBaseDir)
 			fmt.Printf("  安装目录 [默认 %s]: ", agentBaseDir)
 			input, _ := reader.ReadString('\n')
 			input = strings.TrimSpace(input)
@@ -192,54 +222,91 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	}
 	fmt.Printf("  [OK] 安装目录: %s\n", agentBaseDir)
 
-	// Step 3/5: node name
+	// ================================================================
+	// Step 3/5: 节点名称 + 服务端重名指纹检查
+	// ================================================================
 	stepWait(3, 5, "节点名称")
 	fingerprint := generateFingerprint()
 	if nodeName == "" {
-		fmt.Print("  节点名称 (如 node-01): ")
+		fmt.Print("  节点名称 (如 win-pc): ")
 		nodeName, _ = reader.ReadString('\n')
 		nodeName = strings.TrimSpace(nodeName)
-	}
-
-	// same-machine reinstall
-	if existingCfg, err := loadConfig(agentConfigPath); err == nil && existingCfg.Fingerprint == fingerprint {
-		fmt.Printf("  [!] 同机已有注册: %s\n", existingCfg.NodeID)
-		fmt.Print("  是否替换原注册？[Y/n]: ")
-		confirm, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(confirm)) != "" && strings.TrimSpace(strings.ToLower(confirm)) != "y" {
-			fmt.Println("  [FAIL] 取消")
-			os.Exit(1)
+		if nodeName == "" {
+			log.Fatal("节点名称不能为空")
 		}
-		fmt.Printf("  [OK] %s -> %s\n", existingCfg.NodeID, nodeName)
 	}
 
-	// uniqueness check
+	// 检查本地是否已有旧配置 (同目录残留)
+	if existingCfg, err := loadConfig(agentConfigPath); err == nil && existingCfg.Fingerprint == fingerprint {
+		fmt.Printf("  [!] 检测到本机已有注册: %s\n", existingCfg.NodeID)
+		fmt.Printf("  指纹匹配 — 这是旧机重装\n")
+		// 用户可能想保留原节点名或换新名
+		if existingCfg.NodeID != nodeName {
+			fmt.Printf("  原节点名: %s, 新节点名: %s\n", existingCfg.NodeID, nodeName)
+			fmt.Print("  是否替换原注册？[Y/n]: ")
+			confirm, _ := reader.ReadString('\n')
+			confirm = strings.TrimSpace(strings.ToLower(confirm))
+			if confirm != "" && confirm != "y" {
+				// 用户选择保留原名称
+				nodeName = existingCfg.NodeID
+				fmt.Printf("  [OK] 保留原节点名: %s\n", nodeName)
+			} else {
+				fmt.Printf("  [OK] %s -> %s (将重新注册)\n", existingCfg.NodeID, nodeName)
+			}
+		} else {
+			fmt.Printf("  [OK] 节点名一致: %s (旧机重装，将继承配置)\n", nodeName)
+		}
+	}
+
+	// 服务端重名 + 指纹检查 (调用新 API)
 	for {
-		checkBody, _ := json.Marshal(map[string]string{
-			"node_id": nodeName, "fingerprint": fingerprint, "password": generatePassword(),
-		})
-		resp, err := client.Post(baseURL+"/api/register", "application/json", bytes.NewReader(checkBody))
-		if err == nil && resp.StatusCode == 409 {
-			resp.Body.Close()
-			fmt.Printf("  [!] 名称 '%s' 已占用\n", nodeName)
-			fmt.Print("  新名称: ")
+		ok, remoteFp, err := checkNodeFingerprint(client, baseURL, nodeName)
+		if err != nil {
+			// API 调用失败 (如 404 管理端不支持新 API) — 走旧逻辑: 直接注册看结果
+			fmt.Printf("  [!] 管理端暂不支持指纹查询，跳过预检\n")
+			break
+		}
+		if !ok {
+			// 节点名可用
+			break
+		}
+		// 节点名已存在 → 比对指纹
+		if remoteFp == fingerprint {
+			fmt.Printf("  [!] 节点 '%s' 已存在，指纹匹配 — 旧机重装\n", nodeName)
+			fmt.Print("  是否继承原配置并覆盖安装？[Y/n]: ")
+			confirm, _ := reader.ReadString('\n')
+			confirm = strings.TrimSpace(strings.ToLower(confirm))
+			if confirm == "" || confirm == "y" {
+				fmt.Printf("  [OK] 将继承原节点配置\n")
+				break
+			}
+			fmt.Print("  请输入新节点名: ")
 			n, _ := reader.ReadString('\n')
 			n = strings.TrimSpace(n)
 			if n == "" {
+				fmt.Println("  [FAIL] 取消安装")
 				os.Exit(1)
 			}
 			nodeName = n
 			continue
 		}
-		if resp != nil {
-			resp.Body.Close()
+		// 指纹不匹配 → 新机抢名，拒绝
+		fmt.Printf("  [!] 节点名 '%s' 已被其他机器占用 (指纹不匹配)\n", nodeName)
+		fmt.Print("  请输入新节点名 (或回车取消): ")
+		n, _ := reader.ReadString('\n')
+		n = strings.TrimSpace(n)
+		if n == "" {
+			fmt.Println("  [FAIL] 取消安装")
+			os.Exit(1)
 		}
-		break
+		nodeName = n
 	}
 	fmt.Printf("  [OK] 节点名: %s\n", nodeName)
 
-	// Step 4/5: download agent binary — 使用版本化文件名
-	stepWait(4, 5, "下载 Agent")
+	// ================================================================
+	// Step 4/5: 安装 Agent 二进制 (本地优先 → 网络下载兜底)
+	// ================================================================
+	stepWait(4, 5, "安装 Agent")
 	agentName := "node-agent-v" + version + "-" + goos + "-" + goarch
 	agentBin := filepath.Join(agentBaseDir, agentName)
 	agentLink := filepath.Join(agentBaseDir, "node-agent")
@@ -248,75 +315,105 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		agentLink += ".exe"
 	}
 
-	// determine download URL from manifest
-	agentURL := baseURL + "/bin/node-agent-" + goos + "-" + goarch
-	if runtime.GOOS == "windows" {
-		agentURL += ".exe"
-	}
+	installed := false
 
-	fmt.Printf("  下载 %s ... ", agentURL)
-	if err := retryDo(3, "下载 agent", func() error {
-		resp, err := client.Get(agentURL)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("HTTP %d", resp.StatusCode)
-		}
-		f, err := os.Create(agentBin)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(f, resp.Body)
-		return err
-	}); err != nil {
-		// fallback: try common names — 仅使用 Go 标准架构名（build.sh 产出格式）
-		// ❌ 不再尝试 node-agent-v2 / node-agent-linux-x86_64 等已废弃名称
-		fmt.Println("失败，尝试备选名称...")
-		fallbackNames := []string{"node-agent-latest"}
-		if runtime.GOOS == "windows" {
-			fallbackNames = append(fallbackNames,
-				"node-agent-latest-windows-amd64.exe",
-				"node-agent-windows-amd64.exe")
+	// 策略1: 同目录本地文件 (zip 包场景，零网络依赖)
+	// ZIP 内 agent 是版本化文件名 node-agent-v{VERSION}-{os}-{arch}.exe
+	// 扫描同目录匹配即可，不要求固定名
+	if agentFile := findLocalAgent(exeDir()); agentFile != "" {
+		fmt.Printf("  从本地复制 %s ... ", filepath.Base(agentFile))
+		if err := copyFile(agentFile, agentBin); err != nil {
+			fmt.Printf("失败: %v\n", err)
 		} else {
-			fallbackNames = append(fallbackNames,
-				"node-agent-latest-linux-amd64",
-				"node-agent-linux-amd64")
-		}
-		for _, name := range fallbackNames {
-			u := baseURL + "/bin/" + name
-			fmt.Printf("  尝试 %s ... ", u)
-			resp, err := client.Get(u)
-			if err == nil && resp.StatusCode == 200 {
-				f, _ := os.Create(agentBin)
-				io.Copy(f, resp.Body)
-				f.Close()
-				resp.Body.Close()
-				fmt.Println("[OK]")
-				break
-			}
-			if resp != nil {
-				resp.Body.Close()
-			}
-			fmt.Println("失败")
+			fmt.Println("[OK]")
+			installed = true
 		}
 	}
 
-	// 最终检查：确保有可用二进制
-	if _, err := os.Stat(agentBin); err != nil {
-		log.Fatalf("下载失败: 管理端 /bin/ 目录缺少 %s 系统的 agent 二进制", goos)
+	// 策略2: 从管理端下载 (网络兜底)
+	if !installed {
+		agentURL := baseURL + "/bin/node-agent-" + goos + "-" + goarch
+		if runtime.GOOS == "windows" {
+			agentURL += ".exe"
+		}
+		fmt.Printf("  下载 %s ... ", agentURL)
+		if err := retryDo(3, "下载 agent", func() error {
+			resp, err := client.Get(agentURL)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				return fmt.Errorf("HTTP %d", resp.StatusCode)
+			}
+			f, err := os.Create(agentBin)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(f, resp.Body)
+			return err
+		}); err != nil {
+			// fallback: try common names
+			fmt.Println("失败，尝试备选名称...")
+			fallbackNames := []string{"node-agent-latest"}
+			if runtime.GOOS == "windows" {
+				fallbackNames = append(fallbackNames,
+					"node-agent-latest-windows-amd64.exe",
+					"node-agent-windows-amd64.exe")
+			} else {
+				fallbackNames = append(fallbackNames,
+					"node-agent-latest-linux-amd64",
+					"node-agent-linux-amd64")
+			}
+			for _, name := range fallbackNames {
+				u := baseURL + "/bin/" + name
+				fmt.Printf("  尝试 %s ... ", u)
+				resp, err := client.Get(u)
+				if err == nil && resp.StatusCode == 200 {
+					f, _ := os.Create(agentBin)
+					io.Copy(f, resp.Body)
+					f.Close()
+					resp.Body.Close()
+					fmt.Println("[OK]")
+					installed = true
+					break
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+				fmt.Println("失败")
+			}
+		} else {
+			installed = true
+		}
+	}
+
+	if !installed {
+		// 最终检查
+		if _, err := os.Stat(agentBin); err != nil {
+			log.Fatalf("下载失败: 管理端 /bin/ 目录缺少 %s 系统的 agent 二进制", goos)
+		}
 	}
 	os.Chmod(agentBin, 0755)
 	// 创建符号链接, systemd 引用 node-agent → 自动指向当前版本
 	os.Remove(agentLink)
-	if err := os.Symlink(agentName, agentLink); err != nil {
-		log.Fatalf("创建符号链接失败: %v", err)
+	if runtime.GOOS == "windows" {
+		// Windows 不支持符号链接给普通文件, 直接用版本化文件名
+		// node-agent.exe 作为服务入口, 用版本化二进制重命名
+		if err := copyFile(agentBin, agentLink); err != nil {
+			log.Fatalf("复制 agent 到 node-agent.exe 失败: %v", err)
+		}
+	} else {
+		if err := os.Symlink(agentName, agentLink); err != nil {
+			log.Fatalf("创建符号链接失败: %v", err)
+		}
 	}
-	fmt.Printf("  [OK] Agent 已安装 (%s → %s)\n", agentLink, agentName)
+	fmt.Printf("  [OK] Agent 已安装 (%s)\n", agentName)
 
-	// Step 5/5: register + install service
+	// ================================================================
+	// Step 5/5: 注册节点 & 安装服务
+	// ================================================================
 	stepWait(5, 5, "注册节点 & 安装服务")
 	password := generatePassword()
 	cfg := &model.AgentConfig{
@@ -324,6 +421,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		Password: password, CertPath: defaultCertPath, VerifySSL: !insecure,
 	}
 
+	// 注册到管理端
 	regBody, _ := json.Marshal(map[string]string{
 		"node_id": cfg.NodeID, "fingerprint": cfg.Fingerprint, "password": cfg.Password,
 	})
@@ -333,30 +431,54 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode == 409 {
+		// 节点已存在 (可能是旧机重装未走指纹预检)
+		fmt.Printf("  [!] 节点 '%s' 已注册，检查指纹...\n", cfg.NodeID)
+		ok, remoteFp, fpErr := checkNodeFingerprint(client, baseURL, cfg.NodeID)
+		if fpErr == nil && ok && remoteFp != "" && remoteFp == cfg.Fingerprint {
+			fmt.Printf("  [OK] 指纹匹配，旧机重装 — 跳过注册\n")
+			// 读取旧 agent.yaml 保留原 password
+			if oldCfg, oldErr := loadConfig(agentConfigPath); oldErr == nil && oldCfg.Password != "" {
+				cfg.Password = oldCfg.Password
+			}
+		} else {
+			log.Fatalf("注册失败 HTTP 409: 节点名已被占用且指纹不匹配，请更换节点名重试")
+		}
+	} else if resp.StatusCode != 200 {
 		log.Fatalf("注册失败 HTTP %d: %s", resp.StatusCode, string(body))
+	} else {
+		fmt.Println("  [OK] 注册成功")
 	}
 
 	if err := saveConfig(cfg, agentConfigPath); err != nil {
 		log.Fatalf("保存配置: %v", err)
 	}
-	fmt.Println("  [OK] 注册成功")
 
-	// install service
+	// 安装系统服务
 	if runtime.GOOS == "windows" {
 		binPath := fmt.Sprintf(`"%s" -daemon`, agentLink)
 		if serviceExists("node-agent") {
 			exec.Command("sc", "stop", "node-agent").Run()
+			time.Sleep(time.Second)
 			exec.Command("sc", "delete", "node-agent").Run()
 			time.Sleep(time.Second)
 		}
-		exec.Command("sc", "create", "node-agent",
+		// 创建服务
+		out, err := exec.Command("sc", "create", "node-agent",
 			"binPath=", binPath, "start=", "auto",
-			"DisplayName=", "ddns-manager Node Agent").Run()
+			"DisplayName=", "ddns-manager Node Agent").CombinedOutput()
+		if err != nil {
+			log.Fatalf("创建 Windows 服务失败: %v: %s", err, string(out))
+		}
 		exec.Command("sc", "failure", "node-agent", "reset=", "86400",
 			"actions=", "restart/5000").Run()
-		exec.Command("sc", "start", "node-agent").Run()
-		fmt.Println("  [OK] Windows 服务已安装")
+		// 启动服务
+		out, err = exec.Command("sc", "start", "node-agent").CombinedOutput()
+		if err != nil {
+			fmt.Printf("  [!] 服务启动失败: %v: %s\n  请检查安装目录权限\n", err, string(out))
+		} else {
+			fmt.Println("  [OK] Windows 服务已安装并启动")
+		}
 	} else {
 		svc := fmt.Sprintf(`[Unit]
 Description=ddns-manager Node Agent
@@ -400,12 +522,182 @@ WantedBy=timers.target
 	fmt.Println("     4. 下次心跳自动下发配置并开始 DDNS")
 }
 
+// ========== 环境检查: 旧版 ddns-manager 清理 (自动) ==========
+
+// cleanOldDDNSManager stops and removes old ddns-manager agent service + binaries.
+// Keeps agent.yaml config so the new install can inherit or the user can review.
+// Returns true if an old installation was found and cleaned.
+func cleanOldDDNSManager() bool {
+	cleaned := false
+
+	// Stop & remove Windows service
+	if runtime.GOOS == "windows" {
+		if out, _ := exec.Command("sc", "query", "node-agent").Output(); strings.Contains(string(out), "SERVICE_NAME") {
+			fmt.Println("  [!] 检测到旧版 ddns-manager Windows 服务")
+			exec.Command("sc", "stop", "node-agent").Run()
+			time.Sleep(500 * time.Millisecond)
+			exec.Command("sc", "delete", "node-agent").Run()
+			cleaned = true
+		}
+		// Remove old binaries but keep agent.yaml
+		entries, _ := os.ReadDir(agentBaseDir)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			// Keep agent.yaml for config inheritance
+			if name == "agent.yaml" || name == "ddns_cache.yaml" {
+				continue
+			}
+			if strings.HasPrefix(name, "node-agent") && strings.HasSuffix(name, ".exe") {
+				os.Remove(filepath.Join(agentBaseDir, e.Name()))
+				cleaned = true
+			}
+		}
+	} else {
+		// Linux: stop systemd timer + service
+		if _, err := os.Stat("/etc/systemd/system/node-agent.service"); err == nil {
+			fmt.Println("  [!] 检测到旧版 ddns-manager systemd 服务")
+			exec.Command("systemctl", "stop", "node-agent.timer").Run()
+			exec.Command("systemctl", "disable", "node-agent.timer").Run()
+			time.Sleep(500 * time.Millisecond)
+			exec.Command("systemctl", "daemon-reload").Run()
+			cleaned = true
+		}
+		// Remove old versioned binaries
+		entries, _ := os.ReadDir(agentBaseDir)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if strings.HasPrefix(e.Name(), "node-agent-v") {
+				os.Remove(filepath.Join(agentBaseDir, e.Name()))
+				cleaned = true
+			}
+		}
+		// Remove symlink
+		os.Remove(filepath.Join(agentBaseDir, "node-agent"))
+	}
+	return cleaned
+}
+
+// ========== ddns-go 完整检测 ==========
+
+// detectDDNSGoFull returns a list of detected ddns-go artifacts (service, binaries, configs, directories).
+// Returns nil if nothing is found.
+func detectDDNSGoFull() []string {
+	var items []string
+
+	if runtime.GOOS == "windows" {
+		// Windows: sc query + directories
+		if out, _ := exec.Command("sc", "query", "ddns-go").Output(); strings.Contains(string(out), "SERVICE_NAME") {
+			state := "已安装"
+			if strings.Contains(string(out), "RUNNING") {
+				state = "运行中"
+			}
+			items = append(items, fmt.Sprintf("Windows 服务: ddns-go (%s)", state))
+		}
+		for _, dir := range []string{`C:\ddns-go`, `C:\ddns-manager\ddns-go`, `C:\ddns\ddns-go`} {
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				items = append(items, fmt.Sprintf("程序目录: %s", dir))
+			}
+		}
+		// Check common config file locations
+		for _, cfg := range []string{`C:\ddns-go\.ddns_go_config.yaml`, `C:\Users\Administrator\.ddns_go_config.yaml`} {
+			if _, err := os.Stat(cfg); err == nil {
+				items = append(items, fmt.Sprintf("配置文件: %s", cfg))
+			}
+		}
+	} else {
+		// Linux: systemd + bin + configs
+		out, _ := exec.Command("systemctl", "is-active", "ddns-go").Output()
+		s := strings.TrimSpace(string(out))
+		if s == "active" || s == "inactive" {
+			items = append(items, fmt.Sprintf("systemd 服务: ddns-go (%s)", s))
+		}
+		for _, cfg := range []string{
+			"/opt/ddns-go/.ddns_go_config.yaml",
+			"/root/.ddns_go_config.yaml",
+			"/etc/ddns-go/.ddns_go_config.yaml",
+		} {
+			if _, err := os.Stat(cfg); err == nil {
+				items = append(items, fmt.Sprintf("配置文件: %s", cfg))
+			}
+		}
+		if _, err := os.Stat("/usr/local/bin/ddns-go"); err == nil {
+			items = append(items, "二进制程序: /usr/local/bin/ddns-go")
+		}
+		if info, err := os.Stat("/opt/ddns-go"); err == nil && info.IsDir() {
+			items = append(items, "程序目录: /opt/ddns-go")
+		}
+		if _, err := os.Stat("/etc/systemd/system/ddns-go.service"); err == nil {
+			items = append(items, "systemd unit: ddns-go.service")
+		}
+	}
+	return items
+}
+
+// cleanDDNSGoFull removes all detected ddns-go artifacts.
+func cleanDDNSGoFull() {
+	if runtime.GOOS == "windows" {
+		exec.Command("sc", "stop", "ddns-go").Run()
+		time.Sleep(500 * time.Millisecond)
+		exec.Command("sc", "delete", "ddns-go").Run()
+		os.RemoveAll(`C:\ddns-go`)
+		os.RemoveAll(`C:\ddns-manager\ddns-go`)
+		os.RemoveAll(`C:\ddns\ddns-go`)
+		os.Remove(`C:\Users\Administrator\.ddns_go_config.yaml`)
+	} else {
+		exec.Command("systemctl", "stop", "ddns-go").Run()
+		exec.Command("systemctl", "disable", "ddns-go").Run()
+		time.Sleep(300 * time.Millisecond)
+		os.Remove("/etc/systemd/system/ddns-go.service")
+		exec.Command("systemctl", "daemon-reload").Run()
+		os.Remove("/usr/local/bin/ddns-go")
+		os.RemoveAll("/opt/ddns-go")
+		os.Remove("/root/.ddns_go_config.yaml")
+		os.Remove("/etc/ddns-go/.ddns_go_config.yaml")
+	}
+}
+
+// ========== 服务端指纹查询 ==========
+
+// checkNodeFingerprint queries the manager for a node's fingerprint.
+// Returns (exists, fingerprint, error).
+// Uses the public /api/nodes/{name}/fingerprint endpoint.
+func checkNodeFingerprint(client *http.Client, baseURL, nodeName string) (exists bool, fingerprint string, err error) {
+	url := fmt.Sprintf("%s/api/nodes/%s/fingerprint", baseURL, nodeName)
+	resp, err := client.Get(url)
+	if err != nil {
+		return false, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return false, "", nil
+	}
+	if resp.StatusCode != 200 {
+		return false, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Exists      bool   `json:"exists"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, "", err
+	}
+	return result.Exists, result.Fingerprint, nil
+}
+
 // ========== uninstall ==========
 
 func runUninstall() {
 	fmt.Println("正在卸载 ddns-manager...")
 	if runtime.GOOS == "windows" {
 		exec.Command("sc", "stop", "node-agent").Run()
+		time.Sleep(time.Second)
 		exec.Command("sc", "delete", "node-agent").Run()
 		os.RemoveAll(`C:\ddns-manager`)
 		os.RemoveAll(filepath.Join(os.Getenv("ProgramData"), "ddns-manager"))
@@ -420,53 +712,59 @@ func runUninstall() {
 	fmt.Println("[OK] 卸载完成")
 }
 
-// ========== ddns-go detection & cleanup ==========
-
-func detectOldDDNS() string {
-	var parts []string
-	if runtime.GOOS == "windows" {
-		if out, _ := exec.Command("sc", "query", "ddns-go").Output(); strings.Contains(string(out), "SERVICE_NAME") {
-			parts = append(parts, "Windows服务")
-		}
-	} else {
-		out, _ := exec.Command("systemctl", "is-active", "ddns-go").Output()
-		s := strings.TrimSpace(string(out))
-		if s == "active" || s == "inactive" {
-			parts = append(parts, "systemd("+s+")")
-		}
-		if _, err := os.Stat("/usr/local/bin/ddns-go"); err == nil {
-			parts = append(parts, "程序")
-		}
-		if _, err := os.Stat("/opt/ddns-go/.ddns_go_config.yaml"); err == nil {
-			parts = append(parts, "配置")
-		}
-		if _, err := os.Stat("/root/.ddns_go_config.yaml"); err == nil {
-			parts = append(parts, "配置(/root)")
-		}
-	}
-	return strings.Join(parts, ",")
-}
-
-func cleanOldDDNS() {
-	if runtime.GOOS == "windows" {
-		exec.Command("sc", "stop", "ddns-go").Run()
-		exec.Command("sc", "delete", "ddns-go").Run()
-		os.RemoveAll(`C:\ddns-go`)
-		os.RemoveAll(`C:\ddns-manager\ddns-go`)
-		os.RemoveAll(`C:\ddns\ddns-go`)
-	} else {
-		exec.Command("systemctl", "stop", "ddns-go").Run()
-		exec.Command("systemctl", "disable", "ddns-go").Run()
-		os.Remove("/etc/systemd/system/ddns-go.service")
-		exec.Command("systemctl", "daemon-reload").Run()
-		os.Remove("/usr/local/bin/ddns-go")
-		os.RemoveAll("/opt/ddns-go")
-		os.Remove("/root/.ddns_go_config.yaml")
-	}
-}
-
 // ========== shared utilities ==========
 
+// exeDir returns the directory containing the currently running executable.
+func exeDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
+}
+
+// findLocalAgent 扫描同目录，查找 node-agent*.exe (版本化命名)。
+// 返回第一个匹配的完整路径，未找到返回空。
+func findLocalAgent(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := strings.ToLower(e.Name())
+		if strings.HasPrefix(n, "node-agent") && strings.HasSuffix(n, ".exe") {
+			return filepath.Join(dir, e.Name())
+		}
+		// Linux: 无 .exe 后缀
+		if runtime.GOOS != "windows" && strings.HasPrefix(n, "node-agent") && !strings.Contains(n, ".") {
+			return filepath.Join(dir, e.Name())
+		}
+	}
+	return ""
+}
+
+// copyFile copies a file from src to dst. Creates dst with the same permissions.
+func copyFile(src, dst string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+	return d.Sync()
+}
 
 func generateFingerprint() string {
 	hostname, _ := os.Hostname()
@@ -534,7 +832,6 @@ func serviceExists(name string) bool {
 	if runtime.GOOS == "windows" {
 		return exec.Command("sc", "query", name).Run() == nil
 	}
-	// Check if systemd unit file exists (in installed paths)
 	for _, dir := range []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/run/systemd/system"} {
 		if _, err := os.Stat(filepath.Join(dir, name+".service")); err == nil {
 			return true
@@ -545,5 +842,3 @@ func serviceExists(name string) bool {
 	}
 	return false
 }
-
-

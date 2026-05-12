@@ -39,11 +39,10 @@ var (
 	dnsUpdaterOnce sync.Once
 )
 
-// base paths — unified single-directory install for clean uninstall
+// base paths — defaults, overridable via -dir flag
 var (
-	agentBaseDir     string
-	agentConfigPath  string
-	defaultCertPath  string
+	agentBaseDir    string
+	agentConfigPath string
 )
 
 func init() {
@@ -53,7 +52,12 @@ func init() {
 		agentBaseDir = "/opt/ddns-manager"
 	}
 	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
-	defaultCertPath = filepath.Join(agentBaseDir, "certs")
+}
+
+// setBaseDir overrides the default base directory (called after flag parsing).
+func setBaseDir(dir string) {
+	agentBaseDir = dir
+	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
 }
 
 
@@ -231,7 +235,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	// 5. Cert deploy (keep v1 logic)
 	applyCertUpdates(cfg, resp.CertUpdates)
 
-	// 6. Self-upgrade (keep v1 logic)
+	// 6. Config error — node config rendering failed on manager side
+	if resp.ConfigError != "" {
+		log.Printf("[config] 管理端配置渲染失败: %s", resp.ConfigError)
+	}
+
+	// 7. Self-upgrade (keep v1 logic)
 	if resp.AgentUpdate != nil {
 		if err := selfUpgrade(cfg, resp.AgentUpdate); err != nil {
 			log.Printf("自升级失败: %v", err)
@@ -267,7 +276,7 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) *model.Heartb
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB max to prevent OOM
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50MB (多证书场景)
 	if err != nil {
 		log.Printf("心跳 读取响应失败: %v", err)
 		return nil
@@ -636,17 +645,14 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 }
 
 func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBinding) {
-	// 1. import PFX to Windows cert store AND extract thumbprint + CN in one go
-	// Escape single quotes in path for PowerShell
+	// 1. import PFX to Windows cert store
 	escapedPath := strings.ReplaceAll(pfxFile, "'", "''")
 	ps := fmt.Sprintf(
 		`$pfx = Get-Content '%s' -AsByteStream -Raw;`+
 			`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;`+
 			`$cert.Import($pfx, 'ddns', 'DefaultKeySet');`+
 			`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');`+
-			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`+
-			`Write-Host "THUMB:"+$cert.Thumbprint;`+
-			`Write-Host "SUBJECT:"+$cert.Subject`,
+			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`,
 		escapedPath)
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
@@ -654,28 +660,11 @@ func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBindin
 		return
 	}
 
-	// parse thumbprint and CN from PowerShell output
-	output := string(out)
-	thumb := ""
-	certCN := ""
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if after, found := strings.CutPrefix(trimmed, "THUMB:"); found {
-			thumb = strings.TrimSpace(after)
-		} else if after, found := strings.CutPrefix(trimmed, "SUBJECT:"); found {
-			// "CN=app.example.com, O=..." → "app.example.com"
-			subject := strings.TrimSpace(after)
-			if idx := strings.Index(subject, "CN="); idx != -1 {
-				cn := subject[idx+3:]
-				if comma := strings.IndexByte(cn, ','); comma != -1 {
-					cn = cn[:comma]
-				}
-				certCN = strings.ToLower(strings.TrimSpace(cn))
-			}
-		}
-	}
+	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
+	thumb := extractThumbprintCertutil(pfxFile)
+	certCN := extractCNFromPFX(pfxFile)
 	if thumb == "" {
-		log.Printf("PFX 证书指纹为空: %s", bundleName)
+		log.Printf("PFX 证书指纹提取失败: %s", bundleName)
 		return
 	}
 	log.Printf("PFX已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)
@@ -915,13 +904,61 @@ func autoBindExisting(thumb, certCN string) {
 	log.Printf("IIS 自动绑定: %d/%d 绑定已更新 (CN=%s)", updated, len(bindings), certCN)
 }
 
+// extractThumbprintCertutil 使用 certutil 提取 PFX 证书指纹。
+// certutil -dump 输出格式固定（不受语言/版本影响），比 PowerShell Write-Host 解析更可靠:
+//   Cert Hash(sha1): a1b2c3d4e5f6789012345678901234567890abcd
+func extractThumbprintCertutil(pfxFile string) string {
+	out, err := exec.Command("certutil", "-dump", pfxFile).CombinedOutput()
+	if err != nil {
+		log.Printf("[cert] certutil -dump 失败: %v", err)
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Cert Hash(sha1):") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Cert Hash(sha1):"))
+		}
+	}
+	return ""
+}
+
+// extractCNFromPFX 通过 certutil 解析 PFX 文件获取 CN（通用名称）。
+// certutil 输出中 Issuer/Subject 行格式固定:
+//   Subject: CN=app.example.com, O=Org, ...
+func extractCNFromPFX(pfxFile string) string {
+	out, err := exec.Command("certutil", "-dump", pfxFile).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Subject:") {
+			subject := strings.TrimPrefix(line, "Subject:")
+			subject = strings.TrimSpace(subject)
+			if idx := strings.Index(subject, "CN="); idx != -1 {
+				cn := subject[idx+3:]
+				if comma := strings.IndexByte(cn, ','); comma != -1 {
+					cn = cn[:comma]
+				}
+				return strings.ToLower(strings.TrimSpace(cn))
+			}
+		}
+	}
+	return ""
+}
+
 // ── Windows Trust (MotW removal) ──
 func main() {
 	log.SetFlags(log.LstdFlags) // 所有日志带时间戳 (2009/01/23 01:23:45)
 	heartbeat := flag.Bool("heartbeat", false, "send single heartbeat (for systemd timer)")
 	daemon := flag.Bool("daemon", false, "run as daemon (for Windows Service)")
 	showVersion := flag.Bool("version", false, "show version")
+	installDir := flag.String("dir", "", "installation directory (default: /opt/ddns-manager or C:\\ddns-manager)")
 	flag.Parse()
+
+	if *installDir != "" {
+		setBaseDir(*installDir)
+	}
 
 	if *showVersion {
 		fmt.Printf("node-agent v%s\nPublisher: Lanxun CO.,Ltd.\n", version)
@@ -979,9 +1016,10 @@ func main() {
 	fmt.Println("ddns-manager Node Agent")
 	fmt.Printf("Version: %s  |  Publisher: Lanxun CO.,Ltd.\n\n", version)
 	fmt.Println("Usage:")
-	fmt.Println("  node-agent -heartbeat    (single heartbeat, for systemd timer)")
-	fmt.Println("  node-agent -daemon       (daemon mode, 5min internal timer)")
-	fmt.Println("  node-agent -version      (show version)")
+	fmt.Println("  node-agent -heartbeat              (single heartbeat, for systemd timer)")
+	fmt.Println("  node-agent -daemon                 (daemon mode, 5min internal timer)")
+	fmt.Println("  node-agent -daemon -dir /custom    (daemon from custom install path)")
+	fmt.Println("  node-agent -version                (show version)")
 	fmt.Println()
 	fmt.Println("  Install: use the separate ddns-installer binary")
 	fmt.Println("    curl -fsSL MANAGER/bin/install.sh | sh")

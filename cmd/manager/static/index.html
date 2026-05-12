@@ -87,6 +87,11 @@ th.sortable{transition:background .15s,color .15s}
 td{padding:10px 12px;border-bottom:1px solid var(--c-border)}
 tr:hover td{background:var(--c-bg)}
 th{text-align:left}
+.col-act{text-align:right;white-space:nowrap}
+.col-badge{text-align:center}
+.col-mono{font-family:Consolas,Monaco,monospace;font-size:12px}
+.deploy-card .form-inline{flex-wrap:wrap;gap:6px}
+.deploy-card .btn-primary{flex-shrink:0}
 .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600}
 .badge-green{background:#f6ffed;color:var(--c-green);border:1px solid #b7eb8f}
 .badge-red{background:#fff2f0;color:var(--c-red);border:1px solid #ffccc7}
@@ -340,6 +345,7 @@ let currentPage = 'dashboard';
 let refreshTimer = null;
 let refreshSec = 0;
 let confirmCb = null;
+let deployOs = 'linux-amd64'; // 保持系统选择不被刷新重置
 
 // ========== TABLE SORT STATE ==========
 // Sort state persists across 5s auto-refreshes but resets on page switch.
@@ -895,7 +901,7 @@ function renderDashboard(stats, nodes, events, access) {
   h += '</div>';
 
   h += '<div class="card"><div class="card-header"><h3>节点列表</h3></div>';
-  h += '<table><thead><tr><th style="width:auto" data-sort="name">节点</th><th style="width:auto" data-sort="ip">IP</th><th style="width:auto" data-sort="domainsStr">域名</th><th style="width:50px" data-sort="healthSort">健康</th><th style="width:80px" data-sort="version">版本</th><th style="width:90px" data-sort="status">状态</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th data-sort="name">节点</th><th data-sort="ip">IP</th><th data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th data-sort="version">版本</th><th class="col-badge" data-sort="status">状态</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
   } else {
@@ -910,9 +916,9 @@ function renderDashboard(stats, nodes, events, access) {
       h += '<tr><td><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
       h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
       h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
-      h += '<td>' + healthBadge(n.health) + '</td>';
+      h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
       h += '<td class="mono">' + he(n.version || '-') + '</td>';
-      h += '<td>' + statusBadge(n.online) + '</td></tr>';
+      h += '<td class="col-badge">' + statusBadge(n.online) + '</td></tr>';
     });
   }
   h += '</tbody></table></div>';
@@ -1214,7 +1220,7 @@ function renderNodes(nodes) {
   // Apply saved sort state before rendering
   sortData(nodes, 'nodes');
   var h = '<div class="card"><div class="card-header"><h3>节点列表 (' + nodes.length + ')</h3></div>';
-  h += '<table><thead><tr><th style="width:auto" data-sort="name">节点名称</th><th style="width:150px" data-sort="ip">IP</th><th style="width:120px" data-sort="os">系统</th><th style="width:auto" data-sort="domainsStr">域名</th><th style="width:50px" data-sort="healthSort">健康</th><th style="width:80px" data-sort="version">版本</th><th style="width:90px" data-sort="online">状态</th><th style="width:100px">操作</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th data-sort="name">节点名称</th><th data-sort="ip">IP</th><th data-sort="os">系统</th><th data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th data-sort="version">版本</th><th class="col-badge" data-sort="online">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="8" class="empty">暂无节点</td></tr>';
   } else {
@@ -1233,10 +1239,10 @@ function renderNodes(nodes) {
       h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
       h += '<td class="mono" style="font-size:12px">' + he(n.os) + ' / ' + he(n.arch) + '</td>';
       h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
-      h += '<td>' + healthBadge(n.health) + '</td>';
+      h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
       h += '<td class="mono">' + he(n.version || '-') + '</td>';
-      h += '<td>' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
-      h += '<td><div class="btn-wrap">';
+      h += '<td class="col-badge">' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
+      h += '<td class="col-act"><div class="btn-wrap">';
       h += '<button class="btn btn-sm btn-secondary" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
       h += '<button class="btn btn-sm btn-danger" onclick="deleteNode(\'' + n.id + '\',\'' + jsStr(n.name) + '\')">删除</button>';
       h += '</div></td></tr>';
@@ -1272,6 +1278,13 @@ async function openNodeConfig(id) {
   document.getElementById('modal-node-title').textContent = '节点配置: ' + node.name;
   var cfg = node.config || {};
   var ipv4 = cfg.ipv4 || {}, ipv6 = cfg.ipv6 || {};
+  var hasIfaces = (node.interfaces || []).length > 0;
+  // 新节点有网卡数据时，默认用网卡模式 (而非 URL)，避免多网卡节点选错
+  if (!cfg.dns_key_name && !cfg.dns_provider) {
+    // 无已保存配置 → 首次配置，默认网卡模式
+    if (hasIfaces && !cfg.ipv4) { ipv4 = {enable: true, gettype: 'netInterface'}; }
+    if (hasIfaces && !cfg.ipv6) { ipv6 = {enable: false, gettype: 'netInterface'}; }
+  }
   var bindings = cfg.cert_bindings || [];
 
   var h = '';
@@ -1339,9 +1352,11 @@ function ipSection(title, prefix, cfg, node) {
   if (ifaces.length === 0) {
     h += '<option value="">-- 无 --</option>';
   } else {
+    // 自动选择第一个网卡（用户保存前默认值）
+    var selIface = cfg.netinterface || ifaces[0].name;
     ifaces.forEach(function(ifc) {
       var label = ifc.name + (ifc.ipv4 ? ' (' + ifc.ipv4 + ')' : '');
-      h += '<option value="' + he(ifc.name) + '"' + (ifc.name === cfg.netinterface ? ' selected' : '') + '>' + he(label) + '</option>';
+      h += '<option value="' + he(ifc.name) + '"' + (ifc.name === selIface ? ' selected' : '') + '>' + he(label) + '</option>';
     });
   }
   h += '</select></div>';
@@ -1387,15 +1402,19 @@ function addCertBinding() {
 function toggleIPSection(prefix) {
   var enable = document.getElementById('ncfg-' + prefix + '-enable');
   var type = document.getElementById('ncfg-' + prefix + '-type');
+  var ifaceEl = document.getElementById('ncfg-' + prefix + '-iface');
   if (!enable && !type) return;
   var en = enable ? enable.checked : true;
   var tp = type ? type.value : 'url';
   var section = document.getElementById('ncfg-' + prefix + '-section');
   if (section) section.style.display = en ? '' : 'none';
-  ['url','iface','cmd'].forEach(function(t) {
+  // 网卡下拉始终显示 (有接口数据时)，方便多网卡节点选择
+  var hasIfaces = ifaceEl && ifaceEl.querySelector('select option:not([value=""])');
+  ['url','cmd'].forEach(function(t) {
     var el = document.getElementById('ncfg-' + prefix + '-' + t);
     if (el) el.style.display = (en && tp === t) ? '' : 'none';
   });
+  if (ifaceEl) ifaceEl.style.display = (en && hasIfaces) ? '' : 'none';
   if (prefix === 'ipv6') {
     var re = document.getElementById('ncfg-ipv6-regex');
     if (re) re.style.display = (en && tp === 'netInterface') ? '' : 'none';
@@ -1470,16 +1489,16 @@ function renderDNS(keysMap, certData, acData) {
   if (keyArr.length === 0) {
     h += '<div class="empty">暂无 DNS Key</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="name">名称</th><th data-sort="provider">提供商</th><th>Access Key</th><th data-sort="nodes">使用节点</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">名称</th><th data-sort="provider">提供商</th><th>Access Key</th><th data-sort="nodes">使用节点</th><th class="col-act">操作</th></tr></thead><tbody>';
     keyArr.forEach(function(item) {
       var k = item;
       var name = k.name;
       var prov = k.provider;
       h += '<tr><td><b>' + he(name) + '</b></td>';
       h += '<td>' + he(prov) + '</td>';
-      h += '<td class="mono">' + he((k.ak || '').substring(0,12)) + '...</td>';
+      h += '<td class="col-mono">' + he((k.ak || '').substring(0,20)) + '...</td>';
       h += '<td>' + he(k.nodes) + '</td>';
-      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1489,7 +1508,7 @@ function renderDNS(keysMap, certData, acData) {
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="name">名称</th><th>SAN</th><th data-sort="expiry">到期</th><th data-sort="daysLeft">剩余</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">名称</th><th>SAN</th><th data-sort="expiry">到期</th><th data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
     certs.forEach(function(c) {
       var name = c.bundle_name || c.name || '';
       var exp = c.expiry || '';
@@ -1501,7 +1520,7 @@ function renderDNS(keysMap, certData, acData) {
       var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
       h += '<tr><td><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
       h += '<td><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
-      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button class="btn btn-sm btn-secondary" onclick="downloadPFX(\'' + jsStr(name) + '\')" title="下载 PFX 用于 IIS 手动导入">PFX</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button class="btn btn-sm btn-secondary" onclick="downloadPFX(\'' + jsStr(name) + '\')" title="下载 PFX 用于 IIS 手动导入">PFX</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1511,11 +1530,11 @@ function renderDNS(keysMap, certData, acData) {
   if (accts.length === 0) {
     h += '<div class="empty">暂无 ACME 帐号</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="email">Email</th><th data-sort="ca">CA</th><th>Key</th><th data-sort="registered">状态</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="email">Email</th><th data-sort="ca">CA</th><th>Key</th><th data-sort="registered">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
     accts.forEach(function(a, i) {
       h += '<tr><td>' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
-      h += '<td>' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
-      h += '<td><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-badge">' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1818,14 +1837,22 @@ function renderVersions(verData, binData, nodes) {
   h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="saveForcedVersion()">保存</button></div></div>';
   h += '</div>';
 
-  h += '<div class="card"><div class="card-header"><h3>一键部署</h3></div>';
+  h += '<div class="card deploy-card"><div class="card-header"><h3>一键部署</h3></div>';
   h += '<div class="form-inline">';
-  h += '<div class="form-group" style="flex:0 1 160px"><label>版本</label><select id="deploy-ver">';
+  h += '<div class="form-group" style="flex:0 1 160px"><label>版本</label><select id="deploy-ver" onchange="toggleDeployButton()">';
   availVers.forEach(function(v) { h += '<option value="' + he(v) + '">' + he(v) + '</option>'; });
   if (availVers.length === 0) h += '<option value="dev">dev</option>';
   h += '</select></div>';
-  h += '<div class="form-group" style="flex:0 1 180px"><label>系统</label><select id="deploy-os"><option value="linux-amd64">Linux (amd64)</option><option value="linux-arm64">Linux (arm64)</option><option value="linux-armv7">Linux (armv7)</option><option value="windows-amd64">Windows (amd64)</option></select></div>';
-  h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="copyDeployCmd()">复制部署命令</button></div>';
+  h += '<div class="form-group" style="flex:0 1 180px"><label>系统</label><select id="deploy-os" onchange="deployOs=this.value;toggleDeployButton()">';
+  ['linux-amd64','linux-arm64','linux-armv7','windows-amd64'].forEach(function(o) {
+    var label = o === 'linux-amd64' ? 'Linux (amd64)' : o === 'linux-arm64' ? 'Linux (arm64)' : o === 'linux-armv7' ? 'Linux (armv7)' : 'Windows (amd64)';
+    h += '<option value="' + o + '"' + (deployOs === o ? ' selected' : '') + '>' + label + '</option>';
+  });
+  h += '</select></div>';
+  h += '<div class="form-group" style="align-self:flex-end">';
+  h += '<button class="btn btn-primary" id="deploy-copy-btn" onclick="onDeployAction()">复制部署命令</button>';
+  h += '<a id="deploy-dl-btn" href="javascript:void(0)" class="btn btn-primary" style="display:none;text-decoration:none" onclick="downloadWinInstaller()">下载 Windows 安装包</a>';
+  h += '</div>';
   h += '</div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>已上传二进制</h3><button class="btn btn-sm btn-primary" onclick="document.getElementById(\'bin-upload\').click()">+ 上传</button></div>';
@@ -1833,11 +1860,11 @@ function renderVersions(verData, binData, nodes) {
   if (bins.length === 0) {
     h += '<div class="empty">暂无</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="name">文件名</th><th data-sort="size">大小</th><th data-sort="version">版本</th><th>操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">文件名</th><th data-sort="size">大小</th><th data-sort="version">版本</th><th class="col-act">操作</th></tr></thead><tbody>';
     bins.forEach(function(b) {
       var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
       h += '<tr><td class="mono">' + he(b.name || '') + '</td><td>' + sizeStr + '</td><td>' + he(b.version || '-') + '</td>';
-      h += '<td><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
+      h += '<td class="col-act"><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1881,13 +1908,14 @@ function renderVersions(verData, binData, nodes) {
         h += '<option value="' + he(v) + '"' + (trigVer === v ? ' selected' : '') + '>' + he(v) + '</option>';
       });
       h += '</select></td>';
-      h += '<td style="font-size:12px">' + statusCell + '</td></tr>';
+      h += '<td class="col-badge">' + statusCell + '</td></tr>';
     });
     h += '</tbody></table>';
     h += '<div class="btn-wrap" style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="batchUpgrade()">批量升级</button></div></div>';
   }
 
   document.getElementById('page-versions').innerHTML = h;
+  toggleDeployButton(); // 恢复 Windows 下载按钮状态（5秒刷新不丢失）
   var verTables = document.querySelectorAll('#page-versions table');
   if (verTables[0]) enhanceSortHeaders(verTables[0], 'versions-bins', loadVersions);
   if (verTables[1]) enhanceSortHeaders(verTables[1], 'versions-nodes', loadVersions);
@@ -1902,22 +1930,26 @@ function getDeployCmd() {
   var instBin = 'ddns-installer' + (ver ? '-v' + ver : '') + '-' + os + (isWin ? '.exe' : '');
   if (isWin) {
     // Windows: 已装节点升级 — 轮询等待服务停止(最多30s), 确保文件可覆盖
+    // Windows: Add-Type C# 证书信任 + Net.WebClient 下载 — Win7+ 全兼容
     var ps = 'powershell -Command "';
-    ps += '[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true};';
-    ps += ' if (Test-Path C:\\ddns-manager\\agent.yaml) {';
+    ps += 'Add-Type -TypeDefinition \'public class DDMTrust{public static bool Cert(object a,object b,object c,object d){return true;}}\';';
+    ps += ' [Net.ServicePointManager]::ServerCertificateValidationCallback = [DDMTrust]::Cert;';
+    ps += ' [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;';
+    ps += ' if (Test-Path C:/ddns-manager/agent.yaml) {';
     ps += ' sc.exe stop node-agent;';
     ps += ' for (`$i=0; `$i -lt 15; `$i++) {';
     ps += '   Start-Sleep -Seconds 2;';
     ps += '   if ((sc.exe query node-agent | Select-String STOPPED) -ne `$null) { break }';
     ps += ' };';
-    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + agentBin + ' -OutFile C:\\ddns-manager\\node-agent.exe -UseBasicParsing }';
-    ps += ' catch { Write-Host (\'Download failed: \' + `$_.Exception.Message); exit 1 };';
+    ps += ' try { (New-Object Net.WebClient).DownloadFile(\'' + origin + '/bin/' + agentBin + '\',\'C:/ddns-manager/node-agent.exe\') }';
+    ps += ' catch { Write-Host (\'DL FAIL: \' + `$_.Exception.Message); exit 1 };';
     ps += ' sc.exe start node-agent';
     ps += ' } else {';
-    ps += ' try { Invoke-WebRequest -Uri ' + origin + '/bin/' + instBin + ' -OutFile `$env:TEMP\\ddns-installer.exe -UseBasicParsing }';
-    ps += ' catch { Write-Host (\'Download failed: \' + `$_.Exception.Message); exit 1 };';
-    ps += ' Start-Process `$env:TEMP\\ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
+    ps += ' try { (New-Object Net.WebClient).DownloadFile(\'' + origin + '/bin/' + instBin + '\',\'`$env:TEMP/ddns-installer.exe\') }';
+    ps += ' catch { Write-Host (\'DL FAIL: \' + `$_.Exception.Message); exit 1 };';
+    ps += ' Start-Process `$env:TEMP/ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
     ps += '}"';
+
     return ps;
   }
   // Linux: 版本化命名 — 下载到 node-agent-v{VERSION}-{os}-{arch}, 更新符号链接
@@ -1939,6 +1971,57 @@ async function copyDeployCmd() {
   var cmd = getDeployCmd();
   try { await navigator.clipboard.writeText(cmd); toast('已复制'); }
   catch(e) { prompt('复制命令:', cmd); }
+}
+
+// onDeployAction dispatches to copy (Linux) or download (Windows) based on OS selection.
+function onDeployAction() {
+  var os = document.getElementById('deploy-os').value;
+  if (os.indexOf('win') === 0) {
+    downloadWinInstaller();
+  } else {
+    copyDeployCmd();
+  }
+}
+
+// downloadWinInstaller triggers download of the pre-built ZIP install package.
+// downloadWinInstaller 运行时请求服务端动态打包 ZIP，打包完成后自动触发下载。
+function downloadWinInstaller() {
+  var ver = document.getElementById('deploy-ver').value;
+  var os = document.getElementById('deploy-os').value;
+  var url = '/api/admin/download-installer?ver=' + (ver || 'dev') + '&os=' + os;
+  var filename = 'ddns-manager-install-v' + (ver || 'dev') + '-' + os + '.zip';
+  toast('正在进行软件打包，打包完成后会自动下载，请稍候...');
+  var headers = {};
+  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  fetch(url, {headers: headers}).then(function(r) {
+    if (!r.ok) { toast('打包失败: HTTP ' + r.status, 'error'); return; }
+    return r.blob();
+  }).then(function(blob) {
+    if (!blob) return;
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    toast('下载已开始');
+  }).catch(function(e) { toast('下载失败', 'error'); });
+}
+
+// toggleDeployButton swaps the deploy button between copy (Linux) and download (Windows).
+function toggleDeployButton() {
+  var os = document.getElementById('deploy-os').value;
+  var copyBtn = document.getElementById('deploy-copy-btn');
+  var dlBtn = document.getElementById('deploy-dl-btn');
+  if (!copyBtn || !dlBtn) return;
+  if (os.indexOf('win') === 0) {
+    copyBtn.style.display = 'none';
+    dlBtn.style.display = '';
+  } else {
+    copyBtn.style.display = '';
+    dlBtn.style.display = 'none';
+  }
 }
 
 async function saveForcedVersion() {
@@ -1974,7 +2057,7 @@ async function batchUpgrade() {
     var row = cbs[i].closest('tr');
     if (row) {
       var statusCell = row.querySelector('td:last-child');
-      if (statusCell) statusCell.innerHTML = '<span class="badge badge-orange">等待中</span>';
+      if (statusCell) { statusCell.innerHTML = '<span class="badge badge-orange">等待中</span>'; statusCell.className = 'col-badge'; }
     }
     try {
       await apiJSON('/api/admin/agent-version', {method: 'POST', body: {latest_version: targetVer}});

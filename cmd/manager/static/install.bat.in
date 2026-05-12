@@ -1,0 +1,49 @@
+@echo off
+REM ddns-manager Windows 安装启动器
+REM 用途: 提升管理员权限 → 启动 Go 安装向导
+REM 此文件由 build.sh 自动生成，__VERSION__ 在构建时替换为实际版本号
+
+chcp 65001 >nul
+title ddns-manager v__VERSION__ 安装向导
+
+echo ============================================
+echo   ddns-manager Windows 节点安装
+echo   Version: v__VERSION__  ^|  Lanxun CO.,Ltd.
+echo ============================================
+echo.
+
+REM ── 检查管理员权限 ──
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 请右键 → 以管理员身份运行 install.bat
+    echo.
+    pause
+    exit /b 1
+)
+
+REM ── 定位安装器 (同目录) ──
+set "INSTALLER=%~dp0ddns-installer.exe"
+if not exist "%INSTALLER%" (
+    echo [错误] 未找到 ddns-installer.exe
+    echo        请确保 install.bat 和 ddns-installer.exe 在同一目录
+    echo        当前目录: %~dp0
+    echo.
+    pause
+    exit /b 1
+)
+
+REM ── 启动安装向导 ──
+echo 启动安装向导...
+echo.
+"%INSTALLER%" %*
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [错误] 安装未完成 (错误码: %errorlevel%)
+    pause
+    exit /b %errorlevel%
+)
+
+echo.
+echo 安装完成！
+pause

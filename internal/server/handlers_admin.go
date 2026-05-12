@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -113,6 +114,11 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "名称和提供商为必填项")
 		return
 	}
+	// 校验 DNS provider 名称 — 防止拼写错误导致后续配置渲染失败
+	if !model.IsKnownDNSProvider(req.Provider) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("未知的DNS提供商: %q (支持的提供商: %s)", req.Provider, strings.Join(model.KnownDNSProviders(), ", ")))
+		return
+	}
 	keys, _ := s.store.LoadDNSKeys()
 	if keys == nil {
 		keys = make(map[string]*model.DNSKeyRecord)
@@ -136,13 +142,11 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleDeleteDNSKey(w http.ResponseWriter, r *http.Request) {
 	p := mux.Vars(r)["name"]
-	keys, _ := s.store.LoadDNSKeys()
-	if _, ok := keys[p]; !ok {
+	// 原子删除 — 持写锁读-删-写，防止并发覆盖
+	if err := s.store.DeleteDNSKeyAtomic(p); err != nil {
 		jsonErr(w, http.StatusNotFound, "密钥未找到")
 		return
 	}
-	delete(keys, p)
-	s.store.SaveDNSKeys(keys)
 	s.logMgr.Log("dns-key", "已删除", p, "info")
 	jsonOK(w, map[string]string{"deleted": p})
 }
@@ -281,32 +285,35 @@ func (s *Server) handleSetAgentVersion(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
-	cfg, _ := s.store.LoadAgentConfig()
-	if cfg == nil {
-		cfg = &store.AgentConfig{}
-	}
 
-	// 版本退避自动管理：
-	// - 版本变更 → 全量清空退避（新版本一切重来）
-	// - 同版本重设 → 仅清理已放弃节点（RetryCount>=5），已完成/进行中保留
-	if req.LatestVersion != cfg.LatestVersion && cfg.LatestVersion != "" {
-		cfg.UpgradeState = make(map[string]store.UpgJob)
-	} else if req.LatestVersion == cfg.LatestVersion && cfg.UpgradeState != nil {
-		var resetCount int
-		for id, job := range cfg.UpgradeState {
-			if job.Completed == "" && job.RetryCount >= 5 {
-				delete(cfg.UpgradeState, id)
-				resetCount++
+	// 原子更新 — 持写锁读-改-写，防止并发覆盖
+	err := s.store.UpdateAgentConfigAtomic(func(cfg *store.AgentConfig) {
+		prevVer := cfg.LatestVersion
+
+		// 版本退避自动管理：
+		// - 版本变更 → 全量清空退避（新版本一切重来）
+		// - 同版本重设 → 仅清理已放弃节点（RetryCount>=5），已完成/进行中保留
+		if req.LatestVersion != prevVer && prevVer != "" {
+			cfg.UpgradeState = make(map[string]store.UpgJob)
+		} else if req.LatestVersion == prevVer && cfg.UpgradeState != nil {
+			var resetCount int
+			for id, job := range cfg.UpgradeState {
+				if job.Completed == "" && job.RetryCount >= 5 {
+					delete(cfg.UpgradeState, id)
+					resetCount++
+				}
+			}
+			if resetCount > 0 {
+				s.logMgr.Log("upgrade", "已重置",
+					fmt.Sprintf("版本=%s 节点=%d(已放弃→重试)", req.LatestVersion, resetCount), "info")
 			}
 		}
-		if resetCount > 0 {
-			s.logMgr.Log("upgrade", "已重置",
-				fmt.Sprintf("版本=%s 节点=%d(已放弃→重试)", req.LatestVersion, resetCount), "info")
-		}
+		cfg.LatestVersion = req.LatestVersion
+	})
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "保存版本失败")
+		return
 	}
-
-	cfg.LatestVersion = req.LatestVersion
-	s.store.SaveAgentConfig(cfg)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleListAgentBinaries(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +447,175 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// ZIP 文件强制下载，触发浏览器另存为对话框
+	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		w.Header().Set("Content-Type", "application/zip")
+	}
 	http.ServeFile(w, r, filepath.Join(s.cfg.DataDir, "bin", filename))
 }
+
+// handleDownloadInstaller 运行时动态打包 Windows 安装 ZIP。
+// GET /api/admin/download-installer?ver=v1.5.7&os=windows-amd64
+func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request) {
+	ver := strings.TrimSpace(r.URL.Query().Get("ver"))
+	osName := strings.TrimSpace(r.URL.Query().Get("os"))
+	if ver == "" || osName == "" {
+		jsonErr(w, http.StatusBadRequest, "ver 和 os 参数必填")
+		return
+	}
+	// 安全校验：仅允许 windows-amd64
+	if osName != "windows-amd64" {
+		jsonErr(w, http.StatusBadRequest, "当前仅支持 windows-amd64")
+		return
+	}
+	binDir := filepath.Join(s.cfg.DataDir, "bin")
+
+	// 查找 installer (通用，优先用无版本号的 latest，兜底用最新版本化)
+	instName := "ddns-installer-" + osName + ".exe"
+	instPath := filepath.Join(binDir, instName)
+	if _, err := os.Stat(instPath); err != nil {
+		// 兜底：找最新版本化的 installer
+		entries, _ := os.ReadDir(binDir)
+		for i := len(entries) - 1; i >= 0; i-- {
+			n := entries[i].Name()
+			if strings.HasPrefix(n, "ddns-installer-v") && strings.HasSuffix(n, "-"+osName+".exe") {
+				instName = n
+				instPath = filepath.Join(binDir, n)
+				break
+			}
+		}
+		if _, err2 := os.Stat(instPath); err2 != nil {
+			jsonErr(w, http.StatusNotFound, "安装器二进制未找到，请上传 ddns-installer-"+osName+".exe")
+			return
+		}
+	}
+
+	// 查找 agent (版本化)
+	agentName := "node-agent-v" + ver + "-" + osName + ".exe"
+	agentPath := filepath.Join(binDir, agentName)
+	if _, err := os.Stat(agentPath); err != nil {
+		jsonErr(w, http.StatusNotFound, "客户端二进制未找到: "+agentName+"，请先上传")
+		return
+	}
+
+	// 生成 install.bat 和 README.txt (占位符替换 + LF→CRLF)
+	batContent := strings.ReplaceAll(installBatTemplate, "__VERSION__", ver)
+	batContent = strings.ReplaceAll(batContent, "\n", "\r\n")
+	readmeContent := strings.ReplaceAll(readmeTemplate, "__VERSION__", ver)
+	readmeContent = strings.ReplaceAll(readmeContent, "\n", "\r\n")
+
+	// 流式打包 ZIP — 大文件通过 io.Copy 直接写入，不缓冲到内存
+	zipName := "ddns-manager-install-v" + ver + "-" + osName + ".zip"
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", zipName))
+	w.Header().Set("Content-Type", "application/zip")
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// 写入 agent 二进制 (流式，不缓冲)
+	if fw, err := zw.Create(filepath.Base(agentPath)); err == nil {
+		if f, err := os.Open(agentPath); err == nil {
+			io.Copy(fw, f)
+			f.Close()
+		}
+	}
+
+	// 写入 installer 二进制 (流式，不缓冲)
+	if fw, err := zw.Create("ddns-installer.exe"); err == nil {
+		if f, err := os.Open(instPath); err == nil {
+			io.Copy(fw, f)
+			f.Close()
+		}
+	}
+
+	// 写入小文件 (install.bat + README.txt 很小，内存缓冲无影响)
+	for _, f := range []struct {
+		name    string
+		content []byte
+	}{
+		{"install.bat", []byte(batContent)},
+		{"README.txt", []byte(readmeContent)},
+	} {
+		if fw, err := zw.Create(f.name); err == nil {
+			fw.Write(f.content)
+		}
+	}
+}
+
+// install.bat 模板 — 与 build/install.bat.in 内容一致。
+// __VERSION__ 运行时替换为实际版本号。
+const installBatTemplate = `@echo off
+chcp 65001 >nul
+title ddns-manager v__VERSION__ 安装向导
+
+echo ============================================
+echo   ddns-manager Windows 节点安装
+echo   Version: v__VERSION__  ^|  Lanxun CO.,Ltd.
+echo ============================================
+echo.
+
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 请右键以管理员身份运行 install.bat
+    echo.
+    pause
+    exit /b 1
+)
+
+set "INSTALLER=%~dp0ddns-installer.exe"
+if not exist "%INSTALLER%" (
+    echo [错误] 未找到 ddns-installer.exe
+    echo        请确保所有文件在同一目录
+    echo.
+    pause
+    exit /b 1
+)
+
+echo 启动安装向导...
+echo.
+"%INSTALLER%" %*
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [错误] 安装未完成 (错误码: %errorlevel%)
+    pause
+    exit /b %errorlevel%
+)
+
+echo.
+echo 安装完成！
+pause
+`
+
+// README.txt 模板 — __VERSION__ 运行时替换
+const readmeTemplate = `============================================
+  ddns-manager Windows 节点安装包
+  Version: v__VERSION__
+  Lanxun CO.,Ltd.
+============================================
+
+[功能介绍]
+本安装包用于在 Windows 系统上安装 ddns-manager 节点客户端。
+安装后将自动注册为 Windows 服务，每 5 分钟向管理端上报心跳。
+
+[文件说明]
+  install.bat            - 安装启动器（右键以管理员身份运行）
+  ddns-installer.exe     - Go 安装向导（交互式）
+  node-agent*.exe        - 节点守护进程
+
+[安装步骤]
+  1. 将 zip 内所有文件解压到同一目录
+  2. 右键 install.bat 以管理员身份运行
+  3. 按向导提示完成安装
+  4. 登录管理端 WebUI 审批并配置节点
+
+[注意事项]
+  . 如已安装 ddns-go，向导会提示冲突并要求清除
+  . 安装目录会自动创建，旧版会自动清理（配置保留）
+
+[卸载]
+  以管理员身份运行:
+    C:\ddns-manager\ddns-installer.exe -uninstall
+`
 

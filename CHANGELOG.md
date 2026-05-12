@@ -1,5 +1,67 @@
 # CHANGELOG
 
+## v1.5.8 — 2026-05-12
+
+### 🔐 安全加固 + 性能优化（7 项全量审计修复）
+
+#### 安全
+- **节点审批门控** — `NodeRecord.Approved` 字段，心跳处理前检查。未审批节点只更新状态，不推送配置/证书/升级，防止未授权节点获取 DNS Key 和证书
+- **/api/ping 限流** — ping 端点独立 1000 req/min 限流，防止 HTTP flood 探测
+
+#### 性能
+- **心跳 JSON 内存缓存** — `ManagerStore` 添加 `nodesCache`/`dnsKeysCache`，首次加载后所有心跳读内存（零文件 I/O），写操作 write-through 同步更新缓存
+
+#### 稳健性
+- **download-installer ZIP 流式化** — `handleDownloadInstaller` 改用 `io.Copy` 直接流式写入 ZIP，不再全量缓冲二进制到内存（15MB → 0 额外内存）
+- **DeleteDNSKey 原子化** — `DeleteDNSKeyAtomic` 持写锁读-删-写，消除并发删除覆盖风险
+- **detectPlatform 默认值安全化** — 硬件信息未知时返回空字符串，调用方跳过升级推送
+- **IIS 证书指纹提取稳健化** — 改用 `certutil -dump` 提取指纹（格式固定），替代 PowerShell `Write-Host` 字符串匹配
+
+#### 功能增强
+- **Agent `-dir` flag** — Agent 支持 `-dir /custom/path` 覆盖默认安装目录，解决非标准路径安装时配置找不到的问题
+- **ConfigError 回传** — `HeartbeatResp.ConfigError` 字段，配置渲染失败时 Agent 日志可见原因
+- **DNS provider 名称校验** — `handleSaveDNSKey` 保存时校验 provider 名称，拒绝未知 DNS 提供商
+
+#### 编译
+- **go.mod go 1.25.0** 保持与 ddns-go v6.17.0 依赖一致
+
+#### 🧪 测试
+- 新增 `TestNodeApproval_NewRegistrationDefault` — 审批默认值验证
+- 新增 `TestDetectPlatform_NilHardware_ReturnsEmpty` — 空硬件边界条件
+- 新增 `TestDNSProviderValidation` — DNS provider 名称校验
+
+## v1.5.7 — 2026-05-11
+
+### 🪟 Windows 部署流程重做：一键复制 → ZIP 下载
+
+#### 运行时动态打包
+- **`GET /api/admin/download-installer?ver=&os=`** — 服务端实时打包 ZIP，选什么版本就打什么包
+  - 安装器用通用 `ddns-installer-windows-amd64.exe`（一个就够了）
+  - 客户端按版本拉 `node-agent-v{VERSION}-windows-amd64.exe`
+  - install.bat + README.txt 模板占位符运行时替换 + LF→CRLF 转换
+- **不再需要预构建 ZIP** — 发新版只需上传 agent + installer 二进制，下载时自动打包
+
+#### 安装向导增强（cmd/installer）
+- **Step 0 环境检查**: 自动清理旧版 ddns-manager + ddns-go 冲突检测
+  - ddns-go 检测覆盖：Windows 服务 + 程序目录 + 配置文件
+  - 冲突时详细说明风险 → 用户确认清除，不同意则退出安装
+- **Step 3 指纹预检**: 新增 `GET /api/nodes/{id}/fingerprint` 公开端点
+  - 同指纹 → 旧机重装，自动继承配置
+  - 不同指纹 → 新机抢名，要求改名
+- **Agent 本地优先**: `findLocalAgent()` 扫描同目录 `node-agent*.exe`，不再要求固定名
+
+#### WebUI 改进
+- **部署按钮自适应**: Windows 选「下载安装包」→ 打包提示 → blob 下载
+- **系统选择持久化**: `deployOs` 变量记住选择，5 秒刷新不丢失
+- **网卡下拉始终可见**: 多网卡节点无论选什么获取方式都能看到网卡列表
+
+#### 🐛 修复
+- getDeployCmd() 多余 `}` 导致整页 JS 崩溃 → 登录按钮无响应
+- install.bat 模板 `%%` 被 `fmt.Sprintf` 误解析 → 改用占位符 + `strings.ReplaceAll`
+- installer 死找 `node-agent.exe` 文件名 → 改为扫描 `node-agent*.exe`
+
+---
+
 ## v1.5.6 — 2026-05-11
 
 ### 🔴 关键 Bug 修复（6 项）

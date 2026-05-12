@@ -31,6 +31,7 @@ type Server struct {
 	globalLimiter    *rateLimiter
 	heartbeatLimiter *rateLimiter
 	loginLimiter     *rateLimiter
+	pingLimiter      *rateLimiter // lightweight limit for /api/ping (1000 req/min)
 	rateLock         sync.RWMutex
 	// concurrency protection
 	adminTokenMu sync.RWMutex
@@ -114,7 +115,11 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 }
 
 func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager) *Server {
-	svr := &Server{cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr, accessCollector: newAccessStatsCollector(cfg.DataDir)}
+	svr := &Server{
+		cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr,
+		accessCollector: newAccessStatsCollector(cfg.DataDir),
+		pingLimiter:     newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
+	}
 	st, err := s.LoadAdminState()
 	if err != nil {
 		log.Fatalf("加载管理员状态失败: %v", err)
@@ -205,11 +210,13 @@ func (s *Server) updateACMEMgrKey(index int, keyPEM string) {
 func (s *Server) Router() *mux.Router {
 	r := mux.NewRouter()
 	// public (with rate limiting)
-	r.HandleFunc("/api/ping", s.handlePing).Methods("GET")
+	r.HandleFunc("/api/ping", s.pingRateLimitMiddleware(s.handlePing)).Methods("GET")
 	r.HandleFunc("/api/auth/login", s.rateLimitMiddleware(s.handleLogin, false, true)).Methods("POST")
 	r.HandleFunc("/api/admin/status", s.handleAdminStatus).Methods("GET")
 	r.HandleFunc("/api/heartbeat", s.rateLimitMiddleware(s.handleHeartbeat, true, false)).Methods("POST")
 	r.HandleFunc("/api/register", s.rateLimitMiddleware(s.handleRegister, false, false)).Methods("POST")
+	// fingerprint lookup (public) — installer pre-check for node name conflicts
+	r.HandleFunc("/api/nodes/{id}/fingerprint", s.handleNodeFingerprint).Methods("GET")
 
 	// admin (auth required)
 	a := r.PathPrefix("/api/admin").Subrouter()
@@ -255,6 +262,8 @@ func (s *Server) Router() *mux.Router {
 	a.HandleFunc("/agent-binaries", s.handleListAgentBinaries).Methods("GET")
 	a.HandleFunc("/agent-binaries", s.handleUploadAgentBinary).Methods("POST")
 	a.HandleFunc("/agent-binaries/{name}", s.handleDeleteAgentBinary).Methods("DELETE")
+	// 运行时打包 Windows 安装 ZIP
+	a.HandleFunc("/download-installer", s.handleDownloadInstaller).Methods("GET")
 	// smtp
 	a.HandleFunc("/smtp", s.handleGetSMTP).Methods("GET")
 	a.HandleFunc("/smtp", s.handleSaveSMTP).Methods("POST")

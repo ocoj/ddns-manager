@@ -71,25 +71,40 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .stat-card .num.green{color:var(--c-green)}
 .stat-card .num.red{color:var(--c-red)}
 
-.btn{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .15s;border:none;gap:6px;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .15s;border:none;gap:6px;white-space:nowrap;font-family:inherit;vertical-align:middle}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-primary{background:var(--c-primary);color:#fff}.btn-primary:hover:not(:disabled){opacity:.85}
 .btn-secondary{background:var(--c-card);color:var(--c-primary);border:1px solid var(--c-input-border)}.btn-secondary:hover:not(:disabled){border-color:var(--c-primary)}
 .btn-danger{background:var(--c-card);color:var(--c-red);border:1px solid #ffccc7}.btn-danger:hover:not(:disabled){background:#fff2f0}
-.btn-sm{height:28px;min-width:48px;padding:0 12px;font-size:12px}
-.btn-row{display:flex;gap:8px;justify-content:flex-end}
-.btn-wrap{display:flex;gap:8px;align-items:center}
+.btn-sm{height:28px;min-width:48px;padding:0 10px;font-size:12px}
+.btn-row{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.btn-wrap{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
 
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:var(--c-th-bg);font-size:11px;font-weight:700;color:var(--c-text2);padding:10px 12px;text-transform:uppercase;letter-spacing:.3px}
+table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+th{background:var(--c-th-bg);font-size:11px;font-weight:700;color:var(--c-text2);padding:10px 12px;text-transform:uppercase;letter-spacing:.3px;overflow:hidden;text-overflow:ellipsis}
 th.sortable:hover{background:#e6f0ff;color:var(--c-primary)}
 th.sortable{transition:background .15s,color .15s}
-td{padding:10px 12px;border-bottom:1px solid var(--c-border)}
+td{padding:10px 12px;border-bottom:1px solid var(--c-border);overflow:hidden;text-overflow:ellipsis}
 tr:hover td{background:var(--c-bg)}
 th{text-align:left}
-.col-act{text-align:right;white-space:nowrap}
-.col-badge{text-align:center}
+/* 操作列 — 固定宽度右对齐 */
+.col-act{text-align:right;white-space:nowrap;width:110px}
+.col-act-wide{text-align:right;white-space:nowrap;width:150px}
+.col-act-xwide{text-align:right;white-space:nowrap;width:210px}
+/* 徽章列 — 居中窄列 */
+.col-badge{text-align:center;width:70px}
+/* 等宽字体列 */
 .col-mono{font-family:Consolas,Monaco,monospace;font-size:12px}
+/* 名称列 — 自适应 */
+.col-name{overflow:hidden;text-overflow:ellipsis}
+/* 版本列 */
+.col-ver{width:85px;font-family:Consolas,Monaco,monospace;font-size:12px;text-align:center}
+/* 到期列 */
+.col-exp{width:100px}
+/* IP列 */
+.col-ip{width:130px;font-family:Consolas,Monaco,monospace;font-size:11px;word-break:break-all}
+/* 域名列 */
+.col-dom{overflow:hidden;text-overflow:ellipsis}
 .deploy-card .form-inline{flex-wrap:wrap;gap:6px}
 .deploy-card .btn-primary{flex-shrink:0}
 .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600}
@@ -191,8 +206,10 @@ th{text-align:left}
 
   /* ===== 表格 — 卡片内横滚 ===== */
   .card{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
-  table{min-width:100%;white-space:nowrap;border-collapse:collapse}
+  table{min-width:100%;white-space:nowrap;border-collapse:collapse;table-layout:auto}
   th,td{padding:7px 8px;font-size:11px;white-space:nowrap}
+  /* 移动端重置固定列宽为自适应 */
+  .col-act,.col-act-wide,.col-act-xwide,.col-badge,.col-ver,.col-exp,.col-ip{width:auto!important}
 
   /* ===== 表单 ===== */
   .form-inline{flex-wrap:wrap;gap:8px}
@@ -901,7 +918,7 @@ function renderDashboard(stats, nodes, events, access) {
   h += '</div>';
 
   h += '<div class="card"><div class="card-header"><h3>节点列表</h3></div>';
-  h += '<table><thead><tr><th data-sort="name">节点</th><th data-sort="ip">IP</th><th data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th data-sort="version">版本</th><th class="col-badge" data-sort="status">状态</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th class="col-name" data-sort="name">节点</th><th class="col-ip" data-sort="ip">IP</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="status">状态</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
   } else {
@@ -913,11 +930,11 @@ function renderDashboard(stats, nodes, events, access) {
       n.healthSort = {OK:'\u0001',ERR:'\u0002',DOWN:'\u0003','-':'\u0004'}[n.health] || '\u0005';
       var ipHtml = he(n.ip || '-');
       if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
-      h += '<tr><td><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
-      h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
-      h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      h += '<tr><td class="col-name"><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
+      h += '<td class="col-ip mono">' + ipHtml + '</td>';
+      h += '<td class="col-dom"><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
       h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
-      h += '<td class="mono">' + he(n.version || '-') + '</td>';
+      h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + '</td></tr>';
     });
   }
@@ -1220,7 +1237,7 @@ function renderNodes(nodes) {
   // Apply saved sort state before rendering
   sortData(nodes, 'nodes');
   var h = '<div class="card"><div class="card-header"><h3>节点列表 (' + nodes.length + ')</h3></div>';
-  h += '<table><thead><tr><th data-sort="name">节点名称</th><th data-sort="ip">IP</th><th data-sort="os">系统</th><th data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th data-sort="version">版本</th><th class="col-badge" data-sort="online">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
+  h += '<table><thead><tr><th class="col-name" data-sort="name">节点名称</th><th class="col-ip" data-sort="ip">IP</th><th data-sort="os">系统</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="online">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="8" class="empty">暂无节点</td></tr>';
   } else {
@@ -1235,12 +1252,12 @@ function renderNodes(nodes) {
       var ipHtml = he(n.ip || '-');
       if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
       h += '<tr>';
-      h += '<td><b>' + he(n.name) + '</b><div class="meta-row">' + he(n.fingerprint.substring(0,16)) + '...</div></td>';
-      h += '<td class="mono" style="font-size:11px;word-break:break-all">' + ipHtml + '</td>';
-      h += '<td class="mono" style="font-size:12px">' + he(n.os) + ' / ' + he(n.arch) + '</td>';
-      h += '<td><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      h += '<td class="col-name"><b>' + he(n.name) + '</b><div class="meta-row">' + he(n.fingerprint.substring(0,16)) + '...</div></td>';
+      h += '<td class="col-ip mono">' + ipHtml + '</td>';
+      h += '<td class="mono">' + he(n.os) + ' / ' + he(n.arch) + '</td>';
+      h += '<td class="col-dom"><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
       h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
-      h += '<td class="mono">' + he(n.version || '-') + '</td>';
+      h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
       h += '<td class="col-act"><div class="btn-wrap">';
       h += '<button class="btn btn-sm btn-secondary" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
@@ -1508,7 +1525,7 @@ function renderDNS(keysMap, certData, acData) {
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="name">名称</th><th>SAN</th><th data-sort="expiry">到期</th><th data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th data-sort="name">名称</th><th>SAN</th><th class="col-exp" data-sort="expiry">到期</th><th data-sort="daysLeft">剩余</th><th class="col-act-xwide">操作</th></tr></thead><tbody>';
     certs.forEach(function(c) {
       var name = c.bundle_name || c.name || '';
       var exp = c.expiry || '';
@@ -1520,7 +1537,7 @@ function renderDNS(keysMap, certData, acData) {
       var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
       h += '<tr><td><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
       h += '<td><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
-      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button class="btn btn-sm btn-secondary" onclick="downloadPFX(\'' + jsStr(name) + '\')" title="下载 PFX 用于 IIS 手动导入">PFX</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act-xwide"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button class="btn btn-sm btn-secondary" onclick="downloadPFX(\'' + jsStr(name) + '\')" title="下载 PFX 用于 IIS 手动导入">PFX</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }

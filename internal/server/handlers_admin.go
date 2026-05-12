@@ -167,18 +167,25 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 100
 	}
 	// date range: from/to in RFC3339 or "2006-01-02" format
+	// 日期字符串按配置时区解析 (如 Asia/Shanghai → UTC+8)
+	tzCfg, _ := s.store.LoadTimezoneConfig()
+	loc := time.UTC
+	if tzCfg != nil && tzCfg.Timezone != "" {
+		if l, err := time.LoadLocation(tzCfg.Timezone); err == nil {
+			loc = l
+		}
+	}
 	var from, to time.Time
 	if fs := r.URL.Query().Get("from"); fs != "" {
 		from, _ = time.Parse(time.RFC3339, fs)
 		if from.IsZero() {
-			from, _ = time.Parse("2006-01-02", fs)
+			from, _ = time.ParseInLocation("2006-01-02", fs, loc)
 		}
 	}
 	if ts := r.URL.Query().Get("to"); ts != "" {
 		to, _ = time.Parse(time.RFC3339, ts)
 		if to.IsZero() {
-			// "2006-01-02" → end of that day
-			if t, err := time.Parse("2006-01-02", ts); err == nil {
+			if t, err := time.ParseInLocation("2006-01-02", ts, loc); err == nil {
 				to = t.Add(24*time.Hour - time.Second)
 			}
 		}

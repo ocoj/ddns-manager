@@ -54,6 +54,7 @@
 - **manifest 自动维护** — `RebuildManifest()` 上传/删除/启动三触发，扫描 `/bin/` 取最高版本
 - **批量升级状态显示空** — `_upgState` API 调用前预填 pending
 - **证书到期解析随机** — map 遍历改文件名排序
+- **accessStats 递归死锁** — `record()`/`snapshot()` 持锁调 `nowInTZ()` 导致登录/注册/心跳全部超时，拆 `nowInTZLocked`
 
 #### 编译
 - **go.mod go 1.25.0** 保持与 ddns-go v6.17.0 依赖一致

@@ -2438,7 +2438,11 @@ function fmtTime(utcStr) {
     var d = new Date(utcStr);
     if (isNaN(d.getTime())) return utcStr;
     var tz = window._tz || localStorage.getItem('ddns-tz') || 'Asia/Shanghai';
-    return d.toLocaleString('sv-SE', {timeZone: tz}).replace('T', ' ');
+    var opts = {timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false};
+    var f = new Intl.DateTimeFormat('en-CA', opts);
+    var parts = f.formatToParts(d);
+    var get = function(t){ for(var i=0;i<parts.length;i++) if(parts[i].type===t) return parts[i].value; return ''; };
+    return get('year')+'-'+get('month')+'-'+get('day')+' '+get('hour')+':'+get('minute')+':'+get('second');
   } catch(e) { return utcStr; }
 }
 

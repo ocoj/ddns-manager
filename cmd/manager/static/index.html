@@ -55,9 +55,6 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .login-card input:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)}
 .login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;display:none}
 .login-card .err.show{display:block}
-.btn-login{width:100%;height:38px;background:var(--c-primary);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;margin-top:8px}
-.btn-login:hover{opacity:.85}
-.btn-login:disabled{opacity:.6;cursor:not-allowed}
 
 .card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px}
 .card h3{font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:12px}
@@ -71,14 +68,44 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .stat-card .num.green{color:var(--c-green)}
 .stat-card .num.red{color:var(--c-red)}
 
-.btn{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .15s;border:none;gap:6px;white-space:nowrap;font-family:inherit;vertical-align:middle}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.btn-primary{background:var(--c-primary);color:#fff}.btn-primary:hover:not(:disabled){opacity:.85}
-.btn-secondary{background:var(--c-card);color:var(--c-primary);border:1px solid var(--c-input-border)}.btn-secondary:hover:not(:disabled){border-color:var(--c-primary)}
-.btn-danger{background:var(--c-card);color:var(--c-red);border:1px solid #ffccc7}.btn-danger:hover:not(:disabled){background:#fff2f0}
-.btn-sm{height:28px;min-width:48px;padding:0 10px;font-size:12px}
+/* ═══ 按钮系统 ═══ */
+/* 表外功能按钮 — 34px, ≤4字70px, 超出自适应 */
+.btn{display:inline-flex;align-items:center;justify-content:center;height:34px;min-width:70px;padding:0 14px;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .15s;gap:6px;white-space:nowrap;font-family:inherit;vertical-align:middle;background:#fff;color:var(--c-text);border:1px solid var(--c-input-border);text-decoration:none}
+.btn:hover:not(:disabled){border-color:#87CEFA;background:#f0f8ff;color:var(--c-primary)}
+.btn:active:not(:disabled){background:var(--c-primary);border-color:var(--c-primary);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+/* 宽自适应按钮(>4字) */
+.btn-auto{min-width:0;padding:0 18px}
+
+/* 表内行操作按钮 — 23px, ≤2字48px, 超出自适应 */
+.btn-sm{height:23px;min-width:48px;padding:0 8px;font-size:12px;border-radius:4px}
+
+/* 危险操作保留红色系 */
+.btn-danger{color:var(--c-red);border-color:#ffccc7}
+.btn-danger:hover:not(:disabled){border-color:var(--c-red);background:#fff2f0;color:var(--c-red)}
+.btn-danger:active:not(:disabled){background:var(--c-red);border-color:var(--c-red);color:#fff}
+
+/* 主要操作(提交/保存类) — 实心蓝 */
+.btn-primary{background:var(--c-primary);border-color:var(--c-primary);color:#fff}
+.btn-primary:hover:not(:disabled){background:#4096ff;border-color:#4096ff;color:#fff}
+.btn-primary:active:not(:disabled){background:#0958d9;border-color:#0958d9;color:#fff}
+
 .btn-row{display:flex;gap:8px;justify-content:flex-end;align-items:center}
-.btn-wrap{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
+.btn-wrap{display:inline-flex;gap:4px;align-items:center}
+
+/* 登录按钮 */
+.btn-login{width:100%;height:38px;background:var(--c-primary);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;margin-top:8px}
+.btn-login:hover{opacity:.85}
+.btn-login:disabled{opacity:.6;cursor:not-allowed}
+
+/* ═══ 「更多」下拉 ═══ */
+.more-wrap{position:relative;display:inline-flex}
+.more-menu{display:none;position:absolute;top:100%;right:0;z-index:100;background:#fff;border:1px solid var(--c-border);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.1);min-width:80px;padding:4px 0;margin-top:2px}
+.more-menu.show{display:block}
+.more-menu button{display:block;width:100%;height:28px;padding:0 14px;border:none;background:none;font-size:12px;color:var(--c-text);cursor:pointer;text-align:left;white-space:nowrap;font-family:inherit}
+.more-menu button:hover{background:#f0f8ff;color:var(--c-primary)}
+.more-menu button.danger{color:var(--c-red)}
+.more-menu button.danger:hover{background:#fff2f0;color:var(--c-red)}
 
 table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
 th{background:var(--c-th-bg);font-size:11px;font-weight:700;color:var(--c-text2);padding:10px 12px;text-transform:uppercase;letter-spacing:.3px;overflow:hidden;text-overflow:ellipsis}
@@ -345,12 +372,12 @@ th{text-align:left}
 <div id="toasts"></div>
 
 <div class="modal-overlay" id="modal-node-config"><div class="modal-box"><h3><span id="modal-node-title">节点配置</span><button class="modal-close" onclick="closeModal('modal-node-config')">&times;</button></h3><div id="modal-node-body"></div></div></div>
-<div class="modal-overlay" id="modal-confirm"><div class="modal-box" style="width:400px"><h3 id="modal-confirm-title">确认操作</h3><p id="modal-confirm-msg" style="margin-bottom:16px;font-size:13px"></p><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('modal-confirm')">取消</button><button class="btn btn-danger" id="modal-confirm-btn">确认</button></div></div></div>
-<div class="modal-overlay" id="modal-acme-account"><div class="modal-box" style="width:500px"><h3><span id="modal-acme-title">添加 ACME 帐号</span><button class="modal-close" onclick="closeModal('modal-acme-account')">&times;</button></h3><div class="form-group"><label>Email</label><input id="acme-email" placeholder="admin@example.com"></div><div class="form-group"><label>CA</label><select id="acme-ca"><option>Let's Encrypt</option><option>ZeroSSL</option><option>Google Trust Services</option></select></div><div class="form-group"><label>Key Type</label><select id="acme-keytype"><option>EC256</option><option>RSA2048</option><option>RSA4096</option></select></div><div class="form-group"><label>EAB KID (ZeroSSL 必填)</label><input id="acme-eabkid"></div><div class="form-group"><label>EAB HMAC (ZeroSSL 必填)</label><input id="acme-eabkey"></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-acme-account')">取消</button><button class="btn btn-primary" onclick="saveACMEAccount()">提交</button></div></div></div>
-<div class="modal-overlay" id="modal-acme-issue"><div class="modal-box" style="width:560px"><h3>ACME 申请证书<button class="modal-close" onclick="closeModal('modal-acme-issue')">&times;</button></h3><div class="form-group"><label>帐号</label><select id="acme-issue-account"></select></div><div class="form-group"><label>域名 (逗号分隔)</label><input id="acme-issue-domains" placeholder="example.com,*.example.com"><div class="tip">泛域名(*.example.com)需要 DNS-01 验证，必须选 DNS 提供商</div></div><div class="form-group"><label>DNS 提供商 (DNS-01 必选)</label><select id="acme-issue-dns"><option value="">-- HTTP-01 (非泛域名) --</option></select></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-acme-issue')">取消</button><button class="btn btn-primary" id="acme-issue-btn" onclick="issueACME()">申请</button></div><div id="acme-log" style="display:none;margin-top:12px;background:#1a1a2e;color:#00ff88;padding:10px;border-radius:6px;font:12px Consolas,monospace;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div></div></div>
+<div class="modal-overlay" id="modal-confirm"><div class="modal-box" style="width:400px"><h3 id="modal-confirm-title">确认操作</h3><p id="modal-confirm-msg" style="margin-bottom:16px;font-size:13px"></p><div class="btn-row"><button class="btn btn" onclick="closeModal('modal-confirm')">取消</button><button class="btn btn-danger" id="modal-confirm-btn">确认</button></div></div></div>
+<div class="modal-overlay" id="modal-acme-account"><div class="modal-box" style="width:500px"><h3><span id="modal-acme-title">添加 ACME 帐号</span><button class="modal-close" onclick="closeModal('modal-acme-account')">&times;</button></h3><div class="form-group"><label>Email</label><input id="acme-email" placeholder="admin@example.com"></div><div class="form-group"><label>CA</label><select id="acme-ca"><option>Let's Encrypt</option><option>ZeroSSL</option><option>Google Trust Services</option></select></div><div class="form-group"><label>Key Type</label><select id="acme-keytype"><option>EC256</option><option>RSA2048</option><option>RSA4096</option></select></div><div class="form-group"><label>EAB KID (ZeroSSL 必填)</label><input id="acme-eabkid"></div><div class="form-group"><label>EAB HMAC (ZeroSSL 必填)</label><input id="acme-eabkey"></div><div class="btn-row" style="margin-top:12px"><button class="btn btn" onclick="closeModal('modal-acme-account')">取消</button><button class="btn btn-primary" onclick="saveACMEAccount()">提交</button></div></div></div>
+<div class="modal-overlay" id="modal-acme-issue"><div class="modal-box" style="width:560px"><h3>ACME 申请证书<button class="modal-close" onclick="closeModal('modal-acme-issue')">&times;</button></h3><div class="form-group"><label>帐号</label><select id="acme-issue-account"></select></div><div class="form-group"><label>域名 (逗号分隔)</label><input id="acme-issue-domains" placeholder="example.com,*.example.com"><div class="tip">泛域名(*.example.com)需要 DNS-01 验证，必须选 DNS 提供商</div></div><div class="form-group"><label>DNS 提供商 (DNS-01 必选)</label><select id="acme-issue-dns"><option value="">-- HTTP-01 (非泛域名) --</option></select></div><div class="btn-row" style="margin-top:12px"><button class="btn btn" onclick="closeModal('modal-acme-issue')">取消</button><button class="btn btn-primary" id="acme-issue-btn" onclick="issueACME()">申请</button></div><div id="acme-log" style="display:none;margin-top:12px;background:#1a1a2e;color:#00ff88;padding:10px;border-radius:6px;font:12px Consolas,monospace;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div></div></div>
 <div class="modal-overlay" id="modal-cert-detail"><div class="modal-box" style="width:460px"><h3>证书详情<button class="modal-close" onclick="closeModal('modal-cert-detail')">&times;</button></h3><div id="cert-detail-body" style="font-size:13px;line-height:2"></div></div></div>
-<div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
-<div class="modal-overlay" id="modal-dnskey-add"><div class="modal-box" style="width:420px"><h3>添加 DNS Key<button class="modal-close" onclick="closeModal('modal-dnskey-add')">&times;</button></h3><div class="form-group"><label>名称</label><input id="dnskey-name" placeholder="e.g. 阿里云-生产"><div class="tip">自定义名称，同一供应商可建多个 Key</div></div><div class="form-group"><label>提供商</label><select id="dnskey-provider"><option value="">-- 请选择 --</option><option value="alidns">阿里云 (alidns)</option><option value="aliesa">阿里云国际 (aliesa)</option><option value="tencentcloud">腾讯云 (tencentcloud)</option><option value="dnspod">DNSPod (dnspod)</option><option value="cloudflare">Cloudflare</option><option value="huaweicloud">华为云 (huaweicloud)</option><option value="baiducloud">百度云 (baiducloud)</option><option value="porkbun">Porkbun</option><option value="godaddy">GoDaddy</option><option value="namecheap">Namecheap</option><option value="namesilo">NameSilo</option><option value="dynv6">Dynv6</option><option value="dnsla">DNSLA</option><option value="dynadot">Dynadot</option><option value="vercel">Vercel</option><option value="cloudns">ClouDNS</option><option value="trafficroute">TrafficRoute</option><option value="callback">Callback</option><option value="spaceship">Spaceship</option><option value="edgeone">EdgeOne</option><option value="gcore">Gcore</option><option value="nsone">NS1</option><option value="name_com">Name.com</option><option value="rainyun">Rainyun</option><option value="eranet">Eranet</option><option value="nowcn">NowCN</option><option value="tnethk">TnetHK</option><option value="hipmdnsmgr">HiPM DNS</option></select></div><div class="form-group"><label>Access Key ID</label><input id="dnskey-ak" placeholder=""></div><div class="form-group"><label>Secret Key</label><input id="dnskey-sk" placeholder=""></div><div class="btn-row" style="margin-top:12px"><button class="btn btn-secondary" onclick="closeModal('modal-dnskey-add')">取消</button><button class="btn btn-primary" onclick="saveDNSKey()">保存</button></div></div></div>
+<div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="btn-row" style="margin-top:12px"><button class="btn btn" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
+<div class="modal-overlay" id="modal-dnskey-add"><div class="modal-box" style="width:420px"><h3>添加 DNS Key<button class="modal-close" onclick="closeModal('modal-dnskey-add')">&times;</button></h3><div class="form-group"><label>名称</label><input id="dnskey-name" placeholder="e.g. 阿里云-生产"><div class="tip">自定义名称，同一供应商可建多个 Key</div></div><div class="form-group"><label>提供商</label><select id="dnskey-provider"><option value="">-- 请选择 --</option><option value="alidns">阿里云 (alidns)</option><option value="aliesa">阿里云国际 (aliesa)</option><option value="tencentcloud">腾讯云 (tencentcloud)</option><option value="dnspod">DNSPod (dnspod)</option><option value="cloudflare">Cloudflare</option><option value="huaweicloud">华为云 (huaweicloud)</option><option value="baiducloud">百度云 (baiducloud)</option><option value="porkbun">Porkbun</option><option value="godaddy">GoDaddy</option><option value="namecheap">Namecheap</option><option value="namesilo">NameSilo</option><option value="dynv6">Dynv6</option><option value="dnsla">DNSLA</option><option value="dynadot">Dynadot</option><option value="vercel">Vercel</option><option value="cloudns">ClouDNS</option><option value="trafficroute">TrafficRoute</option><option value="callback">Callback</option><option value="spaceship">Spaceship</option><option value="edgeone">EdgeOne</option><option value="gcore">Gcore</option><option value="nsone">NS1</option><option value="name_com">Name.com</option><option value="rainyun">Rainyun</option><option value="eranet">Eranet</option><option value="nowcn">NowCN</option><option value="tnethk">TnetHK</option><option value="hipmdnsmgr">HiPM DNS</option></select></div><div class="form-group"><label>Access Key ID</label><input id="dnskey-ak" placeholder=""></div><div class="form-group"><label>Secret Key</label><input id="dnskey-sk" placeholder=""></div><div class="btn-row" style="margin-top:12px"><button class="btn btn" onclick="closeModal('modal-dnskey-add')">取消</button><button class="btn btn-primary" onclick="saveDNSKey()">保存</button></div></div></div>
 
 <script>
 "use strict";
@@ -1260,7 +1287,7 @@ function renderNodes(nodes) {
       h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
       h += '<td class="col-act"><div class="btn-wrap">';
-      h += '<button class="btn btn-sm btn-secondary" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
+      h += '<button class="btn btn-sm" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
       h += '<button class="btn btn-sm btn-danger" onclick="deleteNode(\'' + n.id + '\',\'' + jsStr(n.name) + '\')">删除</button>';
       h += '</div></td></tr>';
     });
@@ -1334,7 +1361,7 @@ async function openNodeConfig(id) {
   h += '<div id="ncfg-certs">';
   bindings.forEach(function(b, i) { h += certBindingRow(i, b, certs); });
   h += '</div>';
-  h += '<button class="btn btn-sm btn-secondary" style="margin-bottom:16px" onclick="addCertBinding()">+ 添加证书绑定</button>';
+  h += '<button class="btn btn-sm" style="margin-bottom:16px" onclick="addCertBinding()">+ 添加证书绑定</button>';
 
   h += '<div class="section-title">高级</div>';
   h += '<div class="form-group"><label>TTL</label><select id="ncfg-ttl">';
@@ -1342,7 +1369,7 @@ async function openNodeConfig(id) {
     h += '<option value="' + t + '"' + (String(cfg.ttl || '600') === t ? ' selected' : '') + '>' + t + 's</option>';
   });
   h += '</select></div>';
-  h += '<div class="btn-row" style="margin-top:16px"><button class="btn btn-secondary" onclick="closeModal(\'modal-node-config\')">取消</button><button class="btn btn-primary" onclick="saveNodeConfig(\'' + id + '\')">保存并下发</button></div>';
+  h += '<div class="btn-row" style="margin-top:16px"><button class="btn btn" onclick="closeModal(\'modal-node-config\')">取消</button><button class="btn btn-primary" onclick="saveNodeConfig(\'' + id + '\')">保存并下发</button></div>';
 
   document.getElementById('modal-node-body').innerHTML = h;
   toggleIPSection('ipv4');
@@ -1382,7 +1409,7 @@ function ipSection(title, prefix, cfg, node) {
   var domains = cfg.domains || [];
   h += '<div class="form-group"><label>域名</label><div id="ncfg-' + prefix + '-domains">';
   domains.forEach(function(d, i) { h += domainRow(prefix, i, d); });
-  h += '</div><button class="btn btn-sm btn-secondary" style="margin-top:4px" onclick="addDomain(\'' + prefix + '\')">+ 添加</button></div>';
+  h += '</div><button class="btn btn-sm" style="margin-top:4px" onclick="addDomain(\'' + prefix + '\')">+ 添加</button></div>';
   h += '</div>';
   return h;
 }
@@ -1502,7 +1529,7 @@ function renderDNS(keysMap, certData, acData) {
   sortData(accts, 'dns-acme');
   var h = '';
 
-  h += '<div class="card"><div class="card-header"><h3>DNS Keys</h3><button class="btn btn-sm btn-primary" onclick="addDNSKey()">+ 新增</button></div>';
+  h += '<div class="card"><div class="card-header"><h3>DNS Keys</h3><button class="btn" onclick="addDNSKey()">+ 新增</button></div>';
   if (keyArr.length === 0) {
     h += '<div class="empty">暂无 DNS Key</div>';
   } else {
@@ -1515,13 +1542,13 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td>' + he(prov) + '</td>';
       h += '<td class="col-mono">' + he((k.ak || '').substring(0,20)) + '...</td>';
       h += '<td>' + he(k.nodes) + '</td>';
-      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
   h += '</div>';
 
-  h += '<div class="card"><div class="card-header"><h3>证书</h3><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openModal(\'modal-cert-upload\')">上传证书</button><button class="btn btn-sm btn-primary" onclick="openModal(\'modal-acme-issue\')">ACME 申请</button></div></div>';
+  h += '<div class="card"><div class="card-header"><h3>证书</h3><div class="btn-wrap"><button class="btn" onclick="openModal(\'modal-cert-upload\')">上传证书</button><button class="btn btn-primary" onclick="openModal(\'modal-acme-issue\')">ACME 申请</button></div></div>';
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
@@ -1537,13 +1564,13 @@ function renderDNS(keysMap, certData, acData) {
       var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
       h += '<tr><td><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
       h += '<td><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
-      h += '<td class="col-act-xwide"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-secondary" onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button class="btn btn-sm btn-secondary" onclick="downloadPFX(\'' + jsStr(name) + '\')" title="下载 PFX 用于 IIS 手动导入">PFX</button>' + (c.acme ? '<button class="btn btn-sm btn-secondary" onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '<button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act-xwide"><div class="btn-wrap"><button class="btn btn-sm" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button><span class="more-wrap"><button class="btn btn-sm" onclick="toggleMore(event)">更多 ▾</button><div class="more-menu"><button onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button onclick="downloadPFX(\'' + jsStr(name) + '\')">PFX</button>' + (c.acme ? '<button onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '</div></span></div></td></tr>';
     });
     h += '</tbody></table>';
   }
   h += '</div>';
 
-  h += '<div class="card"><div class="card-header"><h3>ACME 帐号</h3><button class="btn btn-sm btn-primary" onclick="openACMEAccount(-1)">+ 添加帐号</button></div>';
+  h += '<div class="card"><div class="card-header"><h3>ACME 帐号</h3><button class="btn btn-auto" onclick="openACMEAccount(-1)">+ 添加帐号</button></div>';
   if (accts.length === 0) {
     h += '<div class="empty">暂无 ACME 帐号</div>';
   } else {
@@ -1551,7 +1578,7 @@ function renderDNS(keysMap, certData, acData) {
     accts.forEach(function(a, i) {
       h += '<tr><td>' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
       h += '<td class="col-badge">' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
-      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm btn-secondary" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table>';
   }
@@ -1867,12 +1894,12 @@ function renderVersions(verData, binData, nodes) {
   });
   h += '</select></div>';
   h += '<div class="form-group" style="align-self:flex-end">';
-  h += '<button class="btn btn-primary" id="deploy-copy-btn" onclick="onDeployAction()">复制部署命令</button>';
-  h += '<a id="deploy-dl-btn" href="javascript:void(0)" class="btn btn-primary" style="display:none;text-decoration:none" onclick="downloadWinInstaller()">下载 Windows 安装包</a>';
+  h += '<button class="btn btn-auto" id="deploy-copy-btn" onclick="onDeployAction()">复制部署命令</button>';
+  h += '<a id="deploy-dl-btn" href="javascript:void(0)" class="btn btn-auto" style="display:none;text-decoration:none" onclick="downloadWinInstaller()">下载 Windows 安装包</a>';
   h += '</div>';
   h += '</div></div>';
 
-  h += '<div class="card"><div class="card-header"><h3>已上传二进制</h3><button class="btn btn-sm btn-primary" onclick="document.getElementById(\'bin-upload\').click()">+ 上传</button></div>';
+  h += '<div class="card"><div class="card-header"><h3>已上传二进制</h3><button class="btn" onclick="document.getElementById(\'bin-upload\').click()">+ 上传</button></div>';
   h += '<input type="file" id="bin-upload" style="display:none" onchange="uploadBinary(this)">';
   if (bins.length === 0) {
     h += '<div class="empty">暂无</div>';
@@ -2136,7 +2163,7 @@ function renderLogs(data, filter) {
   h += '<div class="form-group" style="flex:0 1 120px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="height:30px;font-size:11px"></div>';
   h += '<div class="form-group" style="flex:0 1 120px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="height:30px;font-size:11px"></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary btn-sm" onclick="applyLogFilter()">搜索</button></div>';
-  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-secondary btn-sm" onclick="downloadLogs()">下载</button></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn btn-sm" onclick="downloadLogs()">下载</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-danger btn-sm" onclick="cleanupLogs()">清理</button></div>';
   h += '</div>';
   h += '<table><thead><tr><th>时间</th><th>节点</th><th>分类</th><th>内容</th></tr></thead><tbody>';
@@ -2216,7 +2243,7 @@ function renderSettings(smtp, rl) {
   evs.forEach(function(ev) {
     h += '<label class="checkbox-row"><input type="checkbox" id="smtp-' + ev.k + '" class="smtp-event" value="' + ev.k + '"' + (smtp[ev.k] ? ' checked' : '') + '> ' + ev.v + '</label>';
   });
-  h += '</div><div class="btn-row" style="margin-top:16px"><button class="btn btn-secondary" onclick="testSMTP()">测试发送</button><button class="btn btn-primary" onclick="saveSMTP()">保存</button></div></div>';
+  h += '</div><div class="btn-row" style="margin-top:16px"><button class="btn btn" onclick="testSMTP()">测试发送</button><button class="btn btn-primary" onclick="saveSMTP()">保存</button></div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>访问限流</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>全局 (req/min)</label><input id="rl-global" value="' + he(rl.requests_per_min || '600') + '" style="width:90px"></div>';
@@ -2358,6 +2385,18 @@ function he(str) {
 function jsStr(s) {
   return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n');
 }
+
+// ═══ 「更多」下拉菜单 ═══
+function toggleMore(e) {
+  e.stopPropagation();
+  var menu = e.currentTarget.nextElementSibling;
+  var open = menu.classList.contains('show');
+  document.querySelectorAll('.more-menu.show').forEach(function(m) { m.classList.remove('show'); });
+  if (!open) menu.classList.add('show');
+}
+document.addEventListener('click', function() {
+  document.querySelectorAll('.more-menu.show').forEach(function(m) { m.classList.remove('show'); });
+});
 </script>
 </body>
 </html>

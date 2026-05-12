@@ -222,6 +222,18 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := s.store.LoadNodes()
+	// 超时检测: 超过5分钟未心跳的节点标记为不在线
+	// （dashboard用handleStats独立计算，这里统一节点列表口径）
+	now := time.Now()
+	for _, n := range nodes {
+		if n.Status.DDNSHealth != nil && now.Sub(n.LastSeen) > 5*time.Minute {
+			n.Status.DDNSHealth.Running = false
+			if n.Status.DDNSHealth.Status == "OK" || n.Status.DDNSHealth.Status == "ERR" {
+				n.Status.DDNSHealth.Status = "DOWN"
+				n.Status.DDNSHealth.StatusMsg = "节点无响应"
+			}
+		}
+	}
 	jsonOK(w, nodes)
 }
 func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {

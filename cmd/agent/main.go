@@ -352,23 +352,38 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		// H5: 先写证书文件，IIS 绑定失败则不写 .cert_hash，下次心跳重试
 
 		// On Windows, auto-import cert to IIS after deployment
-		// 双PFX: 优先 Modern (AES-256) → 降级 Legacy (3DES)
+		// 双PFX: Modern优先(AES-256) → 失败降级Legacy(3DES) → 无PFX走openssl
 		iisOK := true
 		if runtime.GOOS == "windows" {
-			// 优先尝试 Modern PFX (Win10 1809+, 更强加密)
+			pfxImported := false
+			// 1. 优先尝试 Modern PFX (Win10 1809+, 更强加密)
 			if hasModernPFX && modernPFXFile != "" {
 				if _, err := os.Stat(modernPFXFile); err == nil {
 					iisOK = importPFXToIIS(modernPFXFile, cu.BundleName, cfg.IISCertBindings)
-					recycleIISAppPools()
+					if iisOK {
+						pfxImported = true
+						recycleIISAppPools()
+						log.Printf("[cert] IIS绑定: Modern PFX → %s", cu.BundleName)
+					} else {
+						log.Printf("[cert] Modern PFX导入失败, 降级尝试Legacy...")
+					}
 				}
-			} else if hasLegacyPFX && legacyPFXFile != "" {
-				// 降级到 Legacy PFX (Win7/Win2016 兼容)
+			}
+			// 2. Modern失败或不存在 → 降级到 Legacy PFX (Win7/Win2016 兼容)
+			if !pfxImported && hasLegacyPFX && legacyPFXFile != "" {
 				if _, err := os.Stat(legacyPFXFile); err == nil {
 					iisOK = importPFXToIIS(legacyPFXFile, cu.BundleName, cfg.IISCertBindings)
-					recycleIISAppPools()
+					if iisOK {
+						pfxImported = true
+						recycleIISAppPools()
+						log.Printf("[cert] IIS绑定: Legacy PFX → %s", cu.BundleName)
+					} else {
+						log.Printf("[cert] Legacy PFX导入失败, 降级尝试openssl...")
+					}
 				}
-			} else {
-				// 无 PFX → 走 openssl 兼容路径
+			}
+			// 3. 两个PFX都失败 → 走 openssl 兼容路径
+			if !pfxImported {
 				iisOK = importToIIS(path, cu.BundleName, cfg.IISCertBindings)
 				recycleIISAppPools()
 			}

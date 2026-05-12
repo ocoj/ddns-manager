@@ -589,9 +589,10 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 		metaMap = make(map[string]interface{})
 	}
 
-	// Collect files and compute deterministic hash (sorted by filename)
+	// Collect files — sorted for deterministic hashing
 	var fileNames []string
 	fileContents := make(map[string][]byte)
+	var certPEM, keyPEM []byte
 	for _, e := range entries {
 		if e.IsDir() || e.Name() == "meta.json" {
 			continue
@@ -602,21 +603,43 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 		}
 		fileNames = append(fileNames, e.Name())
 		fileContents[e.Name()] = content
+		// Detect cert and key PEM for PFX regeneration (C2)
+		if isCertPEM(e.Name(), content) && certPEM == nil {
+			certPEM = content
+		}
+		if isKeyPEM(e.Name(), content) && keyPEM == nil {
+			keyPEM = content
+		}
+	}
+
+	// C2: 先生成双 PFX 文件（Modern + Legacy），后续算 hash 时包含它们
+	if certPEM != nil && keyPEM != nil {
+		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns")
+		if pfxErr != nil {
+			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
+		} else {
+			os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
+			fileContents["cert.pfx"] = pfxData
+			log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
+		}
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+			os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
+			fileContents["cert-modern.pfx"] = modernData
+			log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))
+		}
+	}
+
+	// 重建文件名列表（可能新增了 PFX 文件）
+	fileNames = nil
+	for name := range fileContents {
+		fileNames = append(fileNames, name)
 	}
 	sort.Strings(fileNames)
 
+	// 计算包含 PFX 文件的确定性 hash
 	h := sha256.New()
-	var certPEM, keyPEM []byte
 	for _, name := range fileNames {
-		content := fileContents[name]
-		h.Write(content)
-		// Detect cert and key PEM for PFX regeneration (C2)
-		if isCertPEM(name, content) && certPEM == nil {
-			certPEM = content
-		}
-		if isKeyPEM(name, content) && keyPEM == nil {
-			keyPEM = content
-		}
+		h.Write(fileContents[name])
 	}
 	hash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 
@@ -630,22 +653,6 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 	}
 	if err := os.WriteFile(metaPath, metaData, 0o600); err != nil {
 		return fmt.Errorf("write meta: %w", err)
-	}
-
-	// C2: 续期后重新生成 PFX，Windows Agent 需要最新 PFX 文件
-	if certPEM != nil && keyPEM != nil {
-		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns")
-		if pfxErr != nil {
-			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
-		} else {
-			os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
-			log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
-		}
-		// 同时生成 Modern PFX (Win10 1809+)，Agent 会优先选用
-		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
-			os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
-			log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))
-		}
 	}
 
 	return nil

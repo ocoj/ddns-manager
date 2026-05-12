@@ -1352,7 +1352,7 @@ async function openNodeConfig(id) {
   var keys = dkr.data || {};
   var providers = Object.keys(keys);
   var cr = await apiJSON('/api/admin/certs');
-  var certs = (cr.data && cr.data.certs) || [];
+  var certs = cr.data || [];
 
   document.getElementById('modal-node-title').textContent = '节点配置: ' + node.name;
   var cfg = node.config || {};

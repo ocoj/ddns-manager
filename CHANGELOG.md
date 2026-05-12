@@ -2,7 +2,11 @@
 
 ## v1.5.9 — 2026-05-12
 
-### 🏗️ 激进重构（9 项全量审计修复 + 架构增强）
+### 🏗️ 激进重构（9 项全量审计修复 + 架构增强 + 版本管理完善）
+
+#### 🏷️ 版本管理
+- **侧边栏版本动态化** — `/api/ping` 新增 `version` 字段，WebUI 通过 `fetchSideVersion()` 拉取真实 Manager 版本，不再硬编码 HTML
+- **版本传播链路** — VERSION 文件 → ldflags → Manager `/api/ping` + Agent 心跳，单一真相源
 
 #### 🔴 Critical
 - **C1 selfUpgrade 重试循环修复** — HTTP 非 200 错误由 `return` 改为 `continue`，每次迭代独立闭包确保 defer 零泄漏。修复 HTTP 5xx 时 3 次重试形同虚设的 bug

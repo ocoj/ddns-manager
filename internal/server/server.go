@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -134,8 +135,15 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 				mgrs := s.acmeMgrList()
 				for _, mgr := range mgrs {
 					renewed := mgr.Renew(ctx)
-					if len(renewed) > 0 {
-						log.Printf("[acme] 自动续期成功 (帐号 %s): %v", mgr.AccountInfo().Email, renewed)
+					for _, name := range renewed {
+						// 重新加载bundle确保Store缓存与磁盘一致
+						if b, err := s.store.LoadCertBundle(name); err == nil {
+							if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
+								log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
+							}
+						}
+						s.logMgr.Log("acme", "自动续期成功",
+							fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
 					}
 				}
 				cancel()

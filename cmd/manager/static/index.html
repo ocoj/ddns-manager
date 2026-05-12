@@ -402,6 +402,8 @@ th{text-align:left}
 
 <script>
 "use strict";
+// Init timezone from localStorage (settings page will update on save)
+window._tz = localStorage.getItem('ddns-tz') || 'Asia/Shanghai';
 
 // ========== STATE (with safe localStorage) ==========
 let TOKEN = '';
@@ -994,7 +996,7 @@ function renderDashboard(stats, nodes, events, access) {
   } else {
     events.forEach(function(e) {
       var badgeCls = e.status === 'error' ? 'badge-red' : (e.status === 'success' ? 'badge-green' : 'badge-blue');
-      h += '<div class="event-item"><span class="event-time">' + he(e.time) + '</span>';
+      h += '<div class="event-item"><span class="event-time">' + fmtTime(e.time) + '</span>';
       h += '<span class="event-node">' + he(e.node) + '</span>';
       h += '<span class="event-msg"><span class="badge ' + badgeCls + '" style="margin-right:4px">' + he(e.category) + '</span>' + he(e.action) + ' ' + he(e.detail) + '</span></div>';
     });
@@ -2194,7 +2196,7 @@ function renderLogs(data, filter) {
   } else {
     events.forEach(function(l) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      h += '<tr><td class="col-log-time">' + he(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
+      h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });
@@ -2411,6 +2413,7 @@ async function saveTimezone() {
   var r = await apiJSON('/api/admin/timezone', {method:'POST', body:{timezone:tz}});
   if (r.ok) {
     window._tz = tz;
+    localStorage.setItem('ddns-tz', tz);
     toast('时区已设为 '+tz, 'success');
     markPageClean();
   }
@@ -2426,6 +2429,17 @@ function he(str) {
 // jsStr escapes for use inside JS string literals (onclick handlers)
 function jsStr(s) {
   return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n');
+}
+
+// fmtTime 将 UTC 时间字符串转为配置时区显示 (如 "2026-05-12T08:30:00Z" → "2026-05-12 16:30:00")
+function fmtTime(utcStr) {
+  if (!utcStr) return '-';
+  try {
+    var d = new Date(utcStr);
+    if (isNaN(d.getTime())) return utcStr;
+    var tz = window._tz || localStorage.getItem('ddns-tz') || 'Asia/Shanghai';
+    return d.toLocaleString('sv-SE', {timeZone: tz}).replace('T', ' ');
+  } catch(e) { return utcStr; }
 }
 
 // ═══ 「更多」下拉菜单 ═══

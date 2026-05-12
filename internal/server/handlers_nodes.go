@@ -295,6 +295,11 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		rec.CertBindings = req.CertBindings
 	}
 	rec.ConfigHash = ""
+	// 保存配置即审批 — 管理员已配置意味着信任该节点
+	if !rec.Approved {
+		rec.Approved = true
+		s.logMgr.LogWithNode("节点", "配置已保存(自动审批)", id, "", "info")
+	}
 	s.store.PutNode(id, rec)
 	s.logMgr.LogWithNode("config", "已保存", id, fmt.Sprintf("dnsKey=%s", req.DNSKeyName), "success")
 	// track DNS key usage by name (new) or provider (old fallback)

@@ -1713,24 +1713,28 @@ async function downloadCert(name) {
   } catch(e) { toast('下载失败', 'error'); }
 }
 async function downloadPFX(name) {
-  var pw = prompt('请输入 PFX 一次性密码 (≥6 字符，用于 certlm.msc 导入):', 'ddns');
-  if (pw === null) return; // 用户点击取消
+  var pw = prompt('请输入 PFX 密码 (\u22656 字符):', 'ddns');
+  if (pw === null) return;
   if (pw.length < 6) { toast('密码至少 6 个字符', 'error'); return; }
   try {
     var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/pfx?password=' + encodeURIComponent(pw));
-    if (!r.ok) {
-      var err = await r.text();
-      toast('下载失败: ' + (err || r.statusText), 'error');
-      return;
-    }
+    if (!r.ok) { var err = await r.text(); toast('下载失败: ' + (err || r.statusText), 'error'); return; }
     var blob = await r.blob();
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = name.replace(/^acme-/, '') + '.pfx';
+    var ct = r.headers.get('Content-Type') || '';
+    if (ct.indexOf('zip') >= 0) {
+      // 默认ZIP包: Legacy+Modern双PFX+README
+      a.download = name.replace(/^acme-/, '') + '-pfx.zip';
+      toast('PFX ZIP 已下载 (含 Legacy+Modern 双格式 + 说明)', 'success');
+    } else {
+      // 单格式下载 (?format=legacy|modern)
+      a.download = name.replace(/^acme-/, '') + '.pfx';
+      toast('PFX 已下载，请在 Windows 使用 certlm.msc → 导入，密码: ' + pw, 'success');
+    }
     a.click();
     URL.revokeObjectURL(url);
-    toast('PFX 已下载，请在 Windows 使用 certlm.msc → 导入，密码: ' + pw, 'success');
   } catch(e) { toast('下载失败', 'error'); }
 }
 async function showCertDetail(name) {

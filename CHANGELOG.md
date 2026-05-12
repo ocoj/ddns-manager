@@ -31,11 +31,15 @@
 - **L1 华为云DNS API缺少HUAWEICLOUD_DomainID** — `dnsAPIMapping` 新增 `extraEnv` 字段，华为云自动设置 `HUAWEICLOUD_DomainID` 环境变量
 - **L2-L3** — 纯Go HTTP-01续签路径已移除（acme.sh优先），批处理中文输出优化
 
-#### 🔧 其他
+#### 🔧 其他 + 后续修复
 - **M5 handlerBinFile 路径穿越防护强化** — 新增绝对路径/反斜杠/null字节检查 + `filepath.Clean` 二次防护 + `HasPrefix` 验证
 - **handleDeleteAgentBinary 自动 RebuildManifest** — 删除二进制后重建 manifest，防止已删二进制仍被推送
 - **importPFXToIIS/importToIIS 返回 bool** — 支持 H5 条件写入 `.cert_hash`
-- **文档对齐** — `docs/架构与实现.md` 更新 Windows 升级流程、ACME续签后UpdateCertMeta说明、审计日志API补全；`docs/前端设计.md` 更新日志API返回格式
+- **心跳日志增加 IPv6** — `收到心跳` 日志从 `ipv4=xxx` 扩展到 `ipv4=xxx ipv6=xxx`
+- **SMTP 密码保护** — `handleSaveSMTP` + `isMaskedPassword` 检测掩码值（全`****`/部分`PP****pY`），保留已有授权码不被覆盖
+- **PFX 双格式全链路修复** — ① `UpdateCertMeta` 先生成双PFX再算hash（修复续签后不下发）② Agent Modern失败正确降级Legacy（修复Win2016 IIS导入失败）③ `handleDownloadPFX` 默认返回ZIP双格式+README
+- **Logo 高清化** — 矢量源 2460×2468 RGBA 替换旧版，所有尺寸 LANCZOS 缩放
+- **文档对齐** — `docs/架构与实现.md` 更新 Windows 升级流程、ACME续签后UpdateCertMeta说明、审计日志API补全、PFX双格式说明；`docs/前端设计.md` 更新日志API返回格式
 
 ## v1.5.10 — 2026-05-12
 

@@ -493,7 +493,7 @@ function normalizeNode(id, n) {
   }
   return {
     id: id,
-    name: hw.hostname || id,
+    name: id,  // 用户注册时自定义的节点ID（如 client-a），不是计算机名
     fingerprint: n.fingerprint || '',
     ip: st.ipv4 || '',
     ipv6: st.ipv6 || '',

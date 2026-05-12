@@ -1396,7 +1396,8 @@ async function openNodeConfig(id) {
   h += '<div id="ncfg-certs">';
   bindings.forEach(function(b, i) { h += certBindingRow(i, b, certs); });
   h += '</div>';
-  h += '<button class="btn btn-auto" style="margin-bottom:16px" onclick="addCertBinding()">+ 添加证书绑定</button>';
+  h += '<button class="btn btn-auto" style="margin-bottom:4px" onclick="addCertBinding()">+ 添加证书绑定</button>';
+  h += '<div class="tip" style="margin-bottom:16px">Windows 节点留空即可（证书导入系统存储）；Linux 节点填 nginx 等服务证书目录</div>';
 
   h += '<div class="section-title">高级</div>';
   h += '<div class="form-group"><label>TTL</label><select id="ncfg-ttl">';
@@ -1468,7 +1469,7 @@ function certBindingRow(i, b, certs) {
   });
   if (arr.length === 0) h += '<option value="">-- 无 --</option>';
   h += '</select>';
-  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="/etc/nginx/certs/" style="flex:1">';
+  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)" style="flex:1">';
   h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   return h;
 }

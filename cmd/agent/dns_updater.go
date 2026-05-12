@@ -62,6 +62,8 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 	if u.cfg == nil || len(u.cfg.DnsConf) == 0 {
 		u.status.LastRun = time.Now()
+		u.status.LastOK = false
+		u.status.LastError = "等待管理端下发DNS配置（节点可能未审批）"
 		return u.status
 	}
 

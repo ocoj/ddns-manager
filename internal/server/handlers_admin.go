@@ -716,18 +716,26 @@ func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "saved", "timezone": req.Timezone})
 }
 
-// isMaskedPassword checks if a string looks like a masked password (all asterisks).
-// Frontend may send "****" when the user didn't modify the password field.
+// isMaskedPassword checks if a string looks like a masked password.
+// Detects both fully masked (****) and partially masked (PP************pY).
+// Frontend may send masked display value when user didn't modify the password field.
 func isMaskedPassword(s string) bool {
 	if len(s) < 4 {
 		return false
 	}
+	// 检测连续4个以上*（全掩码或部分掩码如 PP****pY）
+	starRun := 0
 	for _, c := range s {
-		if c != '*' {
-			return false
+		if c == '*' {
+			starRun++
+			if starRun >= 4 {
+				return true
+			}
+		} else {
+			starRun = 0
 		}
 	}
-	return true
+	return false
 }
 
 // ── SMTP notification trigger helpers ──

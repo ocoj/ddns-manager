@@ -141,11 +141,11 @@ func (c *accessStatsCollector) record(ip string) {
 func (c *accessStatsCollector) snapshot(windowMinutes int) *accessStatsSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := c.nowInTZ()
+	now := time.Now().In(c.tz)
 	cutoff := now.Add(-time.Duration(windowMinutes) * time.Minute).Truncate(time.Minute).Unix()
 
 	// 生成连续时间线: 从 cutoff 到 now, 每分钟一个点, 无数据填0
-	startMin := time.Unix(cutoff, 0).UTC()
+	startMin := time.Unix(cutoff, 0).In(c.tz)
 	var timestamps []string
 	var totalSeries []int64
 	for t := startMin; !t.After(now.Truncate(time.Minute)); t = t.Add(time.Minute) {

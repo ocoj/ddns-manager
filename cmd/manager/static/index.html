@@ -1324,6 +1324,9 @@ function renderNodes(nodes) {
       h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
       h += '<td class="col-act"><div class="btn-wrap">';
+      if (n.pending) {
+        h += '<button class="btn btn-sm btn-primary" onclick="approveNode(\'' + n.id + '\')">审批</button>';
+      }
       h += '<button class="btn btn-sm" onclick="openNodeConfig(\'' + n.id + '\')">配置</button>';
       h += '<button class="btn btn-sm btn-danger" onclick="deleteNode(\'' + n.id + '\',\'' + jsStr(n.name) + '\')">删除</button>';
       h += '</div></td></tr>';
@@ -1344,6 +1347,14 @@ function deleteNode(id, name) {
 }
 
 // ==================== NODE CONFIG ====================
+async function approveNode(id) {
+  if (!confirm('确认审批节点 ' + id + '？审批后将下发 DNS 配置和证书。')) return;
+  var r = await apiJSON('/api/admin/nodes/' + encodeURIComponent(id) + '/approve', {method: 'POST', body: '{}'});
+  if (!r.ok) { toast((r.data && r.data.error) || '审批失败', 'error'); return; }
+  toast('节点已审批，等待下次心跳推送配置', 'success');
+  loadNodes();
+}
+
 async function openNodeConfig(id) {
   var nr = await apiJSON('/api/admin/nodes');
   if (!nr.ok) return;

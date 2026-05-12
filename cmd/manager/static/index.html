@@ -2431,19 +2431,19 @@ function jsStr(s) {
   return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n');
 }
 
-// fmtTime 将 UTC 时间字符串转为配置时区显示 (如 "2026-05-12T08:30:00Z" → "2026-05-12 16:30:00")
+// fmtTime 将 UTC 时间字符串转为配置时区显示
 function fmtTime(utcStr) {
   if (!utcStr) return '-';
+  var d = new Date(utcStr.replace(/Z$/,'') + 'Z');
+  if (isNaN(d.getTime())) return utcStr;
   try {
-    var d = new Date(utcStr);
-    if (isNaN(d.getTime())) return utcStr;
     var tz = window._tz || localStorage.getItem('ddns-tz') || 'Asia/Shanghai';
-    var opts = {timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false};
-    var f = new Intl.DateTimeFormat('en-CA', opts);
-    var parts = f.formatToParts(d);
-    var get = function(t){ for(var i=0;i<parts.length;i++) if(parts[i].type===t) return parts[i].value; return ''; };
-    return get('year')+'-'+get('month')+'-'+get('day')+' '+get('hour')+':'+get('minute')+':'+get('second');
-  } catch(e) { return utcStr; }
+    var s = d.toLocaleString('sv', {timeZone:tz, hour12:false});
+    if (s && s.length > 10) return s;
+  } catch(e) {}
+  // 兜底: 直接用 UTC 方法 + 硬编码 Asia/Shanghai 偏移
+  d.setHours(d.getHours() + 8);
+  return d.getUTCFullYear()+'-'+('0'+(d.getUTCMonth()+1)).slice(-2)+'-'+('0'+d.getUTCDate()).slice(-2)+' '+('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+':'+('0'+d.getUTCSeconds()).slice(-2);
 }
 
 // ═══ 「更多」下拉菜单 ═══

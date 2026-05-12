@@ -24,18 +24,33 @@ type accessStatsCollector struct {
 	mu      sync.Mutex
 	buckets map[int64]map[string]int64 // unixMinute -> ip -> count
 	dir     string                      // 持久化目录
+	tz      *time.Location              // 配置时区
 }
 
 func newAccessStatsCollector(dataDir string) *accessStatsCollector {
 	c := &accessStatsCollector{
 		buckets: make(map[int64]map[string]int64),
 		dir:     dataDir,
+		tz:      time.UTC, // 默认 UTC, 后续通过 SetTimezone 覆盖
 	}
-	// 从磁盘恢复48h内流量数据
 	c.loadFromDisk()
-	// 启动后台持久化 goroutine（每60秒 flush 一次）
 	go c.flushLoop()
 	return c
+}
+
+// SetTimezone 设置时区，影响图表时间轴和流量记录。
+func (c *accessStatsCollector) SetTimezone(tz *time.Location) {
+	c.mu.Lock()
+	c.tz = tz
+	c.mu.Unlock()
+}
+
+// nowInTZ 返回当前时间在配置时区下的值(线程安全)。
+func (c *accessStatsCollector) nowInTZ() time.Time {
+	c.mu.Lock()
+	tz := c.tz
+	c.mu.Unlock()
+	return time.Now().In(tz)
 }
 
 // loadFromDisk 从 access_buckets.json 恢复48h内流量桶
@@ -54,7 +69,7 @@ func (c *accessStatsCollector) loadFromDisk() {
 		log.Printf("[access] 解析流量记录失败: %v", err)
 		return
 	}
-	cutoff := time.Now().UTC().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
+	cutoff := c.nowInTZ().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
 	for t, b := range buckets {
 		if t >= cutoff {
 			c.buckets[t] = b
@@ -75,7 +90,7 @@ func (c *accessStatsCollector) flushLoop() {
 // flushToDisk 将内存桶写入 access_buckets.json（环形48h）
 func (c *accessStatsCollector) flushToDisk() {
 	c.mu.Lock()
-	cutoff := time.Now().UTC().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
+	cutoff := c.nowInTZ().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
 	buckets := make(map[int64]map[string]int64, len(c.buckets))
 	for t, b := range c.buckets {
 		if t >= cutoff {
@@ -100,7 +115,7 @@ func (c *accessStatsCollector) flushToDisk() {
 func (c *accessStatsCollector) record(ip string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now().UTC()
+	now := c.nowInTZ()
 	min := now.Truncate(time.Minute).Unix()
 	if c.buckets[min] == nil {
 		c.buckets[min] = make(map[string]int64)
@@ -120,7 +135,7 @@ func (c *accessStatsCollector) record(ip string) {
 func (c *accessStatsCollector) snapshot(windowMinutes int) *accessStatsSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now().UTC()
+	now := c.nowInTZ()
 	cutoff := now.Add(-time.Duration(windowMinutes) * time.Minute).Truncate(time.Minute).Unix()
 
 	// 生成连续时间线: 从 cutoff 到 now, 每分钟一个点, 无数据填0
@@ -200,7 +215,7 @@ type accessStatsSnapshot struct {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := s.store.LoadNodes()
 	online, total, healthy := 0, len(nodes), 0
-	now := time.Now().UTC()
+	now := time.Now()
 	for _, n := range nodes {
 		if now.Sub(n.LastSeen) < 5*time.Minute {
 			online++

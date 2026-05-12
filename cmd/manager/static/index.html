@@ -2116,21 +2116,20 @@ async function batchUpgrade() {
   if (cbs.length === 0) { toast('请选择节点', 'warning'); return; }
   clearInterval(refreshTimer);
   var count = 0;
+  // 预填充 _upgState，loadVersions 重渲染时能看到等待中状态
+  if (!window._upgState) window._upgState = {};
   for (var i = 0; i < cbs.length; i++) {
     var nodeId = cbs[i].value;
     var sel = document.querySelector('.upgrade-target[data-node="' + nodeId + '"]');
     var targetVer = sel ? sel.value : '';
     if (!targetVer) continue;
-    var row = cbs[i].closest('tr');
-    if (row) {
-      var statusCell = row.querySelector('td:last-child');
-      if (statusCell) { statusCell.innerHTML = '<span class="badge badge-orange">等待中</span>'; statusCell.className = 'col-badge'; }
-    }
+    // 立即显示等待中状态（不被后续 loadVersions 覆盖）
+    window._upgState[nodeId] = {target_ver: targetVer, triggered: new Date().toISOString(), completed: ''};
     try {
       await apiJSON('/api/admin/agent-version', {method: 'POST', body: {latest_version: targetVer}});
       count++;
     } catch(e) {
-      if (statusCell) statusCell.innerHTML = '<span class="badge badge-red">失败</span>';
+      delete window._upgState[nodeId];
     }
   }
   startAutoRefresh();
@@ -2240,12 +2239,22 @@ async function loadSettings(silent) {
   try {
     var sr = await apiJSON('/api/admin/smtp');
     var rr = await apiJSON('/api/admin/rate-limit');
-    renderSettings(sr.data || {}, rr.data || {});
+    var tr = await apiJSON('/api/admin/timezone');
+    renderSettings(sr.data || {}, rr.data || {}, (tr.data || {}).timezone || 'Asia/Shanghai');
   } catch(e) { if (!silent) document.getElementById('page-settings').innerHTML = '<div class="empty">加载失败</div>'; }
 }
-function renderSettings(smtp, rl) {
+function renderSettings(smtp, rl, tz) {
   var h = '';
-  h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
+  h += '<div class="card"><div class="card-header"><h3>时区</h3></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>管理端时区</label><select id="tz-select">';
+  ['Asia/Shanghai','Asia/Tokyo','Asia/Seoul','Asia/Singapore','Asia/Kolkata','Asia/Dubai','Europe/London','Europe/Berlin','Europe/Moscow','America/New_York','America/Chicago','America/Los_Angeles','Australia/Sydney','Pacific/Auckland','UTC'].forEach(function(t){
+    h += '<option value="'+t+'"'+(t===tz?' selected':'')+'>'+t.replace(/_/g,' ')+'</option>';
+  });
+  h += '</select></div>';
+  h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="saveTimezone()">保存</button></div>';
+  h += '<div class="tip" style="margin-top:4px">影响仪表盘图表时间轴、日志时间显示</div></div>';
+  // 记录时区到全局变量，UI 时间显示使用
+  window._tz = tz;
   h += '<div class="form-inline"><div class="form-group"><label>新密码</label><input type="password" id="set-new-pwd" style="width:200px"></div>';
   h += '<div class="form-group"><label>确认密码</label><input type="password" id="set-confirm-pwd" style="width:200px"></div>';
   h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="changePassword()">保存</button></div></div>';
@@ -2395,6 +2404,16 @@ async function saveRateLimit() {
   };
   var r = await apiJSON('/api/admin/rate-limit', {method: 'POST', body: body});
   if (r.ok) { toast('限流已保存'); markPageClean(); }
+}
+
+async function saveTimezone() {
+  var tz = document.getElementById('tz-select').value;
+  var r = await apiJSON('/api/admin/timezone', {method:'POST', body:{timezone:tz}});
+  if (r.ok) {
+    window._tz = tz;
+    toast('时区已设为 '+tz, 'success');
+    markPageClean();
+  }
 }
 
 // ========== HELPERS ==========

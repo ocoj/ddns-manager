@@ -619,3 +619,39 @@ const readmeTemplate = `============================================
     C:\ddns-manager\ddns-installer.exe -uninstall
 `
 
+
+// ── Timezone ──
+
+func (s *Server) handleGetTimezone(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.store.LoadTimezoneConfig()
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"timezone": cfg.Timezone})
+}
+
+func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Timezone string `json:"timezone"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "格式错误")
+		return
+	}
+	if req.Timezone == "" {
+		jsonErr(w, 400, "时区不能为空")
+		return
+	}
+	loc, err := time.LoadLocation(req.Timezone)
+	if err != nil {
+		jsonErr(w, 400, "无效时区: "+req.Timezone)
+		return
+	}
+	cfg := &store.TimezoneConfig{Timezone: req.Timezone}
+	if err := s.store.SaveTimezoneConfig(cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.accessCollector.SetTimezone(loc)
+	s.logMgr.Log("system", "时区已更改", req.Timezone, "success")
+	jsonOK(w, map[string]string{"status": "saved", "timezone": req.Timezone})
+}

@@ -141,6 +141,12 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	}
 	// init multi-account ACME managers
 	svr.initACMEManagers()
+	// 加载时区配置，应用到流量统计
+	tzCfg, _ := s.LoadTimezoneConfig()
+	loc, err := time.LoadLocation(tzCfg.Timezone)
+	if err == nil {
+		svr.accessCollector.SetTimezone(loc)
+	}
 	return svr
 }
 
@@ -271,6 +277,9 @@ func (s *Server) Router() *mux.Router {
 	// rate-limit
 	a.HandleFunc("/rate-limit", s.handleGetRateLimit).Methods("GET")
 	a.HandleFunc("/rate-limit", s.handleSaveRateLimit).Methods("POST")
+	// timezone
+	a.HandleFunc("/timezone", s.handleGetTimezone).Methods("GET")
+	a.HandleFunc("/timezone", s.handleSaveTimezone).Methods("POST")
 
 	// static
 

@@ -878,3 +878,44 @@ func (s *ManagerStore) SaveRateLimitConfig(cfg *RateLimitConfig) error {
 	}
 	return os.WriteFile(s.rateLimitPath(), data, 0o600)
 }
+
+// ── Timezone ──
+
+type TimezoneConfig struct {
+	Timezone string `json:"timezone"` // e.g. "Asia/Shanghai", "UTC"
+}
+
+func (s *ManagerStore) timezonePath() string { return filepath.Join(s.dir, "timezone.json") }
+
+func (s *ManagerStore) LoadTimezoneConfig() (*TimezoneConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.timezonePath())
+	if os.IsNotExist(err) {
+		return &TimezoneConfig{Timezone: "Asia/Shanghai"}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cfg TimezoneConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Timezone == "" {
+		cfg.Timezone = "Asia/Shanghai"
+	}
+	return &cfg, nil
+}
+
+func (s *ManagerStore) SaveTimezoneConfig(cfg *TimezoneConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cfg.Timezone == "" {
+		cfg.Timezone = "Asia/Shanghai"
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.timezonePath(), data, 0o600)
+}

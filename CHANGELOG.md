@@ -16,11 +16,31 @@
 - **DeleteDNSKey 原子化** — `DeleteDNSKeyAtomic` 持写锁读-删-写，消除并发删除覆盖风险
 - **detectPlatform 默认值安全化** — 硬件信息未知时返回空字符串，调用方跳过升级推送
 - **IIS 证书指纹提取稳健化** — 改用 `certutil -dump` 提取指纹（格式固定），替代 PowerShell `Write-Host` 字符串匹配
+- **证书到期解析确定性修复** — `handleListCerts` 按文件名排序解析 PEM，修复 map 遍历随机导致到期时间偶发错误
 
 #### 功能增强
 - **Agent `-dir` flag** — Agent 支持 `-dir /custom/path` 覆盖默认安装目录，解决非标准路径安装时配置找不到的问题
 - **ConfigError 回传** — `HeartbeatResp.ConfigError` 字段，配置渲染失败时 Agent 日志可见原因
 - **DNS provider 名称校验** — `handleSaveDNSKey` 保存时校验 provider 名称，拒绝未知 DNS 提供商
+
+### 🎨 Web UI 重做
+
+#### 按钮系统
+- **表外功能钮** — 34px 高 × ≤4中文82px/超出自适应，白底→悬停#87CEFA→按下#1677FF
+- **表内操作钮** — 23px 高 × ≤2中文48px，同上配色
+- **证书页「更多」下拉** — 显式详情+删除，下载/PFX/续订隐藏到下拉菜单
+- **危险操作** — `.btn-danger` 保留红色系
+
+#### 表格列宽标准化
+- 所有表格 `table-layout:fixed` 固定列宽，不再随内容晃动
+- 操作列统一 188px 左对齐
+- DNS Keys: 名称/提供商/AccessKey 各 100px + AccessKey前6位+***脱敏
+- 证书: 名称188px / 到期100px / 剩余90px
+- ACME: Email188px / Key100px / 状态90px
+- 系统日志: 时间130px / 节点90px / 分类80px
+- 已上传二进制: 大小80px / 版本80px
+- 节点版本: 节点120px / 状态70px / 当前/目标版本85px / 升级状态100px
+- 超长内容 overflow:ellipsis + title 气泡
 
 #### 编译
 - **go.mod go 1.25.0** 保持与 ddns-go v6.17.0 依赖一致

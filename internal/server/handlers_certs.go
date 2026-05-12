@@ -48,14 +48,19 @@ func (s *Server) handleListCerts(w http.ResponseWriter, r *http.Request) {
 			hashShort = hashShort[:12]
 		}
 		item := ci{Name: name, Files: fileNames, Hash: hashShort, Acme: strings.HasPrefix(name, "acme-")}
-		// try to parse expiry from any pem file (fullchain.pem / cert.pem / fullchain11.pem / etc.)
-		for fn, content := range b.Files {
+		// 按文件名排序解析证书到期时间 — map 遍历顺序随机，排序保证确定性
+		pemNames := make([]string, 0, len(b.Files))
+		for fn := range b.Files {
 			if strings.HasSuffix(strings.ToLower(fn), ".pem") || strings.HasSuffix(strings.ToLower(fn), ".crt") {
-				if exp, dom := parseCertExpiry(content); exp != "" {
-					item.Expiry = exp
-					item.Domains = dom
-					break
-				}
+				pemNames = append(pemNames, fn)
+			}
+		}
+		sort.Strings(pemNames)
+		for _, fn := range pemNames {
+			if exp, dom := parseCertExpiry(b.Files[fn]); exp != "" {
+				item.Expiry = exp
+				item.Domains = dom
+				break
 			}
 		}
 		result = append(result, item)

@@ -130,9 +130,9 @@ th{text-align:left}
 /* 证书名称列 / ACME email列 */
 .col-cert-name{width:188px;overflow:hidden;text-overflow:ellipsis}
 /* 日志列表列宽 */
-.col-log-time{width:60px;font-family:Consolas,Monaco,monospace;font-size:12px}
+.col-log-time{width:90px;font-family:Consolas,Monaco,monospace;font-size:12px}
 .col-log-node{width:90px;overflow:hidden;text-overflow:ellipsis}
-.col-log-cat{width:90px;text-align:center}
+.col-log-cat{width:120px;text-align:center}
 /* 已上传二进制列宽 */
 .col-bin-size{width:80px;text-align:right}
 .col-bin-ver{width:80px;font-family:Consolas,Monaco,monospace;font-size:12px;text-align:center}
@@ -353,7 +353,7 @@ th{text-align:left}
   </g>
 </svg> 设置</div>
   </nav>
-  <div class="side-footer">v1.5.5-m — build 2026-05-11</div>
+  <div class="side-footer" id="side-version">--</div>
 </aside>
 
 <div id="nav-overlay" onclick="toggleSidebar()"></div>
@@ -593,6 +593,17 @@ function initApp() {
 
   navigate('dashboard');
   startAutoRefresh();
+  fetchSideVersion();
+}
+
+// 从 /api/ping 拉取 Manager 版本号，显示在侧边栏底部
+function fetchSideVersion() {
+  fetch('/api/ping').then(r => r.json()).then(d => {
+    var el = document.getElementById('side-version');
+    if (el && d.version) {
+      el.textContent = 'v' + d.version;
+    }
+  }).catch(function(){});
 }
 
 // ========== API ==========
@@ -1941,7 +1952,7 @@ function renderVersions(verData, binData, nodes) {
 
   if (nodes.length > 0) {
     h += '<div class="card"><div class="card-header"><h3>节点版本</h3></div>';
-    h += '<table><thead><tr><th style="width:30px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
+    h += '<table><thead><tr><th style="width:38px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
     // 从服务端读取升级状态 (替代 localStorage，跨设备一致)
     var trigData = window._upgState || {};
     nodes.forEach(function(n) {

@@ -26,6 +26,7 @@ type Server struct {
 	acmeMgrs        []*acme.Manager // multi-account managers (protected by acmeMu)
 	logMgr          *logger.Manager
 	adminToken      string // protected by adminTokenMu
+	version         string // Manager version (from ldflags)
 	accessCollector *accessStatsCollector
 	// rate limiting
 	globalLimiter    *rateLimiter
@@ -114,9 +115,10 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 	}()
 }
 
-func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager) *Server {
+func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string) *Server {
 	svr := &Server{
 		cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr,
+		version:         version,
 		accessCollector: newAccessStatsCollector(cfg.DataDir),
 		pingLimiter:     newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
 	}

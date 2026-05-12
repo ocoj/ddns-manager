@@ -23,7 +23,7 @@ import (
 )
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok", "version": s.version})
 }
 
 func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request) {

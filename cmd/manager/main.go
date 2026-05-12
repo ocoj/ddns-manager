@@ -120,7 +120,7 @@ func main() {
 		}
 	}
 
-	mgr := server.New(cfg, st, acmeMgr, logMgr)
+	mgr := server.New(cfg, st, acmeMgr, logMgr, version)
 
 	// auto-renew goroutine for all ACME accounts
 	shutdownACME := make(chan struct{})

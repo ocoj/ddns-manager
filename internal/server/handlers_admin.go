@@ -430,8 +430,16 @@ func (s *Server) handleSaveSMTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
+	// 密码保护: 前端二次保存时可能不传密码（或传掩码 ****）
+	// 此时保留已存储的密码，避免授权码被静默清空
+	password := req.Password
+	if password == "" || isMaskedPassword(password) {
+		if saved, _ := s.store.LoadSMTPConfig(); saved != nil && saved.Password != "" {
+			password = saved.Password
+		}
+	}
 	cfg := &notify.Config{
-		Host: req.Host, Port: req.Port, Username: req.Username, Password: req.Password, To: req.To,
+		Host: req.Host, Port: req.Port, Username: req.Username, Password: password, To: req.To,
 		ManagerURL: req.ManagerURL, CertExpiryDays: req.CertExpiryDays, NotifyHeartbeatFail: req.NotifyHeartbeatFail,
 		NotifySecurity: req.NotifySecurity, NotifyConfigChange: req.NotifyConfigChange,
 		NotifySystemError: req.NotifySystemError, NotifyCertExpiry: req.NotifyCertExpiry,
@@ -707,3 +715,19 @@ func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
 	s.logMgr.Log("system", "时区已更改", req.Timezone, "success")
 	jsonOK(w, map[string]string{"status": "saved", "timezone": req.Timezone})
 }
+
+// isMaskedPassword checks if a string looks like a masked password (all asterisks).
+// Frontend may send "****" when the user didn't modify the password field.
+func isMaskedPassword(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	for _, c := range s {
+		if c != '*' {
+			return false
+		}
+	}
+	return true
+}
+
+// ── SMTP notification trigger helpers ──

@@ -494,6 +494,7 @@ function normalizeNode(id, n) {
   return {
     id: id,
     name: id,  // 用户注册时自定义的节点ID（如 client-a），不是计算机名
+    hostname: hw.hostname || '',  // 计算机名，显示在系统列
     fingerprint: n.fingerprint || '',
     ip: st.ipv4 || '',
     ipv6: st.ipv6 || '',
@@ -1316,7 +1317,8 @@ function renderNodes(nodes) {
       h += '<tr>';
       h += '<td class="col-dash-node"><b>' + he(n.name) + '</b><div class="meta-row">' + he(n.fingerprint.substring(0,16)) + '...</div></td>';
       h += '<td class="mono">' + ipHtml + '</td>';
-      h += '<td class="mono">' + he(n.os) + ' / ' + he(n.arch) + '</td>';
+      var sysInfo = (n.hostname ? he(n.hostname) + ' · ' : '') + he(n.os) + ' / ' + he(n.arch);
+      h += '<td class="mono">' + sysInfo + '</td>';
       h += '<td class="col-dom"><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
       h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
       h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';

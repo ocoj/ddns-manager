@@ -82,9 +82,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if req.Hardware != nil {
 		rec.Hardware = req.Hardware
 	}
-	// 记录心跳: DDNS 健康状态变更或首次心跳
+	// 记录心跳: DDNS 健康状态变更或首次心跳（含 IPv4/IPv6）
 	s.logMgr.LogWithNode("heartbeat", "收到心跳", nodeID,
-		fmt.Sprintf("ddns=%s ipv4=%s", h.Status, req.Status.IPv4), "info")
+		fmt.Sprintf("ddns=%s ipv4=%s ipv6=%s", h.Status, req.Status.IPv4, req.Status.IPv6), "info")
 	resp := model.HeartbeatResp{OK: true, Timestamp: s.nowInTZ().Format(time.RFC3339)}
 
 	// ── 升级推送（审批门控之前）──

@@ -57,8 +57,10 @@ func GeneratePFX(certPEM, keyPEM []byte, password string) ([]byte, error) {
 	}
 
 	// Build PKCS#12 container — 包含完整证书链，Windows 才能正确显示颁发者和信任链
-	// go-pkcs12 Modern: PBES2 + HMAC-SHA-256 (非旧版 RC2/3DES)
-	pfxData, err := pkcs12.Modern.Encode(privKey, leaf, caCerts, password)
+	// ⚠️ 使用 LegacyDES (3DES+SHA1) 而非 Modern (PBES2+SHA256)
+	// Modern 格式在 Win2016/2019 等旧版 Windows 上导入时报密码错误（不支持 PBES2）
+	// LegacyDES 兼容 Windows 7 ~ Windows 11 全版本，与 OpenSSL -descert 一致
+	pfxData, err := pkcs12.LegacyDES.Encode(privKey, leaf, caCerts, password)
 	if err != nil {
 		return nil, fmt.Errorf("pkcs12: encode: %w", err)
 	}

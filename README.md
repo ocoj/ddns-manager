@@ -9,7 +9,7 @@
 | **[docs/架构与实现.md](docs/架构与实现.md)** | 后端架构与实现（数据模型、API、配置引擎、安全、部署） |
 | **[docs/前端设计.md](docs/前端设计.md)** | Web 前端设计规范（布局、色彩、组件、API 对照） |
 | **[CHANGELOG.md](CHANGELOG.md)** | 版本变更日志 |
-| **[docs/audits/2026-05-10.md](docs/audits/2026-05-10.md)** | 全量代码审计报告 |
+| **[docs/audits/2026-05-13.md](docs/audits/2026-05-13.md)** | v1.5.11 全量代码审计报告（18项修复） |
 
 ## 特性
 
@@ -41,4 +41,4 @@ curl -fsSL https://MANAGER:9877/bin/install.sh | sh -s -- -m https://MANAGER:987
 - JSON 文件持久化 / AES-256-GCM 加密 / HKDF-SHA256 密钥派生
 - ACME (Let's Encrypt / ZeroSSL / Google Trust) / SMTP 邮件通知
 
-> **当前版本**: v1.5.10 — 时区一致性 + 自动升级修复 + PFX 证书链 + ACME 超时 + UI 修复
+> **当前版本**: v1.5.11 — 全量安全审计修复（18项）: ACME续签推送、Windows升级竞态、日志审计补全

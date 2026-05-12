@@ -35,6 +35,7 @@
 - **M5 handlerBinFile 路径穿越防护强化** — 新增绝对路径/反斜杠/null字节检查 + `filepath.Clean` 二次防护 + `HasPrefix` 验证
 - **handleDeleteAgentBinary 自动 RebuildManifest** — 删除二进制后重建 manifest，防止已删二进制仍被推送
 - **importPFXToIIS/importToIIS 返回 bool** — 支持 H5 条件写入 `.cert_hash`
+- **文档对齐** — `docs/架构与实现.md` 更新 Windows 升级流程、ACME续签后UpdateCertMeta说明、审计日志API补全；`docs/前端设计.md` 更新日志API返回格式
 
 ## v1.5.10 — 2026-05-12
 

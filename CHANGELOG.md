@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## v1.5.10 — 2026-05-12
+
+### 🕐 时区一致性修复（6 项）
+
+**问题**：日志/Web UI/邮件时间戳使用硬编码 UTC，不符合本地用户习惯。设置页时区选择器对日志展示、心跳时间戳、邮件时间未生效。
+
+#### 🔴 Logger 事件时间标准化
+- **事件存储统一 UTC** — `logEvent()` 使用 `time.Now().UTC()`，保证跨时区比较/排序正确
+- **展示时区转换** — 新增 `DisplayTime(t)`/`FormatEventInTZ(e)` 方法，使用 `m.tz` 转换为配置时区
+- **日志 API 转换** — `handleGetLogs` 返回事件前将 `time.Time` 从 UTC `In(tz)` 到配置时区，前端显示本地时间
+
+#### 🟠 心跳/节点/证书时间戳
+- **handlers_nodes.go** — `LastSeen`/`Timestamp`/`ConfigSentAt`/`UpgradeState.now` 从 `time.Now().UTC()` 改为 `s.nowInTZ()`
+- **handlers_admin.go** — 节点注册 `CreatedAt`、DNS Key `UpdatedAt` 改用配置时区
+- **handlers_certs.go** — ACME 账号 `Updated` 改用配置时区
+- **cmd/manager/main.go** — ACME 引导时间戳改用配置时区
+
+#### 🟡 时区同步链路完善
+- **server.go** — 添加 `timezone` 缓存字段 + `GetTimezone()`/`SetTimezone()`/`nowInTZ()` 统一接口
+- **handleSaveTimezone** — 调用 `s.SetTimezone(loc)` 同步更新 Server 缓存 + accessCollector + logger（此前仅更新 accessCollector）
+- **handleSaveTimezone** — 同步刷新 SMTP 配置中的时区，确保邮件时间戳与设置一致
+- **handleLogsCleanup** — 使用 Server 缓存的时区计算日期边界，消除重复 `LoadTimezoneConfig` 调用
+
+#### 🔧 冗余消除
+- 移除 `handleGetLogs` 和 `handleLogsCleanup` 中重复的 `LoadTimezoneConfig()` 调用，统一走 Server 缓存
+
+#### 🧪 测试
+- 新增 `TestTimezone_DisplayConversion` — UTC→CST 转换验证
+- 新增 `TestTimezone_UTCStorage` — Logger UTC 存储验证
+- 新增 `TestTimezone_BoundaryDST` — 夏令时边界跨时区转换
+- 新增 `TestTimezone_RFC3339Formatting` — RFC3339 格式含时区偏移
+- 新增 `TestTimezone_DefaultFallback` — 无配置时默认 Asia/Shanghai
+
+---
+
 ## v1.5.9 — 2026-05-12
 
 ### 🏗️ 激进重构（9 项全量审计修复 + 架构增强 + 版本管理完善）

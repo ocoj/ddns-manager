@@ -52,7 +52,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusForbidden, "指纹不匹配")
 		return
 	}
-	rec.LastSeen = time.Now().UTC()
+	rec.LastSeen = s.nowInTZ()
 	if req.Status.IPv4 != "" {
 		rec.Status.IPv4 = req.Status.IPv4
 	}
@@ -82,7 +82,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// 记录心跳: DDNS 健康状态变更或首次心跳
 	s.logMgr.LogWithNode("heartbeat", "收到心跳", nodeID,
 		fmt.Sprintf("ddns=%s ipv4=%s", h.Status, req.Status.IPv4), "info")
-	resp := model.HeartbeatResp{OK: true, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	resp := model.HeartbeatResp{OK: true, Timestamp: s.nowInTZ().Format(time.RFC3339)}
 
 	// 审批门控: 未审批节点只更新状态，不推送配置/证书/升级
 	if !rec.Approved {
@@ -104,7 +104,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("%d bytes", len(rendered)), "success")
 			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}
 			rec.ConfigHash = cfgHash
-			rec.ConfigSentAt = time.Now().UTC()
+			rec.ConfigSentAt = s.nowInTZ()
 		}
 	}
 
@@ -114,7 +114,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// 两个并发心跳同时修改 UpgradeState 时后写者覆盖先写者，UpdateAgentConfigAtomic
 	// 持写锁读-改-写消除此 TOCTOU 竞态（替代 LoadAgentConfig → 修改 → SaveAgentConfig 的三步分离模式）。
 	if goos != "" && goarch != "" && req.Status.AgentVersion != "" {
-		now := time.Now().UTC()
+		now := s.nowInTZ()
 		s.store.UpdateAgentConfigAtomic(func(agentCfg *store.AgentConfig) {
 			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
 				return

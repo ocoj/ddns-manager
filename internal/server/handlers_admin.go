@@ -84,7 +84,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	rec := &model.NodeRecord{
 		Fingerprint:  req.Fingerprint,
 		PasswordHash: string(hash),
-		CreatedAt:    time.Now().UTC(),
+		CreatedAt:    s.nowInTZ(),
 	}
 	s.store.PutNode(req.NodeID, rec)
 	s.logMgr.LogWithNode("节点", "注册", req.NodeID, "等待审批", "info")
@@ -123,7 +123,7 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 	if keys == nil {
 		keys = make(map[string]*model.DNSKeyRecord)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.nowInTZ().Format(time.RFC3339)
 	keyName := req.Name
 	if existing, ok := keys[keyName]; ok {
 		if req.Provider != "" { existing.Provider = req.Provider }
@@ -168,13 +168,7 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	// date range: from/to in RFC3339 or "2006-01-02" format
 	// 日期字符串按配置时区解析 (如 Asia/Shanghai → UTC+8)
-	tzCfg, _ := s.store.LoadTimezoneConfig()
-	loc := time.UTC
-	if tzCfg != nil && tzCfg.Timezone != "" {
-		if l, err := time.LoadLocation(tzCfg.Timezone); err == nil {
-			loc = l
-		}
-	}
+	loc := s.GetTimezone()
 	var from, to time.Time
 	if fs := r.URL.Query().Get("from"); fs != "" {
 		from, _ = time.Parse(time.RFC3339, fs)
@@ -195,6 +189,11 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		events = s.logMgr.QueryByTime(category, status, node, from, to, limit, offset)
 	} else {
 		events = s.logMgr.Query(category, limit, offset)
+	}
+	// Convert event times from storage TZ to display TZ for Web UI
+	tz := s.GetTimezone()
+	for i := range events {
+		events[i].Time = events[i].Time.In(tz)
 	}
 	categories := s.logMgr.Categories()
 	total := len(events)
@@ -229,14 +228,8 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogsCleanup(w http.ResponseWriter, r *http.Request) {
 	// Always clean old rotated logs (older than retention days)
 	// 使用配置时区计算日期边界
-	loc := time.Local
-	if tzCfg, _ := s.store.LoadTimezoneConfig(); tzCfg != nil {
-		if l, err := time.LoadLocation(tzCfg.Timezone); err == nil {
-			loc = l
-		}
-	}
 	delFiles, delMB := s.logMgr.EnsureDiskSpace()
-	before := time.Now().In(loc).AddDate(0, 0, -s.cfg.Logging.RetentionDays)
+	before := s.nowInTZ().AddDate(0, 0, -s.cfg.Logging.RetentionDays)
 	oldFiles, oldMB := s.logMgr.CleanupBefore(before)
 	s.logMgr.Log("system", "日志清理", "",
 		fmt.Sprintf("deleted %d files (%.1f MB)", delFiles+oldFiles, delMB+oldMB))
@@ -687,7 +680,12 @@ func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	s.accessCollector.SetTimezone(loc)
+	s.SetTimezone(loc)
+	// 同步更新 SMTP 配置中的时区，确保邮件时间戳与设置一致
+	if smtpCfg, _ := s.store.LoadSMTPConfig(); smtpCfg != nil && smtpCfg.IsConfigured() {
+		smtpCfg.Timezone = req.Timezone
+		_ = s.store.SaveSMTPConfig(smtpCfg)
+	}
 	s.logMgr.Log("system", "时区已更改", req.Timezone, "success")
 	jsonOK(w, map[string]string{"status": "saved", "timezone": req.Timezone})
 }

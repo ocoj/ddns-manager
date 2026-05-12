@@ -348,7 +348,7 @@ func (s *Server) handleACMESaveAccountIndex(w http.ResponseWriter, r *http.Reque
 	acct := store.ACMEAccountConfig{
 		Email: req.Email, CA: req.CA, KeyType: req.KeyType, AccountKey: string(keyPEM),
 		EABKID: req.EABKID, EABKey: req.EABKey,
-		Updated: time.Now().UTC().Format(time.RFC3339),
+		Updated: s.nowInTZ().Format(time.RFC3339),
 	}
 
 	if err := s.store.PutACMEAccount(idx, acct); err != nil {

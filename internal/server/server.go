@@ -40,6 +40,9 @@ type Server struct {
 	// system info cache (updated by background goroutine)
 	sysInfoMu   sync.RWMutex
 	sysInfoCache map[string]interface{}
+	// timezone cache (from timezone.json, defaults to Asia/Shanghai)
+	timezoneMu sync.RWMutex
+	timezone   *time.Location
 }
 
 
@@ -85,6 +88,35 @@ func (s *Server) removeACMEMgr(index int) {
 	if index < len(s.acmeMgrs) {
 		s.acmeMgrs = append(s.acmeMgrs[:index], s.acmeMgrs[index+1:]...)
 	}
+}
+
+// GetTimezone returns the configured timezone location (thread-safe).
+func (s *Server) GetTimezone() *time.Location {
+	s.timezoneMu.RLock()
+	defer s.timezoneMu.RUnlock()
+	if s.timezone == nil {
+		return time.Local
+	}
+	return s.timezone
+}
+
+// SetTimezone updates the timezone cache (called on startup and after settings change).
+func (s *Server) SetTimezone(loc *time.Location) {
+	s.timezoneMu.Lock()
+	s.timezone = loc
+	s.timezoneMu.Unlock()
+	// propagate to sub-components that cache time
+	if s.accessCollector != nil {
+		s.accessCollector.SetTimezone(loc)
+	}
+	if s.logMgr != nil {
+		s.logMgr.SetTimezone(loc)
+	}
+}
+
+// nowInTZ returns current time in the configured timezone.
+func (s *Server) nowInTZ() time.Time {
+	return time.Now().In(s.GetTimezone())
 }
 
 // StartAutoRenew starts a background goroutine that renews ACME certs
@@ -143,13 +175,14 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	}
 	// init multi-account ACME managers
 	svr.initACMEManagers()
-	// 加载时区配置，应用到流量统计、日志轮转
+	// 加载时区配置，应用到流量统计、日志轮转、和所有时间展示
 	tzCfg, _ := s.LoadTimezoneConfig()
 	loc, err := time.LoadLocation(tzCfg.Timezone)
-	if err == nil {
-		svr.accessCollector.SetTimezone(loc)
-		svr.logMgr.SetTimezone(loc)
+	if err != nil {
+		loc = time.Local
 	}
+	// 统一设置：Server自身缓存 + accessCollector + logger
+	svr.SetTimezone(loc)
 	return svr
 }
 

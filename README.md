@@ -41,4 +41,4 @@ curl -fsSL https://MANAGER:9877/bin/install.sh | sh -s -- -m https://MANAGER:987
 - JSON 文件持久化 / AES-256-GCM 加密 / HKDF-SHA256 密钥派生
 - ACME (Let's Encrypt / ZeroSSL / Google Trust) / SMTP 邮件通知
 
-> **当前版本**: v1.5.8 — 独立 git repo + git tag + 7 项全量审计修复
+> **当前版本**: v1.5.10 — 时区一致性修复 (日志+WebUI+邮件时间戳对齐本地时区)

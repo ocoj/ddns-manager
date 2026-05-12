@@ -364,9 +364,10 @@ func (m *Manager) rotateIfNeeded() {
 }
 
 // Log records an event to file and memory.
+// Timestamps are stored in UTC — use DisplayTime / FormatEventInTZ for local display.
 func (m *Manager) Log(category, action, detail, status string) {
 	e := Event{
-		Time:     time.Now(),
+		Time:     time.Now().UTC(),
 		Category: category,
 		Action:   action,
 		Detail:   detail,
@@ -378,7 +379,7 @@ func (m *Manager) Log(category, action, detail, status string) {
 // LogWithNode records a node-related event.
 func (m *Manager) LogWithNode(category, action, node, detail, status string) {
 	e := Event{
-		Time:     time.Now(),
+		Time:     time.Now().UTC(),
 		Category: category,
 		Action:   action,
 		Node:     node,
@@ -391,7 +392,7 @@ func (m *Manager) LogWithNode(category, action, node, detail, status string) {
 // LogAuth records an authentication event.
 func (m *Manager) LogAuth(action, user, ip, detail, status string) {
 	e := Event{
-		Time:     time.Now(),
+		Time:     time.Now().UTC(),
 		Category: "auth",
 		Action:   action,
 		User:     user,
@@ -706,10 +707,30 @@ func (m *Manager) Close() error {
 	return m.file.Close()
 }
 
-// FormatTime formats a time for display.
+// FormatTime formats a time for display (uses the time's embedded timezone).
 func FormatTime(t time.Time) string { return t.Format("2006-01-02 15:04:05") }
 
-// FormatEvent formats an event for human-readable display.
+// DisplayTime converts a UTC-stored time to the logger's configured timezone for display.
+func (m *Manager) DisplayTime(t time.Time) string {
+	return t.In(m.tz).Format("2006-01-02 15:04:05")
+}
+
+// FormatEventInTZ formats an event for display in the logger's configured timezone.
+func (m *Manager) FormatEventInTZ(e Event) string {
+	extra := ""
+	if e.Node != "" {
+		extra += fmt.Sprintf(" node=%s", e.Node)
+	}
+	if e.User != "" {
+		extra += fmt.Sprintf(" user=%s", e.User)
+	}
+	if e.IP != "" {
+		extra += fmt.Sprintf(" ip=%s", e.IP)
+	}
+	return fmt.Sprintf("%s [%s] %s: %s%s (%s)", m.DisplayTime(e.Time), e.Category, e.Action, e.Detail, extra, e.Status)
+}
+
+// FormatEvent formats an event for human-readable display (legacy, uses embedded timezone).
 func FormatEvent(e Event) string {
 	extra := ""
 	if e.Node != "" {

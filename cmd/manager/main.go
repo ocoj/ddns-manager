@@ -83,6 +83,14 @@ func main() {
 	st.RebuildManifest()
 	log.Printf("[manifest] 已重建 agent_manifest (从 /bin/ 扫描)")
 
+	// load timezone for timestamp formatting
+	tzLoc := time.Local
+	if tzCfg, _ := st.LoadTimezoneConfig(); tzCfg != nil {
+		if l, err := time.LoadLocation(tzCfg.Timezone); err == nil {
+			tzLoc = l
+		}
+	}
+
 	// ACME manager — load from stored accounts, fallback to -acme-email flag
 	var acmeMgr *acme.Manager
 	var hasAcmeMgrs bool
@@ -91,7 +99,7 @@ func main() {
 		// bootstrap: migrate -acme-email flag to store
 		st.SaveACMEAccounts([]store.ACMEAccountConfig{{
 			Email: *acmeEmail, CA: "Let's Encrypt", KeyType: "EC256",
-			Updated: time.Now().UTC().Format(time.RFC3339),
+			Updated: time.Now().In(tzLoc).Format(time.RFC3339),
 		}})
 		log.Printf("[acme] 已将命令行参数邮箱 %s 迁移到存储", *acmeEmail)
 		acmeAccounts, _ = st.LoadACMEAccounts()
@@ -111,7 +119,7 @@ func main() {
 				keyPEM, _ := acmeMgr.AccountKeyPEM()
 				if keyPEM != nil && acmeAccounts[0].AccountKey == "" {
 					acmeAccounts[0].AccountKey = string(keyPEM)
-					acmeAccounts[0].Updated = time.Now().UTC().Format(time.RFC3339)
+					acmeAccounts[0].Updated = time.Now().In(tzLoc).Format(time.RFC3339)
 					st.SaveACMEAccounts(acmeAccounts)
 				}
 				log.Printf("[acme] 帐号就绪: %s", email)

@@ -45,12 +45,18 @@ func (c *accessStatsCollector) SetTimezone(tz *time.Location) {
 	c.mu.Unlock()
 }
 
-// nowInTZ 返回当前时间在配置时区下的值(线程安全)。
+// nowInTZ 返回当前时间在配置时区下的值。
+// 注意: 调用方不应持 c.mu 锁 (避免递归死锁)。
 func (c *accessStatsCollector) nowInTZ() time.Time {
 	c.mu.Lock()
 	tz := c.tz
 	c.mu.Unlock()
 	return time.Now().In(tz)
+}
+
+// nowInTZLocked 同 nowInTZ，但调用方已持 c.mu 写锁。
+func (c *accessStatsCollector) nowInTZLocked() time.Time {
+	return time.Now().In(c.tz)
 }
 
 // loadFromDisk 从 access_buckets.json 恢复48h内流量桶
@@ -90,7 +96,7 @@ func (c *accessStatsCollector) flushLoop() {
 // flushToDisk 将内存桶写入 access_buckets.json（环形48h）
 func (c *accessStatsCollector) flushToDisk() {
 	c.mu.Lock()
-	cutoff := c.nowInTZ().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
+	cutoff := c.nowInTZLocked().Add(-time.Duration(accessMaxAge) * time.Minute).Truncate(time.Minute).Unix()
 	buckets := make(map[int64]map[string]int64, len(c.buckets))
 	for t, b := range c.buckets {
 		if t >= cutoff {
@@ -115,7 +121,7 @@ func (c *accessStatsCollector) flushToDisk() {
 func (c *accessStatsCollector) record(ip string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := c.nowInTZ()
+	now := c.nowInTZLocked()
 	min := now.Truncate(time.Minute).Unix()
 	if c.buckets[min] == nil {
 		c.buckets[min] = make(map[string]int64)

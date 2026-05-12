@@ -228,9 +228,15 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogsCleanup(w http.ResponseWriter, r *http.Request) {
 	// Always clean old rotated logs (older than retention days)
-	// and free disk space if critically low
+	// 使用配置时区计算日期边界
+	loc := time.Local
+	if tzCfg, _ := s.store.LoadTimezoneConfig(); tzCfg != nil {
+		if l, err := time.LoadLocation(tzCfg.Timezone); err == nil {
+			loc = l
+		}
+	}
 	delFiles, delMB := s.logMgr.EnsureDiskSpace()
-	before := time.Now().AddDate(0, 0, -s.cfg.Logging.RetentionDays)
+	before := time.Now().In(loc).AddDate(0, 0, -s.cfg.Logging.RetentionDays)
 	oldFiles, oldMB := s.logMgr.CleanupBefore(before)
 	s.logMgr.Log("system", "日志清理", "",
 		fmt.Sprintf("deleted %d files (%.1f MB)", delFiles+oldFiles, delMB+oldMB))
@@ -414,6 +420,10 @@ func (s *Server) handleSaveSMTP(w http.ResponseWriter, r *http.Request) {
 		ManagerURL: req.ManagerURL, CertExpiryDays: req.CertExpiryDays, NotifyHeartbeatFail: req.NotifyHeartbeatFail,
 		NotifySecurity: req.NotifySecurity, NotifyConfigChange: req.NotifyConfigChange,
 		NotifySystemError: req.NotifySystemError, NotifyCertExpiry: req.NotifyCertExpiry,
+	}
+	// 注入时区 — 邮件中的时间戳据此显示
+	if tzCfg, _ := s.store.LoadTimezoneConfig(); tzCfg != nil {
+		cfg.Timezone = tzCfg.Timezone
 	}
 	if err := s.store.SaveSMTPConfig(cfg); err != nil {
 		jsonErr(w, http.StatusInternalServerError, err.Error())

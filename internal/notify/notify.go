@@ -19,12 +19,21 @@ type Config struct {
 	To             string `json:"to"`
 	ManagerURL     string `json:"manager_url"` // 管理端域名 (邮件中可点击链接)
 	CertExpiryDays int    `json:"cert_expiry_days"`
+	Timezone       string `json:"timezone"` // 时区，默认 Asia/Shanghai
 	// event notification toggles
 	NotifyHeartbeatFail bool `json:"notify_heartbeat_fail"`
 	NotifySecurity      bool `json:"notify_security"`
 	NotifyConfigChange  bool `json:"notify_config_change"`
 	NotifySystemError   bool `json:"notify_system_error"`
 	NotifyCertExpiry    bool `json:"notify_cert_expiry"`
+}
+
+func (c *Config) now() time.Time {
+	loc, err := time.LoadLocation(c.Timezone)
+	if err != nil || c.Timezone == "" {
+		loc = time.Local
+	}
+	return time.Now().In(loc)
 }
 
 // Masked returns a copy with the password replaced by asterisks.
@@ -50,7 +59,7 @@ func (c *Config) SendTest() error {
 	}
 	subject := "[ddns-manager] SMTP 配置验证"
 	body := fmt.Sprintf("您好，\n\nSMTP 邮件配置验证成功！\n\n发送时间: %s\n服务器: %s:%d\n发件人: %s\n管理端: %s\n\n此邮件由 ddns-manager 系统自动发送，请勿回复。",
-		time.Now().Format("2006-01-02 15:04:05"), c.Host, c.Port, c.Username, c.managerURL())
+		c.now().Format("2006-01-02 15:04:05"), c.Host, c.Port, c.Username, c.managerURL())
 	return c.send(subject, body)
 }
 
@@ -66,7 +75,7 @@ func (c *Config) SendCertAlert(alerts []CertAlert) error {
 		lines = append(lines, fmt.Sprintf("  • %s — %d 天后到期 (%s)", a.BundleName, a.DaysLeft, a.ExpiresAt))
 	}
 	lines = append(lines, "", fmt.Sprintf("管理端地址: %s", c.managerURL()))
-	lines = append(lines, "", fmt.Sprintf("发送时间: %s", time.Now().Format("2006-01-02 15:04:05")))
+	lines = append(lines, "", fmt.Sprintf("发送时间: %s", c.now().Format("2006-01-02 15:04:05")))
 	lines = append(lines, "", "此邮件由 ddns-manager 系统自动发送，请勿回复。")
 	body := strings.Join(lines, "\n")
 	subject := fmt.Sprintf("[ddns-manager] %d 个证书即将到期", len(alerts))
@@ -97,7 +106,7 @@ func (c *Config) SendEventAlert(eventType, title, detail string) error {
 		return nil
 	}
 	body := fmt.Sprintf("您好，\n\nddns-manager 系统通知\n\n事件类型: %s\n详情: %s\n时间: %s\n管理端: %s\n\n此邮件由 ddns-manager 系统自动发送，请勿回复。",
-		title, detail, time.Now().Format("2006-01-02 15:04:05"), c.managerURL())
+		title, detail, c.now().Format("2006-01-02 15:04:05"), c.managerURL())
 	subject := fmt.Sprintf("[ddns-manager] %s", title)
 	return c.send(subject, body)
 }

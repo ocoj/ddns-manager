@@ -141,11 +141,12 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	}
 	// init multi-account ACME managers
 	svr.initACMEManagers()
-	// 加载时区配置，应用到流量统计
+	// 加载时区配置，应用到流量统计、日志轮转
 	tzCfg, _ := s.LoadTimezoneConfig()
 	loc, err := time.LoadLocation(tzCfg.Timezone)
 	if err == nil {
 		svr.accessCollector.SetTimezone(loc)
+		svr.logMgr.SetTimezone(loc)
 	}
 	return svr
 }

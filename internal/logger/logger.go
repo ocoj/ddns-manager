@@ -46,6 +46,7 @@ type Manager struct {
 	lastRotate    time.Time  // tracks last log file rotation
 	lastDiskCheck time.Time  // tracks last disk space check (debounce)
 	maxFileMB     int        // rotate when file exceeds this
+	tz           *time.Location // 时区，用于日志轮转日期文件名
 }
 
 // New creates a Logger that writes to the given file path.
@@ -84,10 +85,17 @@ func NewWithConfig(logPath string, maxSize, retentionDays, maxFileMB int) (*Mana
 		lastRotate:    time.Now(),
 		lastDiskCheck: time.Now(),
 		maxFileMB:     maxFileMB,
+		tz:            time.Local,
 	}
-	// 重启时从磁盘回读最近事件
 	m.reloadFromDisk()
 	return m, nil
+}
+
+// SetTimezone 设置时区，影响日志文件轮转日期文件名。
+func (m *Manager) SetTimezone(loc *time.Location) {
+	if loc != nil {
+		m.tz = loc
+	}
 }
 
 // reloadFromDisk reads recent events from the log file into ring buffer.
@@ -342,7 +350,7 @@ func (m *Manager) rotateIfNeeded() {
 	}
 
 	m.file.Close()
-	rotated := strings.TrimSuffix(m.logPath, ".log") + "-" + time.Now().Format("2006-01-02") + ".log"
+	rotated := strings.TrimSuffix(m.logPath, ".log") + "-" + time.Now().In(m.tz).Format("2006-01-02") + ".log"
 	os.Rename(m.logPath, rotated)
 
 	f, err := os.OpenFile(m.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)

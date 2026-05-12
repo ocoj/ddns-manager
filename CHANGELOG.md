@@ -2,7 +2,7 @@
 
 ## v1.5.11 — 2026-05-13
 
-### 🔐 安全审计修复（18 项全量修复）
+### 🔐 全量安全审计 + 持续修复（23+ 项）
 
 #### 🔴 Critical（4 项）
 
@@ -40,6 +40,17 @@
 - **PFX 双格式全链路修复** — ① `UpdateCertMeta` 先生成双PFX再算hash（修复续签后不下发）② Agent Modern失败正确降级Legacy（修复Win2016 IIS导入失败）③ `handleDownloadPFX` 默认返回ZIP双格式+README
 - **Logo 高清化** — 矢量源 2460×2468 RGBA 替换旧版，所有尺寸 LANCZOS 缩放
 - **文档对齐** — `docs/架构与实现.md` 更新 Windows 升级流程、ACME续签后UpdateCertMeta说明、审计日志API补全、PFX双格式说明；`docs/前端设计.md` 更新日志API返回格式
+
+#### 🐛 后续修复（v1.5.11 持续）
+
+- **PFX 双格式全链路修复** — ① `UpdateCertMeta` 先生成双PFX再算hash（修复续签后不下发）② Agent Modern失败正确降级Legacy（修复Win2016 IIS导入失败）③ `handleDownloadPFX` 默认返回ZIP双格式+README ④ 前端检测Content-Type选扩展名
+- **节点配置证书绑定下拉为空** — `cr.data.certs` → `cr.data`（API返回数组非对象）
+- **证书绑定路径提示** — placeholder改为"部署路径 (Windows留空, Linux填实际路径)"，按钮下方增加灰色说明
+- **节点名显示计算机名** — `normalizeNode` 改用用户自定义节点ID，计算机名移到系统列（hostname · OS / arch）
+- **保存配置自动审批** — `handleSaveNodeConfig` 设置 `Approved=true`，编辑配置即审批
+- **节点列表在线状态口径统一** — `handleListNodes` 新增超时检测（LastSeen>5min→DOWN），与仪表盘一致
+- **DNSUpdater空配置明确报错** — 无配置时返回 `"等待管理端下发DNS配置（节点可能未审批）"`
+- **StartAutoRenew增强** — 续签成功后记审计日志 + 重载bundle确保缓存一致
 
 ## v1.5.10 — 2026-05-12
 

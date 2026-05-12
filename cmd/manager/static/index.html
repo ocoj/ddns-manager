@@ -56,7 +56,7 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;display:none}
 .login-card .err.show{display:block}
 
-.card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px;overflow:hidden}
+.card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px}
 .card h3{font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:12px}
 .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .card-header h3{margin-bottom:0}
@@ -2270,8 +2270,7 @@ function renderSettings(smtp, rl, tz) {
   window._tz = tz;
   // 修改密码
   h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
-  h += '<div class="form-inline"><div class="form-group"><label>新密码</label><input type="password" id="set-new-pwd" style="width:200px"></div>';
-  h += '<div class="form-group"><label>确认密码</label><input type="password" id="set-confirm-pwd" style="width:200px"></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>新密码</label><div style="display:flex;gap:8px"><input type="password" id="set-new-pwd" placeholder="新密码" style="flex:1"><input type="password" id="set-confirm-pwd" placeholder="确认密码" style="flex:1"></div></div>';
   h += '<div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="changePassword()">保存</button></div></div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>SMTP 邮件通知</h3></div>';
@@ -2463,10 +2462,25 @@ function fmtTime(utcStr) {
 // ═══ 「更多」下拉菜单 ═══
 function toggleMore(e) {
   e.stopPropagation();
-  var menu = e.currentTarget.nextElementSibling;
+  var btn = e.currentTarget;
+  var menu = btn.nextElementSibling;
   var open = menu.classList.contains('show');
   document.querySelectorAll('.more-menu.show').forEach(function(m) { m.classList.remove('show'); });
-  if (!open) menu.classList.add('show');
+  if (!open) {
+    // 检测视口空间：下方不够则向上展开，避免被裁切
+    menu.style.display = 'block';
+    var menuH = menu.offsetHeight;
+    menu.style.display = '';
+    var rect = btn.getBoundingClientRect();
+    if (rect.bottom + menuH > window.innerHeight - 8) {
+      menu.style.top = 'auto';
+      menu.style.bottom = '100%';
+    } else {
+      menu.style.top = '100%';
+      menu.style.bottom = 'auto';
+    }
+    menu.classList.add('show');
+  }
 }
 document.addEventListener('click', function() {
   document.querySelectorAll('.more-menu.show').forEach(function(m) { m.classList.remove('show'); });

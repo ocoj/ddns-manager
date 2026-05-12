@@ -162,7 +162,7 @@ func main() {
 		Addr:         cfg.Server.Listen,
 		Handler:      r,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 120 * time.Second, // ACME 签发 acme.sh 耗时 30-60s，需足够写回响应
 		IdleTimeout:  60 * time.Second,
 	}
 

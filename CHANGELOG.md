@@ -33,6 +33,42 @@
 - 新增 `TestTimezone_RFC3339Formatting` — RFC3339 格式含时区偏移
 - 新增 `TestTimezone_DefaultFallback` — 无配置时默认 Asia/Shanghai
 
+### 🔧 自动升级修复（3 项）
+
+#### 🔴 审批门控误拦升级
+- **handlers_nodes.go** — 升级推送（仅含二进制 URL）移到审批门控之前，未审批节点也能接收升级
+- 配置/证书推送仍在审批之后（含 DNS Key 等机密）
+
+#### 🔴 升级闭包跨锁死锁
+- **handlers_nodes.go** — `LoadAgentManifest()` 从 `UpdateAgentConfigAtomic` 闭包内移到闭包外，消除 `store.mu` Lock→RLock 同 goroutine 死锁
+
+#### 🟠 升级完成标记不到达
+- **handlers_nodes.go** — 完成标记移到版本匹配 `return` 之前（已升级节点走到版本匹配即 return，永远标记不了完成）
+- 升级完成时增加 `[upgrade] 升级已完成` 日志
+
+### 🎨 Web UI 修复（2 项）
+
+#### 密码卡片对齐
+- **设置页** — 密码输入框改为 2 列布局，两个输入框并排 flex，总宽与上方时区下拉框对齐，保存按钮对齐
+
+#### 证书「更多」下拉裁切
+- **`.card` overflow** — `hidden` → 移除，下拉菜单不再被卡片边界裁切
+- **`toggleMore()`** — 增加视口检测，下方空间不足时自动向上展开
+
+### 🔐 PFX 证书修复（2 项）
+
+#### PFX 下载私钥检测
+- **handleDownloadPFX** — 私钥检测从仅扩展名 `.key` → 扩展名 + 内容含 `PRIVATE KEY`（适配 acme.sh 输出的 `privkey.pem`）
+- **handleUploadCert** — 上传时 PFX 自动生成同步修复
+- **handleACMEIssue** — ACME 签发后 PFX 自动生成同步修复
+
+#### PFX 缺失证书链
+- **crypto/pkcs12.go** — 解析全部 PEM 块，叶子证书 + 中间 CA 链完整打包到 PFX
+- Windows 导入后正确显示信任链（不再仅显示 `E7`）
+
+### ⏱️ ACME 响应超时修复
+- **cmd/manager/main.go** — `WriteTimeout: 30s → 120s`，acme.sh DNS-01 签发耗时 30-60s，响应必须在超时前写回
+
 ---
 
 ## v1.5.9 — 2026-05-12

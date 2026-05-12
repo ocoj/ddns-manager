@@ -168,8 +168,9 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 自动生成 PFX — 检测上传文件中是否有 PEM 证书+私钥对
-	certPEM, hasCert := findPEMFile(files, ".pem", ".crt")
-	keyPEM, hasKey := findPEMFile(files, ".key")
+	// 私钥可能以 .pem/.key 扩展名上传，需同时检查文件内容
+	certPEM, hasCert := findPEMFile(files, ".pem", ".crt", ".cer")
+	keyPEM, hasKey := findPrivateKeyFile(files)
 	if hasCert && hasKey {
 		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
 			files["cert.pfx"] = pfxData
@@ -486,12 +487,22 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 			bundle.Files[fn] = data
 		}
 	}
-	// 生成 PFX — Windows 节点无需 openssl，直接用 importPFXToIIS 快速路径
-	if certPEM, ok1 := bundle.Files["fullchain.pem"]; ok1 {
-		if keyPEM, ok2 := bundle.Files["privkey.pem"]; ok2 {
-			if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
-				bundle.Files["cert.pfx"] = pfxData
-			}
+	// 生成 PFX — 查找证书和私钥（不硬编码文件名，适配多种 ACME 输出格式）
+	var certPEM, keyPEM []byte
+	for fname, content := range bundle.Files {
+		lower := strings.ToLower(fname)
+		s := string(content)
+		isKey := strings.HasSuffix(lower, ".key") || strings.Contains(s, "PRIVATE KEY")
+		isCert := strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt")
+		if isKey && keyPEM == nil {
+			keyPEM = content
+		} else if isCert && !isKey && certPEM == nil {
+			certPEM = content
+		}
+	}
+	if certPEM != nil && keyPEM != nil {
+		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
+			bundle.Files["cert.pfx"] = pfxData
 		}
 	}
 	bundle.Hash = computeBundleHash(bundle.Files)
@@ -525,19 +536,18 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find cert + key PEM from bundle
+	// Find cert + key PEM from bundle.
+	// PEM files often use .pem extension for both cert and key — detect by content.
 	var certPEM, keyPEM []byte
 	for fname, content := range b.Files {
 		lower := strings.ToLower(fname)
-		switch {
-		case strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt"):
-			if certPEM == nil {
-				certPEM = content
-			}
-		case strings.HasSuffix(lower, ".key"):
-			if keyPEM == nil {
-				keyPEM = content
-			}
+		s := string(content)
+		isKey := strings.HasSuffix(lower, ".key") || strings.Contains(s, "PRIVATE KEY")
+		isCert := strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt") || strings.HasSuffix(lower, ".cer")
+		if isKey && keyPEM == nil {
+			keyPEM = content
+		} else if isCert && !isKey && certPEM == nil {
+			certPEM = content
 		}
 	}
 	if certPEM == nil || keyPEM == nil {
@@ -574,6 +584,18 @@ func findPEMFile(files map[string][]byte, exts ...string) ([]byte, bool) {
 			if strings.HasSuffix(lower, ext) {
 				return data, true
 			}
+		}
+	}
+	return nil, false
+}
+
+// findPrivateKeyFile searches uploaded files for a private key.
+// Checks by extension (.key) AND by content ("PRIVATE KEY") since PEM keys may use .pem extension.
+func findPrivateKeyFile(files map[string][]byte) ([]byte, bool) {
+	for name, data := range files {
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".key") || strings.Contains(string(data), "PRIVATE KEY") {
+			return data, true
 		}
 	}
 	return nil, false

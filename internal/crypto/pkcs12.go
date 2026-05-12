@@ -18,23 +18,33 @@ import (
 // can use the fast importPFXToIIS path without depending on openssl.
 //
 // Parameters:
-//   - certPEM: PEM-encoded certificate (fullchain or leaf cert)
+//   - certPEM: PEM-encoded certificate chain (fullchain or leaf cert with intermediates)
 //   - keyPEM:  PEM-encoded private key (RSA or ECDSA)
-//   - password: PFX encryption password (use "" for no encryption; the PFX is
-//     transmitted inside AES-256-GCM encrypted heartbeat, so PFX-level
-//     encryption is defense-in-depth)
+//   - password: PFX encryption password
 //
-// Returns the DER-encoded PKCS#12 container bytes.
+// Returns the DER-encoded PKCS#12 container bytes (leaf cert + full CA chain + private key).
 func GeneratePFX(certPEM, keyPEM []byte, password string) ([]byte, error) {
-	// Decode certificate
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		return nil, fmt.Errorf("pkcs12: cannot decode certificate PEM")
+	// Decode all certificates from PEM (fullchain may contain leaf + intermediates)
+	var certs []*x509.Certificate
+	rest := certPEM
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue // skip non-certificate PEM blocks
+		}
+		certs = append(certs, cert)
 	}
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("pkcs12: parse certificate: %w", err)
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("pkcs12: no valid certificates found in PEM")
 	}
+
+	leaf := certs[0]              // first cert is the leaf/server cert
+	caCerts := certs[1:]           // rest are intermediate/root CA certs
 
 	// Decode private key
 	keyBlock, _ := pem.Decode(keyPEM)
@@ -46,10 +56,9 @@ func GeneratePFX(certPEM, keyPEM []byte, password string) ([]byte, error) {
 		return nil, fmt.Errorf("pkcs12: parse private key: %w", err)
 	}
 
-	// Build PKCS#12 container with modern algorithms (PBES2 + HMAC-SHA-256)
-	// go-pkcs12 defaults to legacy RC2/3DES which is flagged by modern scanners;
-	// we explicitly request modern ciphers.
-	pfxData, err := pkcs12.Modern.Encode(privKey, cert, nil, password)
+	// Build PKCS#12 container — 包含完整证书链，Windows 才能正确显示颁发者和信任链
+	// go-pkcs12 Modern: PBES2 + HMAC-SHA-256 (非旧版 RC2/3DES)
+	pfxData, err := pkcs12.Modern.Encode(privKey, leaf, caCerts, password)
 	if err != nil {
 		return nil, fmt.Errorf("pkcs12: encode: %w", err)
 	}

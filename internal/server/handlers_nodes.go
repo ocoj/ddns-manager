@@ -84,38 +84,30 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("ddns=%s ipv4=%s", h.Status, req.Status.IPv4), "info")
 	resp := model.HeartbeatResp{OK: true, Timestamp: s.nowInTZ().Format(time.RFC3339)}
 
-	// 审批门控: 未审批节点只更新状态，不推送配置/证书/升级
-	if !rec.Approved {
-		s.store.PutNode(nodeID, rec)
-		jsonOK(w, resp)
-		return
-	}
-
-	// config push: render ddns-go YAML from saved config + DNS keys, push if changed
-	if rec.ConfigYAML != "" {
-		rendered, cfgHash, renderErr := renderDDNSConfig(rec.ConfigYAML, s.store)
-		if renderErr != nil {
-			s.logMgr.LogWithNode("config", "配置渲染失败", nodeID,
-				renderErr.Error(), "error")
-			// 回传错误给 Agent，便于诊断
-			resp.ConfigError = renderErr.Error()
-		} else if rendered != "" && req.ConfigHash != cfgHash {
-			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
-				fmt.Sprintf("%d bytes", len(rendered)), "success")
-			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}
-			rec.ConfigHash = cfgHash
-			rec.ConfigSentAt = s.nowInTZ()
-		}
-	}
-
+	// ── 升级推送（审批门控之前）──
+	// 升级只下发二进制 URL，不含机密；未审批节点也应能接收升级。
+	// 配置/证书推送仍在审批门控之后（含 DNS Key 等机密）。
 	goos, goarch := detectPlatform(rec)
-
-	// 升级推送 + 退避 + 完成标记 — 全部使用 UpdateAgentConfigAtomic 原子化。
-	// 两个并发心跳同时修改 UpgradeState 时后写者覆盖先写者，UpdateAgentConfigAtomic
-	// 持写锁读-改-写消除此 TOCTOU 竞态（替代 LoadAgentConfig → 修改 → SaveAgentConfig 的三步分离模式）。
 	if goos != "" && goarch != "" && req.Status.AgentVersion != "" {
 		now := s.nowInTZ()
+		// 在 UpdateAgentConfigAtomic 闭包外加载 manifest，避免闭包内 RLock 死锁
+		// （UpdateAgentConfigAtomic 持 store.mu 写锁，LoadAgentManifest 需要 store.mu 读锁）
+		manifest, _ := s.store.LoadAgentManifest()
+		binKey := goos + "-" + goarch
+		manifestFile := manifest[binKey]
 		s.store.UpdateAgentConfigAtomic(func(agentCfg *store.AgentConfig) {
+			// 标记已完成的升级 — 必须在版本匹配判断之前
+			// （否则已升级节点走到版本匹配即 return，永远不会标记完成）
+			if agentCfg.UpgradeState != nil {
+				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+						job.Completed = now.Format(time.RFC3339)
+						agentCfg.UpgradeState[nodeID] = job
+						s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,
+							fmt.Sprintf("ver=%s", req.Status.AgentVersion), "success")
+					}
+				}
+			}
 			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
 				return
 			}
@@ -143,35 +135,47 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if shouldPush {
-				manifest, _ := s.store.LoadAgentManifest()
-				key := goos + "-" + goarch
-				if f, ok := manifest[key]; ok && f != "" {
-					safeName := strings.ReplaceAll(strings.ReplaceAll(f, "..", ""), "/", "")
-					if safeName != "" && safeName == f {
-						if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
-							resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
-							if agentCfg.UpgradeState == nil {
-								agentCfg.UpgradeState = make(map[string]store.UpgJob)
-							}
-							job := agentCfg.UpgradeState[nodeID]
-							job.TargetVer = agentCfg.LatestVersion
-							job.Triggered = now.Format(time.RFC3339)
-							job.RetryCount++
-							agentCfg.UpgradeState[nodeID] = job
+				safeName := strings.ReplaceAll(strings.ReplaceAll(manifestFile, "..", ""), "/", "")
+				if safeName != "" && safeName == manifestFile {
+					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
+						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
+						if agentCfg.UpgradeState == nil {
+							agentCfg.UpgradeState = make(map[string]store.UpgJob)
 						}
-					}
-				}
-			}
-			// 标记已完成的升级（agent 版本已匹配目标版本）
-			if agentCfg.UpgradeState != nil {
-				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
-						job.Completed = now.Format(time.RFC3339)
+						job := agentCfg.UpgradeState[nodeID]
+						job.TargetVer = agentCfg.LatestVersion
+						job.Triggered = now.Format(time.RFC3339)
+						job.RetryCount++
 						agentCfg.UpgradeState[nodeID] = job
 					}
 				}
 			}
 		})
+	}
+
+	// ── 审批门控（配置/证书推送，含机密）──
+	// 升级推送已在上方执行（不含机密）；以下仅对已审批节点推送配置和证书。
+	if !rec.Approved {
+		s.store.PutNode(nodeID, rec)
+		jsonOK(w, resp)
+		return
+	}
+
+	// config push: render ddns-go YAML from saved config + DNS keys, push if changed
+	if rec.ConfigYAML != "" {
+		rendered, cfgHash, renderErr := renderDDNSConfig(rec.ConfigYAML, s.store)
+		if renderErr != nil {
+			s.logMgr.LogWithNode("config", "配置渲染失败", nodeID,
+				renderErr.Error(), "error")
+			// 回传错误给 Agent，便于诊断
+			resp.ConfigError = renderErr.Error()
+		} else if rendered != "" && req.ConfigHash != cfgHash {
+			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
+				fmt.Sprintf("%d bytes", len(rendered)), "success")
+			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}
+			rec.ConfigHash = cfgHash
+			rec.ConfigSentAt = s.nowInTZ()
+		}
 	}
 	key := mycrypto.DeriveKey(password, rec.Fingerprint, "cert-transport")
 	for _, binding := range rec.CertBindings {

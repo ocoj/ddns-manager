@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## v1.5.9 — 2026-05-12
+
+### 🏗️ 激进重构（9 项全量审计修复 + 架构增强）
+
+#### 🔴 Critical
+- **C1 selfUpgrade 重试循环修复** — HTTP 非 200 错误由 `return` 改为 `continue`，每次迭代独立闭包确保 defer 零泄漏。修复 HTTP 5xx 时 3 次重试形同虚设的 bug
+
+#### 🟠 High
+- **H1 initACMEManagers 跨锁死锁修复** — 拆分为两阶段：阶段1持 `acmeMu` 构建 mgr 列表后释放，阶段2不持锁启动后台 goroutine，彻底消除 `acmeMu`→`store.mu` 与 `store.mu`→`acmeMu` 反序死锁
+- **H2 handleSaveNodeConfig 错误处理** — `json.Marshal` 失败不再静默清空配置；返回 500 + 记录审计日志
+- **H3 handleUploadAgentBinary 错误处理** — `Open()`/`ReadAll()` 失败跳过文件并记录警告日志；0 字节文件拒绝写入；上传后自动 `RebuildManifest()`
+
+#### 🟡 Medium
+- **M1 心跳 UpgradeState TOCTOU 消除** — 升级推送+完成标记改用 `UpdateAgentConfigAtomic` 持写锁原子更新，消除两个并发心跳互相覆盖的竞态
+- **M2 版本号对比健壮化** — `compareVer` 从 `fmt.Sscanf` 改为 `strconv.Atoi` 严格解析，非数字段返回 0（不可比较）不再静默误判；支持更多段比较（非固定 3 段）
+- **M3 handleDownloadInstaller ver 参数校验** — 最大 32 字符 + 特殊字符黑名单，防止超长/非法版本号
+- **M4 collectCertHashes 超时保护** — 通过 goroutine+channel 实现 30s 超时，NFS 挂载卡住时不再永久阻塞心跳
+
+#### 🟢 Low
+- **L1 detectPlatform 架构归一化** — 新增 `x86_64`→`amd64`、`aarch64`→`arm64`、`armv6l/armv7l/armv8l/armhf`→`arm`、`i686/i386`→`i386` 映射，确保所有 deb 命名架构正确匹配 manifest
+
+#### 🤖 测试
+- `TestDetectPlatform_ArchNormalization` — 15 子测试覆盖 deb→Go 命名映射
+- `TestCompareVer_SemanticComparison` — 20 子测试覆盖版本比较边界（v前缀/不等长/非数字/空值）
+- `TestCompareVer_RealWorldVersions` — 6 子测试模拟实际心跳版本比较
+- `TestSelfUpgradeRetryLoop_*` — 3 测试覆盖重试成功/全部失败/首次成功
+
+---
+
 ## v1.5.8 — 2026-05-12
 
 ### 🔐 安全加固 + 性能优化（7 项全量审计修复）

@@ -151,17 +151,31 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	return svr
 }
 
+// initACMEManagers initializes multi-account ACME managers from stored config.
+// 
+// ⚠️ 锁顺序规范: acmeMu 和 store.mu 是独立锁，任何代码路径不得同时持有两者。
+// handleACMESaveAccountIndex 持有 store.mu → acmeMu (PutACMEAccount → addACMEMgr)，
+// 因此 initACMEManagers 不能持有 acmeMu 时调用 store 方法（反序死锁）。
+// 本函数在受保护的环境下构建 mgr 列表，释放 acmeMu 后才启动后台 goroutine。
 func (s *Server) initACMEManagers() {
+	// 阶段1: 构建 ACME manager 列表 (持 acmeMu)
 	s.acmeMu.Lock()
-	defer s.acmeMu.Unlock()
 	accounts, err := s.store.LoadACMEAccounts()
 	if err != nil || len(accounts) == 0 {
 		if s.acme != nil {
 			s.acmeMgrs = []*acme.Manager{s.acme}
 		}
+		s.acmeMu.Unlock()
 		return
 	}
 	certsDir := filepath.Join(s.cfg.DataDir, "certs")
+	type mgrInit struct {
+		mgr   *acme.Manager
+		idx   int
+		email string
+		ac    store.ACMEAccountConfig
+	}
+	var inits []mgrInit
 	for _, ac := range accounts {
 		mgr, err := acme.NewWithKey(certsDir, ac.Email, ":80", []byte(ac.AccountKey))
 		if err != nil {
@@ -181,9 +195,17 @@ func (s *Server) initACMEManagers() {
 			mgr.SetEAB(&acme.EAB{KID: ac.EABKID, HMACKey: ac.EABKey})
 		}
 		s.acmeMgrs = append(s.acmeMgrs, mgr)
-		// register account in background (non-blocking, with timeout)
-		idx := len(s.acmeMgrs) - 1
-		email := ac.Email
+		inits = append(inits, mgrInit{
+			mgr: mgr, idx: len(s.acmeMgrs) - 1,
+			email: ac.Email, ac: ac,
+		})
+	}
+	mgrCount := len(s.acmeMgrs)
+	s.acmeMu.Unlock() // ← 释放 acmeMu，允许 handleACMESaveAccountIndex 并发执行
+
+	// 阶段2: 后台注册账号 (不持任何锁，避免与 store.mu 形成反序)
+	for _, init := range inits {
+		mgr, idx, email, ac := init.mgr, init.idx, init.email, init.ac
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -191,17 +213,16 @@ func (s *Server) initACMEManagers() {
 				log.Printf("[acme] 注册帐号 %s 失败: %v", email, err)
 				return
 			}
-			// persist the account key if newly generated
 			keyPEM, _ := mgr.AccountKeyPEM()
 			if keyPEM != nil && ac.AccountKey == "" {
-				s.acmeMu.Lock()
+				// 持久化密钥: 仅持 store.mu (LoadACMEAccounts → SaveACMEAccounts)
+				// 不触碰 acmeMu，避免与 handleACMESaveAccountIndex 形成反序
 				s.updateACMEMgrKey(idx, string(keyPEM))
-				s.acmeMu.Unlock()
 			}
 			log.Printf("[acme] 帐号已就绪: %s", email)
 		}()
 	}
-	log.Printf("[acme] 已加载 %d 个 ACME 帐号", len(s.acmeMgrs))
+	log.Printf("[acme] 已加载 %d 个 ACME 帐号", mgrCount)
 }
 
 // updateACMEMgrKey persists the generated account key to store.

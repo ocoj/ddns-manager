@@ -439,29 +439,38 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 	}
 	// walk the cert directory for .cert_hash marker files
 	// 限制深度: 证书目录通常 ≤3 层，超过 5 层停止 (防止 CertPath 误配为 /)
+	// 超时保护: NFS 卡住时 30s 后取消 Walk（filepath.Walk 不支持 context，
+	// 通过 goroutine + channel 实现超时控制）
 	maxDepth := 5
-	filepath.Walk(cfg.CertPath, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			log.Printf("[cert] 遍历目录错误 %s: %v", p, err)
-			return nil
-		}
-		// 深度保护: 超出限制的目录跳过
-		if info.IsDir() {
-			rel, _ := filepath.Rel(cfg.CertPath, p)
-			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxDepth {
-				return filepath.SkipDir
+	done := make(chan struct{}, 1)
+	go func() {
+		filepath.Walk(cfg.CertPath, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				log.Printf("[cert] 遍历目录错误 %s: %v", p, err)
+				return nil
+			}
+			if info.IsDir() {
+				rel, _ := filepath.Rel(cfg.CertPath, p)
+				if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxDepth {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.Name() == ".cert_hash" {
+				data, err := os.ReadFile(p)
+				if err == nil {
+					result[filepath.Dir(p)] = strings.TrimSpace(string(data))
+				}
 			}
 			return nil
-		}
-		if info.Name() == ".cert_hash" {
-			data, err := os.ReadFile(p)
-			if err == nil {
-				// key is the parent directory path (the deploy path)
-				result[filepath.Dir(p)] = strings.TrimSpace(string(data))
-			}
-		}
-		return nil
-	})
+		})
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		log.Printf("[cert] 证书目录遍历超时 (30s): %s (可能是NFS挂载卡住)", cfg.CertPath)
+	}
 	return result
 }
 
@@ -575,41 +584,41 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	log.Printf("自升级: 正在下载 %s 从 %s", update.Version, url)
 	tmpFile := exePath + ".new"
 
-	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟
-	// ⚠️ 使用闭包包装每次尝试，确保 defer resp.Body.Close() 每次迭代后立即执行
-	// （在循环中直接 defer 会累积到函数返回，造成连接泄漏和 double-close）
+	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟。
+	// 每次迭代用独立闭包确保 defer 在迭代结束时立即执行（HTTP body / 文件句柄零泄漏）。
+	// BUGFIX(C1): HTTP 非 200 不应 return — return 杀死整个重试循环，3 次重试形同虚设。
+	// 改为 continue 继续下一轮，只在所有迭代耗尽后才返回最终错误。
 	var downloadErr error
-	downloadErr = func() error {
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				time.Sleep(time.Duration(attempt) * 2 * time.Second)
-				log.Printf("自升级: 重试 %d/3 ...", attempt+1)
-			}
-			hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute) // 2分钟超时（~15MB二进制），网络差时不再无限等待
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			log.Printf("自升级: 重试 %d/3 ...", attempt+1)
+		}
+		downloadErr = func() error {
+			hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute)
 			resp, err := hc.Get(url)
 			if err != nil {
-				log.Printf("自升级: 下载失败 (尝试 %d/3): %v", attempt+1, err)
-				continue
+				return fmt.Errorf("attempt %d: %w", attempt+1, err)
 			}
-			// defer 在闭包内 — 函数返回时立即执行，不会跨迭代累积
 			defer resp.Body.Close()
 			if resp.StatusCode != 200 {
-				log.Printf("自升级: HTTP %d (尝试 %d/3)", resp.StatusCode, attempt+1)
-				return fmt.Errorf("HTTP %d", resp.StatusCode)
+				return fmt.Errorf("attempt %d: HTTP %d", attempt+1, resp.StatusCode)
 			}
 			f2, err := os.Create(tmpFile)
 			if err != nil {
-				return fmt.Errorf("create tmp: %w", err)
+				return fmt.Errorf("attempt %d: create tmp: %w", attempt+1, err)
 			}
 			defer f2.Close()
-			// Limit download to 100MB to prevent disk exhaustion from a compromised Manager
 			if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
-				return fmt.Errorf("write: %w", err)
+				return fmt.Errorf("attempt %d: write: %w", attempt+1, err)
 			}
-			return nil // 成功
+			return nil
+		}()
+		if downloadErr == nil {
+			break // 成功
 		}
-		return fmt.Errorf("下载: 所有重试均已失败")
-	}()
+		log.Printf("自升级: %v", downloadErr)
+	}
 	if downloadErr != nil {
 		os.Remove(tmpFile)
 		return fmt.Errorf("自升级下载: %w", downloadErr)

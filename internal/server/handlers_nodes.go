@@ -109,69 +109,69 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	goos, goarch := detectPlatform(rec)
-	agentCfg, _ := s.store.LoadAgentConfig()
-	if agentCfg != nil && agentCfg.LatestVersion != "" && agentCfg.LatestVersion != req.Status.AgentVersion && goos != "" && goarch != "" {
-		// 升级退避: 同一目标版本 30 分钟内不重复推送
-		// 避免网络状况差时每次心跳都重试下载 (864次/天)
+
+	// 升级推送 + 退避 + 完成标记 — 全部使用 UpdateAgentConfigAtomic 原子化。
+	// 两个并发心跳同时修改 UpgradeState 时后写者覆盖先写者，UpdateAgentConfigAtomic
+	// 持写锁读-改-写消除此 TOCTOU 竞态（替代 LoadAgentConfig → 修改 → SaveAgentConfig 的三步分离模式）。
+	if goos != "" && goarch != "" && req.Status.AgentVersion != "" {
 		now := time.Now().UTC()
-		shouldPush := true
-		abandon := false
-		if agentCfg.UpgradeState != nil {
-			if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-				// 已完成: 不再推送
-				if job.Completed != "" && job.TargetVer == agentCfg.LatestVersion {
-					shouldPush = false
-				}
-				// 30 分钟内已推送同版本: 跳过一次
-				if t, err := time.Parse(time.RFC3339, job.Triggered); err == nil {
-					if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 30*time.Minute {
+		s.store.UpdateAgentConfigAtomic(func(agentCfg *store.AgentConfig) {
+			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
+				return
+			}
+			shouldPush := true
+			abandon := false
+			if agentCfg.UpgradeState != nil {
+				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+					if job.Completed != "" && job.TargetVer == agentCfg.LatestVersion {
 						shouldPush = false
 					}
-				}
-				// 推送≥5次仍未完成 → 永久放弃（二进制404/网络不可达）
-				// 放弃后管理员在 WebUI 重新设置版本即可恢复重试
-				if job.TargetVer == agentCfg.LatestVersion && job.RetryCount >= 5 {
-					shouldPush = false
-					abandon = true
-				}
-			}
-		}
-		if abandon {
-			s.logMgr.LogWithNode("upgrade", "升级已放弃", nodeID,
-				fmt.Sprintf("ver=%s 5次推送均失败，请检查 /bin/ 目录", agentCfg.LatestVersion), "error")
-		}
-		if shouldPush {
-			manifest, _ := s.store.LoadAgentManifest()
-			key := goos + "-" + goarch
-			if f, ok := manifest[key]; ok && f != "" {
-				safeName := strings.ReplaceAll(strings.ReplaceAll(f, "..", ""), "/", "")
-				if safeName != "" && safeName == f {
-					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
-						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
-						// 记录推送时间 + 递增计数
-						if agentCfg.UpgradeState == nil {
-							agentCfg.UpgradeState = make(map[string]store.UpgJob)
+					if t, err := time.Parse(time.RFC3339, job.Triggered); err == nil {
+						if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 30*time.Minute {
+							shouldPush = false
 						}
-						job := agentCfg.UpgradeState[nodeID]
-						job.TargetVer = agentCfg.LatestVersion
-						job.Triggered = now.Format(time.RFC3339)
-						job.RetryCount++
-						agentCfg.UpgradeState[nodeID] = job
-						s.store.SaveAgentConfig(agentCfg)
+					}
+					if job.TargetVer == agentCfg.LatestVersion && job.RetryCount >= 5 {
+						shouldPush = false
+						abandon = true
 					}
 				}
 			}
-		}
-	}
-	// 标记已完成的升级 (agent 版本已匹配目标)
-	if agentCfg != nil && agentCfg.UpgradeState != nil {
-		if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-			if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
-				job.Completed = time.Now().UTC().Format(time.RFC3339)
-				agentCfg.UpgradeState[nodeID] = job
-				s.store.SaveAgentConfig(agentCfg)
+			if abandon {
+				s.logMgr.LogWithNode("upgrade", "升级已放弃", nodeID,
+					fmt.Sprintf("ver=%s 5次推送均失败", agentCfg.LatestVersion), "error")
+				return
 			}
-		}
+			if shouldPush {
+				manifest, _ := s.store.LoadAgentManifest()
+				key := goos + "-" + goarch
+				if f, ok := manifest[key]; ok && f != "" {
+					safeName := strings.ReplaceAll(strings.ReplaceAll(f, "..", ""), "/", "")
+					if safeName != "" && safeName == f {
+						if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
+							resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
+							if agentCfg.UpgradeState == nil {
+								agentCfg.UpgradeState = make(map[string]store.UpgJob)
+							}
+							job := agentCfg.UpgradeState[nodeID]
+							job.TargetVer = agentCfg.LatestVersion
+							job.Triggered = now.Format(time.RFC3339)
+							job.RetryCount++
+							agentCfg.UpgradeState[nodeID] = job
+						}
+					}
+				}
+			}
+			// 标记已完成的升级（agent 版本已匹配目标版本）
+			if agentCfg.UpgradeState != nil {
+				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+						job.Completed = now.Format(time.RFC3339)
+						agentCfg.UpgradeState[nodeID] = job
+					}
+				}
+			}
+		})
 	}
 	key := mycrypto.DeriveKey(password, rec.Fingerprint, "cert-transport")
 	for _, binding := range rec.CertBindings {
@@ -274,7 +274,12 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	data, _ := json.Marshal(req)
+	data, err := json.Marshal(req)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "配置序列化失败")
+		s.logMgr.LogWithNode("config", "配置序列化失败", id, err.Error(), "error")
+		return
+	}
 	rec.ConfigYAML = string(data)
 	if len(req.CertBindings) > 0 {
 		rec.CertBindings = req.CertBindings
@@ -471,26 +476,28 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 
 // detectPlatform 将节点硬件信息映射为 Go 标准平台字符串 (goos-goarch)。
 // 用于 manifest (agent_manifest.json) 键查找和 AgentUpdate.URL 构建。
-// 注意：goarch 使用 Go 标准命名 (amd64/arm64/arm)，不是 deb 命名 (x86_64/aarch64/armhf)。
-// 构建脚本 (scripts/build.sh) 产出的文件名也使用此命名约定。
+// ⚠️ 架构归一化: deb 命名 (x86_64/aarch64/armv7l) → Go 标准 (amd64/arm64/arm)。
+// 构建脚本产出的文件名使用 Go 标准命名，manifest 键也为 Go 标准命名。
 // 返回 ("", "") 表示硬件信息未知，调用方应跳过升级推送。
 func detectPlatform(rec *model.NodeRecord) (goos, goarch string) {
 	if rec.Hardware == nil {
-		return "", "" // 硬件信息未知 — 无法确定平台
+		return "", ""
 	}
 	goos = "linux"
 	if strings.Contains(strings.ToLower(rec.Hardware.OS), "windows") {
 		goos = "windows"
 	}
-	switch rec.Hardware.Arch {
-	case "amd64":
-		goarch = "amd64" // Go 标准命名，不再映射为 x86_64
-	case "arm64":
+	// 归一化架构名: deb 命名 → Go 标准命名
+	arch := strings.ToLower(rec.Hardware.Arch)
+	switch arch {
+	case "amd64", "x86_64":
+		goarch = "amd64"
+	case "arm64", "aarch64":
 		goarch = "arm64"
-	case "386":
+	case "386", "i386", "i686":
 		goarch = "i386"
-	case "arm":
-		goarch = "arm" // Go 标准命名 (对应 armv6l/armv7l)
+	case "arm", "armv6l", "armv7l", "armv8l", "armhf":
+		goarch = "arm"
 	default:
 		if rec.Hardware.Arch != "" {
 			goarch = rec.Hardware.Arch

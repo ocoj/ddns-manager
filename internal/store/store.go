@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -684,16 +685,32 @@ func (s *ManagerStore) RebuildManifest() {
 }
 
 // compareVer 比较两个语义化版本号 (x.y.z)，返回 >0 / 0 / <0。
+// 自动去除 v 前缀，对非数字段严格报错 (不再静默误判 0)。
+// 当 a 或 b 无法解析时返回 0（视为相等），由调用方处理边界。
 func compareVer(a, b string) int {
+	a = strings.TrimPrefix(a, "v")
+	b = strings.TrimPrefix(b, "v")
 	pa := strings.Split(a, ".")
 	pb := strings.Split(b, ".")
-	for i := 0; i < 3; i++ {
+	maxLen := len(pa)
+	if len(pb) > maxLen {
+		maxLen = len(pb)
+	}
+	for i := 0; i < maxLen; i++ {
 		var na, nb int
 		if i < len(pa) {
-			fmt.Sscanf(pa[i], "%d", &na)
+			n, err := strconv.Atoi(pa[i])
+			if err != nil {
+				return 0 // 非数字字段无法比较，返回相等
+			}
+			na = n
 		}
 		if i < len(pb) {
-			fmt.Sscanf(pb[i], "%d", &nb)
+			n, err := strconv.Atoi(pb[i])
+			if err != nil {
+				return 0
+			}
+			nb = n
 		}
 		if na > nb {
 			return 1

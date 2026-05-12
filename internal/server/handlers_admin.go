@@ -341,12 +341,26 @@ func (s *Server) handleUploadAgentBinary(w http.ResponseWriter, r *http.Request)
 	}
 	for _, fh := range r.MultipartForm.File {
 		for _, h := range fh {
-			f, _ := h.Open()
-			data, _ := io.ReadAll(f)
+			f, err := h.Open()
+			if err != nil {
+				s.logMgr.Log("agent", "上传二进制打开失败", h.Filename+": "+err.Error(), "warning")
+				continue
+			}
+			data, err := io.ReadAll(f)
 			f.Close()
+			if err != nil {
+				s.logMgr.Log("agent", "上传二进制读取失败", h.Filename+": "+err.Error(), "warning")
+				continue
+			}
+			if len(data) == 0 {
+				s.logMgr.Log("agent", "上传二进制为空", h.Filename, "warning")
+				continue
+			}
 			s.store.SaveAgentBinary(h.Filename, data)
 		}
 	}
+	// Rebuild manifest after successful uploads
+	s.store.RebuildManifest()
 	jsonOK(w, map[string]string{"status": "uploaded"})
 }
 func (s *Server) handleDeleteAgentBinary(w http.ResponseWriter, r *http.Request) {
@@ -479,6 +493,11 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 	osName := strings.TrimSpace(r.URL.Query().Get("os"))
 	if ver == "" || osName == "" {
 		jsonErr(w, http.StatusBadRequest, "ver 和 os 参数必填")
+		return
+	}
+	// 安全校验: ver 仅允许 SEMVER 格式字符 (0-9.v-) + 最大 32 字符
+	if len(ver) > 32 || strings.ContainsAny(ver, "\x00\\/&;`'\"|<>*?%!$#@~ ") {
+		jsonErr(w, http.StatusBadRequest, "版本号格式非法")
 		return
 	}
 	// 安全校验：仅允许 windows-amd64

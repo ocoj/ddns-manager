@@ -2264,8 +2264,7 @@ function renderSettings(smtp, rl, tz) {
   ['Asia/Shanghai','Asia/Tokyo','Asia/Seoul','Asia/Singapore','Asia/Kolkata','Asia/Dubai','Europe/London','Europe/Berlin','Europe/Moscow','America/New_York','America/Chicago','America/Los_Angeles','Australia/Sydney','Pacific/Auckland','UTC'].forEach(function(t){
     h += '<option value="'+t+'"'+(t===tz?' selected':'')+'>'+t.replace(/_/g,' ')+'</option>';
   });
-  h += '</select></div>';
-  h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="saveTimezone()">保存</button></div>';
+  h += '</select></div><div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="saveTimezone()">保存</button></div></div>';
   h += '<div class="tip" style="margin-top:4px">影响仪表盘图表时间轴、日志时间显示</div></div>';
   // 记录时区到全局变量，UI 时间显示使用
   window._tz = tz;
@@ -2273,7 +2272,7 @@ function renderSettings(smtp, rl, tz) {
   h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>新密码</label><input type="password" id="set-new-pwd" style="width:200px"></div>';
   h += '<div class="form-group"><label>确认密码</label><input type="password" id="set-confirm-pwd" style="width:200px"></div>';
-  h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="changePassword()">保存</button></div></div>';
+  h += '<div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="changePassword()">保存</button></div></div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>SMTP 邮件通知</h3></div>';
   // 第一行: 发件人 + 授权码

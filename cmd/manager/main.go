@@ -78,6 +78,11 @@ func main() {
 	}
 	defer logMgr.Close()
 
+	// 启动时重建 agent manifest — 确保与 /bin/ 目录实际内容一致
+	// (兜底: 手动删文件、迁移数据等边缘情况)
+	st.RebuildManifest()
+	log.Printf("[manifest] 已重建 agent_manifest (从 /bin/ 扫描)")
+
 	// ACME manager — load from stored accounts, fallback to -acme-email flag
 	var acmeMgr *acme.Manager
 	var hasAcmeMgrs bool

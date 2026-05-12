@@ -624,11 +624,85 @@ func (s *ManagerStore) ListAgentVersions() ([]string, error) {
 
 func (s *ManagerStore) SaveAgentBinary(name string, data []byte) error {
 	dir := s.AgentBinDir()
-	return os.WriteFile(filepath.Join(dir, name), data, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		return err
+	}
+	s.RebuildManifest()
+	return nil
 }
 
 func (s *ManagerStore) DeleteAgentBinary(name string) error {
-	return os.Remove(filepath.Join(s.AgentBinDir(), name))
+	if err := os.Remove(filepath.Join(s.AgentBinDir(), name)); err != nil {
+		return err
+	}
+	s.RebuildManifest()
+	return nil
+}
+
+// RebuildManifest 扫描 /bin/ 目录，按 os-arch 分组建 agent_manifest.json。
+// 每个平台取版本号最高的二进制文件。上传/删除后自动调用。
+// 文件名格式: node-agent-v{VERSION}-{os}-{arch}[.exe]
+func (s *ManagerStore) RebuildManifest() {
+	entries, err := os.ReadDir(s.AgentBinDir())
+	if err != nil {
+		return
+	}
+	// 正则: node-agent-v{VERSION}-{os}-{arch}[.exe]
+	// 示例: node-agent-v1.5.8-windows-amd64.exe / node-agent-v1.5.8-linux-amd64
+	re := regexp.MustCompile(`^node-agent-v([^-]+)-([^-]+)-([^\.]+)(?:\.exe)?$`)
+	// platformKey → {version, filename}
+	type candidate struct {
+		version  string
+		filename string
+	}
+	best := make(map[string]candidate)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := re.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		ver, goos, goarch := m[1], m[2], m[3]
+		// 跳过 dev 版本和非标准版本号
+		if ver == "dev" || goos == "" || goarch == "" {
+			continue
+		}
+		key := goos + "-" + goarch
+		cur, exists := best[key]
+		if !exists || compareVer(ver, cur.version) > 0 {
+			best[key] = candidate{ver, e.Name()}
+		}
+	}
+	// 写入 manifest
+	manifest := make(map[string]string, len(best))
+	for k, c := range best {
+		manifest[k] = c.filename
+	}
+	s.SaveAgentManifest(manifest)
+}
+
+// compareVer 比较两个语义化版本号 (x.y.z)，返回 >0 / 0 / <0。
+func compareVer(a, b string) int {
+	pa := strings.Split(a, ".")
+	pb := strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		var na, nb int
+		if i < len(pa) {
+			fmt.Sscanf(pa[i], "%d", &na)
+		}
+		if i < len(pb) {
+			fmt.Sscanf(pb[i], "%d", &nb)
+		}
+		if na > nb {
+			return 1
+		}
+		if na < nb {
+			return -1
+		}
+	}
+	return 0
 }
 
 // ── SMTP Config ──

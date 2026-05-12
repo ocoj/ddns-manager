@@ -41,14 +41,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, ok := nodes[nodeID]
 	if !ok {
+		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, "未知节点ID", "warning")
 		jsonErr(w, http.StatusUnauthorized, "未知节点")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(rec.PasswordHash), []byte(password)); err != nil {
+		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("密码错误 IP=%s", clientIP(r)), "warning")
 		jsonErr(w, http.StatusUnauthorized, "密码错误")
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(rec.Fingerprint), []byte(req.Fingerprint)) != 1 {
+		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("指纹不匹配 IP=%s", clientIP(r)), "warning")
 		jsonErr(w, http.StatusForbidden, "指纹不匹配")
 		return
 	}
@@ -205,6 +208,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: binding.DeployPath,
 		})
+		// H1: 证书下发成功记录审计日志，运维可追踪证书分发到哪些节点
+		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
+			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], binding.DeployPath), "success")
 	}
 	// persist all changes in a single write (LastSeen, Status, Hardware, ConfigHash)
 	s.store.PutNode(nodeID, rec)

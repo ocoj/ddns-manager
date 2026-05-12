@@ -607,6 +607,49 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 	return filtered[offset:end]
 }
 
+// CountByTime returns the total number of events matching the given filters (before offset/limit).
+// Used by handleGetLogs to return accurate pagination totals.
+func (m *Manager) CountByTime(category, status, node string, from, to time.Time) int {
+	m.mu.Lock()
+	total := m.writeIdx
+	if total > m.maxSize {
+		total = m.maxSize
+	}
+	start := m.writeIdx - total
+	if start < 0 {
+		start = 0
+	}
+	snapshot := make([]Event, 0, total)
+	for i := start; i < m.writeIdx; i++ {
+		e := m.events[i%m.maxSize]
+		if !e.Time.IsZero() {
+			snapshot = append(snapshot, e)
+		}
+	}
+	m.mu.Unlock()
+
+	count := 0
+	for _, e := range snapshot {
+		if category != "" && e.Category != category {
+			continue
+		}
+		if status != "" && e.Status != status {
+			continue
+		}
+		if node != "" && e.Node != node {
+			continue
+		}
+		if !from.IsZero() && e.Time.Before(from) {
+			continue
+		}
+		if !to.IsZero() && e.Time.After(to) {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 // Categories returns distinct categories.
 func (m *Manager) Categories() []string {
 	m.mu.Lock()

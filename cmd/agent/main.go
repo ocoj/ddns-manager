@@ -68,6 +68,21 @@ func configCachePath() string {
 	return filepath.Join(agentBaseDir, "ddns_cache.yaml")
 }
 
+// configCacheKey caches the AES key for config-cache encryption (derived once per agent lifetime).
+var (
+	configCacheKey     []byte
+	configCacheKeyOnce sync.Once
+)
+
+// getConfigCacheKey returns the cached AES key for encrypting/decrypting the DNS config cache.
+// M1: Key derivation is performed once (HKDF-SHA256) instead of per-heartbeat.
+func getConfigCacheKey(password, fingerprint string) []byte {
+	configCacheKeyOnce.Do(func() {
+		configCacheKey = crypto.DeriveKey(password, fingerprint, "config-cache")
+	})
+	return configCacheKey
+}
+
 // runDNSUpdateWithTimeout executes dnsUpdater.Run() with a time limit.
 // This prevents DNS API hangs (e.g. provider outage) from blocking the
 // entire heartbeat cycle. The underlying ddns-go http.Client already has
@@ -166,7 +181,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		if data, err := os.ReadFile(configCachePath()); err == nil {
 			// Try decrypt (v2.1+ encrypted format), fall back to plaintext (v2.0 compat)
 			yamlData := data
-			key := crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "config-cache")
+			key := getConfigCacheKey(cfg.Password, cfg.Fingerprint)
 			if plain, decErr := crypto.Decrypt(string(data), key); decErr == nil {
 				yamlData = plain
 			}
@@ -218,7 +233,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
 				os.MkdirAll(filepath.Dir(configCachePath()), 0700)
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
-					crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "config-cache"))
+					getConfigCacheKey(cfg.Password, cfg.Fingerprint))
 				if encErr != nil {
 					log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
 					// 不写入 disk — 明文 DNS 凭据泄露风险不可接受
@@ -326,22 +341,20 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 				pfxFilename = name // record actual PFX filename from bundle
 			}
 		}
-		// Save cert hash marker
-		hashFile := filepath.Join(path, ".cert_hash")
-		os.WriteFile(hashFile, []byte(cu.CertHash), 0o600)
-		log.Printf("[cert] 已部署: %s -> %s", cu.BundleName, path)
+		// H5: 先写证书文件，IIS 绑定失败则不写 .cert_hash，下次心跳重试
 
 		// On Windows, auto-import cert to IIS after deployment
+		iisOK := true
 		if runtime.GOOS == "windows" {
 			if hasPFX && pfxFilename != "" {
 				pfxFile := filepath.Join(path, pfxFilename)
 				if _, err := os.Stat(pfxFile); err == nil {
-					importPFXToIIS(pfxFile, cu.BundleName, cfg.IISCertBindings)
+					iisOK = importPFXToIIS(pfxFile, cu.BundleName, cfg.IISCertBindings)
 					// Recycle IIS app pools after cert binding update
 					recycleIISAppPools()
 				}
 			} else {
-				importToIIS(path, cu.BundleName, cfg.IISCertBindings)
+				iisOK = importToIIS(path, cu.BundleName, cfg.IISCertBindings)
 				recycleIISAppPools()
 			}
 		}
@@ -349,6 +362,16 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		// Process service reload hints from Manager
 		for _, svc := range cu.ReloadServices {
 			reloadService(svc)
+		}
+
+		// H5: 仅在 IIS 绑定成功(或非Windows)后才写入 .cert_hash
+		// 如果 IIS 绑定失败，保留旧 hash，下次心跳 Manager 会重新推送
+		if iisOK {
+			hashFile := filepath.Join(path, ".cert_hash")
+			os.WriteFile(hashFile, []byte(cu.CertHash), 0o600)
+			log.Printf("[cert] 已部署: %s -> %s", cu.BundleName, path)
+		} else {
+			log.Printf("[cert] 证书文件已写入但 IIS 绑定失败: %s, 下次心跳重试", cu.BundleName)
 		}
 	}
 }
@@ -653,7 +676,7 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	return nil
 }
 
-func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBinding) {
+func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBinding) bool {
 	// 1. import PFX to Windows cert store
 	escapedPath := strings.ReplaceAll(pfxFile, "'", "''")
 	ps := fmt.Sprintf(
@@ -666,7 +689,7 @@ func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBindin
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
 		log.Printf("PFX导入到证书存储失败: %v: %s", err, string(out))
-		return
+		return false
 	}
 
 	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
@@ -674,7 +697,7 @@ func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBindin
 	certCN := extractCNFromPFX(pfxFile)
 	if thumb == "" {
 		log.Printf("PFX 证书指纹提取失败: %s", bundleName)
-		return
+		return false
 	}
 	log.Printf("PFX已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)
 
@@ -684,11 +707,12 @@ func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBindin
 	} else {
 		autoBindExisting(thumb, certCN)
 	}
+	return true
 }
 
 // importToIIS converts PEM cert files to PFX, imports, and binds to IIS.
 // Legacy path — used when manager sends PEM files (Linux style).
-func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) {
+func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) bool {
 	certFile := filepath.Join(certDir, "fullchain.pem")
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
 		certFile = filepath.Join(certDir, "cert.pem")
@@ -703,7 +727,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 	fpOut, err := exec.Command(openssl, "x509", "-in", certFile, "-fingerprint", "-sha1", "-noout").Output()
 	if err != nil {
 		log.Printf("openssl 提取指纹失败: %v", err)
-		return
+		return false
 	}
 	thumb := strings.TrimPrefix(strings.TrimSpace(string(fpOut)), "sha1 Fingerprint=")
 	thumb = strings.TrimPrefix(thumb, "SHA1 Fingerprint=")
@@ -711,7 +735,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 	thumb = strings.TrimSpace(thumb)
 	if thumb == "" {
 		log.Printf("证书指纹为空: %s", bundleName)
-		return
+		return false
 	}
 
 	// also get subject CN for auto-matching
@@ -734,7 +758,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 		"-passout", "pass:ddns")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("openssl PFX导出失败: %v: %s", err, string(out))
-		return
+		return false
 	}
 	escapedPFX := strings.ReplaceAll(pfxFile, "'", "''")
 	ps := `$pfx = Get-Content '` + escapedPFX + `' -AsByteStream -Raw;` +
@@ -744,7 +768,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 		`$store.Open('ReadWrite'); $store.Add($cert); $store.Close()`
 	if out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput(); err != nil {
 		log.Printf("证书导入到存储失败: %v: %s", err, string(out))
-		return
+		return false
 	}
 	log.Printf("证书已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)
 
@@ -754,6 +778,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 	} else {
 		autoBindExisting(thumb, certCN)
 	}
+	return true
 }
 
 // ── IIS certificate binding helpers ──

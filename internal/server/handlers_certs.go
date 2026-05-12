@@ -48,14 +48,25 @@ func (s *Server) handleListCerts(w http.ResponseWriter, r *http.Request) {
 			hashShort = hashShort[:12]
 		}
 		item := ci{Name: name, Files: fileNames, Hash: hashShort, Acme: strings.HasPrefix(name, "acme-")}
-		// 按文件名排序解析证书到期时间 — map 遍历顺序随机，排序保证确定性
+		// 按语义排序解析证书到期时间 — map 遍历顺序随机，排序保证确定性
+		// M2: 优先解析服务器证书(fullchain/cert)，而非 CA 证书(ca.pem)
+		// 否则 ca.pem 按字母序先被解析，返回 CA 证书的长到期时间
 		pemNames := make([]string, 0, len(b.Files))
 		for fn := range b.Files {
 			if strings.HasSuffix(strings.ToLower(fn), ".pem") || strings.HasSuffix(strings.ToLower(fn), ".crt") {
 				pemNames = append(pemNames, fn)
 			}
 		}
-		sort.Strings(pemNames)
+		sort.Slice(pemNames, func(i, j int) bool {
+			iIsServer := strings.Contains(strings.ToLower(pemNames[i]), "fullchain") ||
+				strings.Contains(strings.ToLower(pemNames[i]), "cert.")
+			jIsServer := strings.Contains(strings.ToLower(pemNames[j]), "fullchain") ||
+				strings.Contains(strings.ToLower(pemNames[j]), "cert.")
+			if iIsServer != jIsServer {
+				return iIsServer
+			}
+			return pemNames[i] < pemNames[j]
+		})
 		for _, fn := range pemNames {
 			if exp, dom := parseCertExpiry(b.Files[fn]); exp != "" {
 				item.Expiry = exp

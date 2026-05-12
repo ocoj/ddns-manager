@@ -185,10 +185,14 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var events []logger.Event
+	var total int
 	if category != "" || status != "" || node != "" || !from.IsZero() || !to.IsZero() {
 		events = s.logMgr.QueryByTime(category, status, node, from, to, limit, offset)
+		// H2: 使用 CountByTime 获取真实匹配总数，而非 paginated 结果数量
+		total = s.logMgr.CountByTime(category, status, node, from, to)
 	} else {
 		events = s.logMgr.Query(category, limit, offset)
+		total = len(events) // 全量查询时 len(events) 即准确总数
 	}
 	// Convert event times from storage TZ to display TZ for Web UI
 	tz := s.GetTimezone()
@@ -196,7 +200,6 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		events[i].Time = events[i].Time.In(tz)
 	}
 	categories := s.logMgr.Categories()
-	total := len(events)
 	jsonOK(w, map[string]interface{}{"events": events, "total": total, "limit": limit, "offset": offset, "categories": categories})
 }
 
@@ -357,11 +360,16 @@ func (s *Server) handleUploadAgentBinary(w http.ResponseWriter, r *http.Request)
 	jsonOK(w, map[string]string{"status": "uploaded"})
 }
 func (s *Server) handleDeleteAgentBinary(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.DeleteAgentBinary(mux.Vars(r)["name"]); err != nil {
+	name := mux.Vars(r)["name"]
+	if err := s.store.DeleteAgentBinary(name); err != nil {
 		jsonErr(w, http.StatusNotFound, "二进制文件未找到")
 		return
 	}
-	jsonOK(w, map[string]string{"deleted": mux.Vars(r)["name"]})
+	// C4#1: 记录删除 Agent 二进制操作（安全关键操作）
+	s.logMgr.Log("agent", "二进制已删除", name, "warning")
+	// 删除后重建 manifest，防止已删除的二进制仍被推送
+	s.store.RebuildManifest()
+	jsonOK(w, map[string]string{"deleted": name})
 }
 
 // ── admin: rate-limit ──
@@ -467,7 +475,17 @@ func (s *Server) handleSMTPTest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
-	if strings.Contains(filename, "..") || filename == "" {
+	// M5: 强化路径穿越防护 — 拒绝绝对路径、..、反斜杠、空文件名
+	if filename == "" || strings.Contains(filename, "..") ||
+		strings.Contains(filename, "\\") || strings.HasPrefix(filename, "/") ||
+		strings.ContainsAny(filename, "\x00") {
+		http.NotFound(w, r)
+		return
+	}
+	// 解析后用 Clean 二次防穿越（. 和多余 / 被规范化）
+	binDir := filepath.Join(s.cfg.DataDir, "bin")
+	resolved := filepath.Clean(filepath.Join(binDir, filename))
+	if !strings.HasPrefix(resolved, binDir) {
 		http.NotFound(w, r)
 		return
 	}
@@ -476,7 +494,7 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		w.Header().Set("Content-Type", "application/zip")
 	}
-	http.ServeFile(w, r, filepath.Join(s.cfg.DataDir, "bin", filename))
+	http.ServeFile(w, r, resolved)
 }
 
 // handleDownloadInstaller 运行时动态打包 Windows 安装 ZIP。

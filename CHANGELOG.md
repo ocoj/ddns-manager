@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## v1.5.11 — 2026-05-13
+
+### 🔐 安全审计修复（18 项全量修复）
+
+#### 🔴 Critical（4 项）
+
+- **C1 ACME自动续签后证书永不推送到Agent** — `acme.go:Renew()`/`RenewByName()` 续签成功后新增 `UpdateCertMeta()` 调用，重新计算 bundle hash 并更新 meta.json，确保下次心跳检测到变更并下发新证书
+- **C2 ACME续签后PFX未重新生成** — `UpdateCertMeta()` 自动检测 cert+key PEM 文件，续签成功后调用 `GeneratePFX()` 重新生成 `cert.pfx`，Windows Agent 收到最新 PFX 文件
+- **C3 Windows Agent升级竞态条件** — `upgrade_windows.go:replaceRunningBinary` 重写：阶段1 同步停服 (`stopServiceSync` 轮询 STOPPED 状态)，阶段2 批量脚本执行 move+验证+启动，消除 Go 进程退出 vs SCM 重启的竞态
+- **C4 管理端日志覆盖严重不足** — 12处缺失审计日志补全：删除Agent二进制、心跳认证失败（含IP追踪）、证书下发成功、DNSPKey/节点/升级状态/Acme等操作
+
+#### 🟠 High（5 项）
+
+- **H1 心跳证书下发成功无审计日志** — `handleHeartbeat` 证书推送追加 `s.logMgr.LogWithNode("cert", "证书已下发", ...)`，对齐配置下发日志
+- **H2 handleGetLogs total 字段语义错误** — 新增 `logger.CountByTime()` 方法返回过滤后真实匹配数，替换原 `len(events)` 的错误统计
+- **H3 手动续签不更新bundle hash** — 合并到 C1 修复，`RenewByName()` 成功后调用 `UpdateCertMeta()`
+- **H4 心跳认证失败无暴力破解防护** — 未知节点/密码错误/指纹不匹配均记录审计日志（含 clientIP），可追踪探测行为
+- **H5 cert_hash先写后验证** — `applyCertUpdates` 重构：证书文件写入后先执行 IIS 导入 → 成功才写 `.cert_hash`，失败保留旧 hash 下次心跳重试
+
+#### 🟡 Medium（6 项）
+
+- **M1 configCacheKey每心跳重复派生** — 新增 `getConfigCacheKey()` 使用 `sync.Once` 缓存 HKDF 派生结果
+- **M2 证书到期解析按文件名排序误选CA证书** — `handleListCerts` PEM 排序改为语义优先级（fullchain.pem/cert.pem 优先于 ca.pem）
+- **M3 Windows升级批处理无错误回滚** — 批处理脚本新增：备份旧二进制→move新→验证文件大小>1KB→启动服务，失败则回滚旧二进制
+- **M4-M6** — IIS绑定/路径穿越/跨平台兼容：见下方详细
+
+#### 🟢 Low（3 项）
+
+- **L1 华为云DNS API缺少HUAWEICLOUD_DomainID** — `dnsAPIMapping` 新增 `extraEnv` 字段，华为云自动设置 `HUAWEICLOUD_DomainID` 环境变量
+- **L2-L3** — 纯Go HTTP-01续签路径已移除（acme.sh优先），批处理中文输出优化
+
+#### 🔧 其他
+- **M5 handlerBinFile 路径穿越防护强化** — 新增绝对路径/反斜杠/null字节检查 + `filepath.Clean` 二次防护 + `HasPrefix` 验证
+- **handleDeleteAgentBinary 自动 RebuildManifest** — 删除二进制后重建 manifest，防止已删二进制仍被推送
+- **importPFXToIIS/importToIIS 返回 bool** — 支持 H5 条件写入 `.cert_hash`
+
 ## v1.5.10 — 2026-05-12
 
 ### 🕐 时区一致性修复（6 项）

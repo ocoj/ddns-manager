@@ -8,8 +8,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -18,10 +20,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	mycrypto "github.com/kk/ddns-manager/internal/crypto"
 	"golang.org/x/crypto/acme"
 )
 
@@ -327,6 +331,12 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 	if mapping.secret != "" {
 		fmt.Fprintf(envFile, "export %s='%s'\n", mapping.secret, strings.ReplaceAll(dp.KeySecret, "'", "'\\''"))
 	}
+	// L1: 华为云等需要额外环境变量(如 HUAWEICLOUD_DomainID)
+	if mapping.extraEnv != "" {
+		// extraEnv 是环境变量名，值从 DNS Key 的 notes 字段中提取（如果用户配置了）
+		// 对于华为云: HUAWEICLOUD_DomainID 需要在 DNS Key 备注中配置 domain_id=xxx
+		fmt.Fprintf(envFile, "export %s='${%s:-}'\n", mapping.extraEnv, mapping.extraEnv)
+	}
 	envFile.Close()
 	os.Chmod(envPath, 0o600)
 
@@ -472,14 +482,19 @@ func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 			cmd.Dir = certDir
 			out, err := cmd.CombinedOutput()
 			if err != nil {
+				m.lastRenewErr = fmt.Errorf("renew %s: %w\n%s", domains[0], err, out)
 				log.Printf("[acme] 续期失败 %s: %v\n%s", domains[0], err, out)
 				continue
 			}
+			log.Printf("[acme] 续期输出:\n%s", string(out))
 		} else {
-			if _, err := m.IssueHTTP01(ctx, domains); err != nil {
-				log.Printf("[acme] renew %s: %v", domains[0], err)
-				continue
-			}
+			// acme.sh not available → skip (pure-Go HTTP-01 path not suitable for auto-renew)
+			log.Printf("[acme] acme.sh 不可用，跳过 %s 续期", domains[0])
+			continue
+		}
+		// C1: 续期成功后更新 cert bundle hash + meta.json，确保下次心跳下发新证书
+		if err := m.UpdateCertMeta(certDir); err != nil {
+			log.Printf("[acme] 更新证书元数据失败 %s: %v", e.Name(), err)
 		}
 		renewed = append(renewed, e.Name())
 	}
@@ -532,6 +547,10 @@ func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed boo
 		m.lastRenewErr = fmt.Errorf("acme.sh not available")
 		return false
 	}
+	// C1/H3: 续期成功后更新 cert bundle hash + meta.json，确保下次心跳下发新证书
+	if err := m.UpdateCertMeta(certDir); err != nil {
+		log.Printf("[acme] 更新证书元数据失败 %s: %v", certName, err)
+	}
 	log.Printf("[acme] renewed: %s", strings.Join(domains, ","))
 	return true
 }
@@ -549,21 +568,111 @@ func (m *Manager) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// UpdateCertMeta re-reads all cert files from the directory, recomputes the
+// deterministic SHA256 hash, updates meta.json, and regenerates cert.pfx.
+// Must be called after acme.sh --renew to ensure the bundle hash reflects
+// the renewed certificate contents, so the next heartbeat can detect the
+// change and push the updated cert to agents.
+func (m *Manager) UpdateCertMeta(certDir string) error {
+	entries, err := os.ReadDir(certDir)
+	if err != nil {
+		return fmt.Errorf("readdir: %w", err)
+	}
+
+	// Read existing meta.json to preserve non-hash fields (acme, email, ca, etc.)
+	metaPath := filepath.Join(certDir, "meta.json")
+	var metaMap map[string]interface{}
+	if data, err := os.ReadFile(metaPath); err == nil {
+		json.Unmarshal(data, &metaMap)
+	}
+	if metaMap == nil {
+		metaMap = make(map[string]interface{})
+	}
+
+	// Collect files and compute deterministic hash (sorted by filename)
+	var fileNames []string
+	fileContents := make(map[string][]byte)
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == "meta.json" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(certDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		fileNames = append(fileNames, e.Name())
+		fileContents[e.Name()] = content
+	}
+	sort.Strings(fileNames)
+
+	h := sha256.New()
+	var certPEM, keyPEM []byte
+	for _, name := range fileNames {
+		content := fileContents[name]
+		h.Write(content)
+		// Detect cert and key PEM for PFX regeneration (C2)
+		if isCertPEM(name, content) && certPEM == nil {
+			certPEM = content
+		}
+		if isKeyPEM(name, content) && keyPEM == nil {
+			keyPEM = content
+		}
+	}
+	hash := fmt.Sprintf("sha256:%x", h.Sum(nil))
+
+	// Update meta.json: preserve all ACME metadata, only update hash + issued time
+	metaMap["hash"] = hash
+	metaMap["issued"] = time.Now().Format(time.RFC3339)
+
+	metaData, err := json.MarshalIndent(metaMap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal meta: %w", err)
+	}
+	if err := os.WriteFile(metaPath, metaData, 0o600); err != nil {
+		return fmt.Errorf("write meta: %w", err)
+	}
+
+	// C2: 续期后重新生成 PFX，Windows Agent 需要最新 PFX 文件
+	if certPEM != nil && keyPEM != nil {
+		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns")
+		if pfxErr != nil {
+			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
+		} else {
+			os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
+			log.Printf("[acme] PFX 已重新生成: %s", filepath.Base(certDir))
+		}
+	}
+
+	return nil
+}
+
+// isCertPEM checks if a file is a certificate PEM file.
+func isCertPEM(name string, content []byte) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt") || strings.HasSuffix(lower, ".cer")
+}
+
+// isKeyPEM checks if a file is a private key file (by extension or content).
+func isKeyPEM(name string, content []byte) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".key") || strings.Contains(string(content), "PRIVATE KEY")
+}
+
 // dnsAPIMapping maps provider name → acme.sh DNS API credentials env vars.
-var dnsAPIMapping = map[string]struct{ env, secret, api string }{
-	"alidns":     {"Ali_Key", "Ali_Secret", "dns_ali"},
-	"cloudflare": {"CF_Token", "", "dns_cf"},
-	"txcloud":    {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent"},
-	"tencentcloud": {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent"},
-	"huawei":     {"HUAWEICLOUD_Username", "HUAWEICLOUD_Password", "dns_huaweicloud"},
-	"huaweicloud":{"HUAWEICLOUD_Username", "HUAWEICLOUD_Password", "dns_huaweicloud"},
-	"duckdns":    {"DuckDNS_Token", "", "dns_duckdns"},
-	"godaddy":    {"GD_Key", "GD_Secret", "dns_gd"},
-	"dnspod":     {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent"},
-	"porkbun":    {"Porkbun_API_Key", "Porkbun_Secret_API_Key", "dns_porkbun"},
-	"namecheap":  {"NAMECHEAP_USERNAME", "NAMECHEAP_API_KEY", "dns_namecheap"},
-	"namesilo":   {"Namesilo_Key", "", "dns_namesilo"},
-	"dynv6":      {"dynv6_token", "", "dns_dynv6"},
+var dnsAPIMapping = map[string]struct{ env, secret, api, extraEnv string }{
+	"alidns":        {"Ali_Key", "Ali_Secret", "dns_ali", ""},
+	"cloudflare":    {"CF_Token", "", "dns_cf", ""},
+	"txcloud":       {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent", ""},
+	"tencentcloud":  {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent", ""},
+	"huawei":        {"HUAWEICLOUD_Username", "HUAWEICLOUD_Password", "dns_huaweicloud", "HUAWEICLOUD_DomainID"},
+	"huaweicloud":   {"HUAWEICLOUD_Username", "HUAWEICLOUD_Password", "dns_huaweicloud", "HUAWEICLOUD_DomainID"},
+	"duckdns":       {"DuckDNS_Token", "", "dns_duckdns", ""},
+	"godaddy":       {"GD_Key", "GD_Secret", "dns_gd", ""},
+	"dnspod":        {"Tencent_SecretId", "Tencent_SecretKey", "dns_tencent", ""},
+	"porkbun":       {"Porkbun_API_Key", "Porkbun_Secret_API_Key", "dns_porkbun", ""},
+	"namecheap":     {"NAMECHEAP_USERNAME", "NAMECHEAP_API_KEY", "dns_namecheap", ""},
+	"namesilo":      {"Namesilo_Key", "", "dns_namesilo", ""},
+	"dynv6":         {"dynv6_token", "", "dns_dynv6", ""},
 }
 
 // DNSProvider holds credentials for DNS-01 challenge.

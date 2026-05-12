@@ -183,8 +183,12 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 	certPEM, hasCert := findPEMFile(files, ".pem", ".crt", ".cer")
 	keyPEM, hasKey := findPrivateKeyFile(files)
 	if hasCert && hasKey {
+		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
 		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
 			files["cert.pfx"] = pfxData
+		}
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+			files["cert-modern.pfx"] = modernData
 		}
 	}
 	bundle := &store.CertBundle{Name: name, Files: files, Hash: computeBundleHash(files)}
@@ -512,8 +516,12 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if certPEM != nil && keyPEM != nil {
+		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
 		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
 			bundle.Files["cert.pfx"] = pfxData
+		}
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+			bundle.Files["cert-modern.pfx"] = modernData
 		}
 	}
 	bundle.Hash = computeBundleHash(bundle.Files)
@@ -566,9 +574,17 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pfxData, err := mycrypto.GeneratePFX(certPEM, keyPEM, password)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+err.Error())
+	// 双PFX方案: ?format=modern 选择 AES-256 (Win10+)，默认 Legacy (全版本兼容)
+	useModern := r.URL.Query().Get("format") == "modern"
+	var pfxData []byte
+	var pfxErr error
+	if useModern {
+		pfxData, pfxErr = mycrypto.GeneratePFXModern(certPEM, keyPEM, password)
+	} else {
+		pfxData, pfxErr = mycrypto.GeneratePFX(certPEM, keyPEM, password)
+	}
+	if pfxErr != nil {
+		jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+pfxErr.Error())
 		return
 	}
 

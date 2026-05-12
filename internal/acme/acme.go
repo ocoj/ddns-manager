@@ -639,7 +639,12 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
 		} else {
 			os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
-			log.Printf("[acme] PFX 已重新生成: %s", filepath.Base(certDir))
+			log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
+		}
+		// 同时生成 Modern PFX (Win10 1809+)，Agent 会优先选用
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+			os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
+			log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))
 		}
 	}
 

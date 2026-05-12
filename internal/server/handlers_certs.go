@@ -537,11 +537,14 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 // handleDownloadPFX generates and downloads a PKCS#12 (.pfx) certificate container.
 // The password is provided via ?password= query parameter — one-time, never stored.
 // This is the recommended way for Windows admins to manually import certs via certlm.msc.
+// handleDownloadPFX generates and downloads PKCS#12 (.pfx) containers.
+// Default: ZIP with both Legacy + Modern PFX + README.txt.
+// ?format=legacy → single Legacy .pfx  |  ?format=modern → single Modern .pfx
 func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	password := r.URL.Query().Get("password")
 	if password == "" {
-		jsonErr(w, http.StatusBadRequest, "password 参数为必填项 (?password=你的密码)")
+		jsonErr(w, http.StatusBadRequest, "password 参数为必填项")
 		return
 	}
 	if len(password) < 6 {
@@ -555,8 +558,6 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find cert + key PEM from bundle.
-	// PEM files often use .pem extension for both cert and key — detect by content.
 	var certPEM, keyPEM []byte
 	for fname, content := range b.Files {
 		lower := strings.ToLower(fname)
@@ -574,33 +575,72 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 双PFX方案: ?format=modern 选择 AES-256 (Win10+)，默认 Legacy (全版本兼容)
-	useModern := r.URL.Query().Get("format") == "modern"
-	var pfxData []byte
-	var pfxErr error
-	if useModern {
-		pfxData, pfxErr = mycrypto.GeneratePFXModern(certPEM, keyPEM, password)
-	} else {
-		pfxData, pfxErr = mycrypto.GeneratePFX(certPEM, keyPEM, password)
-	}
-	if pfxErr != nil {
-		jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+pfxErr.Error())
-		return
-	}
-
-	// Derive a safe, user-readable filename from the bundle name
-	// Remove "acme-" prefix if present
+	format := r.URL.Query().Get("format")
 	downloadName := strings.TrimPrefix(name, "acme-")
-	if !strings.HasSuffix(downloadName, ".pfx") {
-		downloadName += ".pfx"
+
+	switch format {
+	case "modern":
+		pfxData, err := mycrypto.GeneratePFXModern(certPEM, keyPEM, password)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pkcs12")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-modern.pfx", downloadName))
+		w.Write(pfxData)
+
+	case "legacy":
+		pfxData, err := mycrypto.GeneratePFX(certPEM, keyPEM, password)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pkcs12")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.pfx", downloadName))
+		w.Write(pfxData)
+
+	default:
+		// ZIP with both formats + README
+		legacyData, err1 := mycrypto.GeneratePFX(certPEM, keyPEM, password)
+		modernData, _ := mycrypto.GeneratePFXModern(certPEM, keyPEM, password)
+		if err1 != nil {
+			jsonErr(w, http.StatusInternalServerError, "PFX 生成失败: "+err1.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s-pfx.zip", downloadName))
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+
+		if fw, _ := zw.Create(downloadName + ".pfx"); fw != nil {
+			fw.Write(legacyData)
+		}
+		if modernData != nil {
+			if fw, _ := zw.Create(downloadName + "-modern.pfx"); fw != nil {
+				fw.Write(modernData)
+			}
+		}
+		// README
+		readme := "PFX Certificate Package - " + name + "\n" +
+			"================================\n\n" +
+			"Contains two PFX files:\n\n" +
+			"1. " + downloadName + ".pfx        (Legacy: 3DES+SHA1)\n" +
+			"   Compatible: Windows 7 ~ 11, Server 2008R2 ~ 2025\n" +
+			"   Import: certlm.msc -> Personal -> Certificates -> Import\n\n" +
+			"2. " + downloadName + "-modern.pfx  (Modern: AES-256+PBES2)\n" +
+			"   Compatible: Windows 10 1809+, Server 2019+\n" +
+			"   Better encryption, try first\n\n" +
+			"Password: " + password + "\n\n" +
+			"Tip: Try " + downloadName + "-modern.pfx first.\n" +
+			"     If password error, use " + downloadName + ".pfx instead.\n"
+		if fw, _ := zw.Create("README.txt"); fw != nil {
+			fw.Write([]byte(readme))
+		}
 	}
 
-	w.Header().Set("Content-Type", "application/x-pkcs12")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", downloadName))
-	w.Write(pfxData)
-
-	s.logMgr.Log("cert", "已下载 PFX", name+" (IIS 手动导入)", "success")
+	s.logMgr.Log("cert", "已下载 PFX", name, "success")
 }
+
 
 // findPEMFile searches the uploaded file map for a file matching any of the given extensions.
 // Returns the file content and true if found. Used for PFX auto-generation from uploaded PEM files.

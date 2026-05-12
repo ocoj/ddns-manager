@@ -56,10 +56,11 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;display:none}
 .login-card .err.show{display:block}
 
-.card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px}
+.card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px;overflow:hidden}
 .card h3{font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:12px}
 .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .card-header h3{margin-bottom:0}
+.card .form-group input,.card .form-group select{min-width:0}
 
 .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px}
 .stat-card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 20px;text-align:center}
@@ -2268,6 +2269,8 @@ function renderSettings(smtp, rl, tz) {
   h += '<div class="tip" style="margin-top:4px">影响仪表盘图表时间轴、日志时间显示</div></div>';
   // 记录时区到全局变量，UI 时间显示使用
   window._tz = tz;
+  // 修改密码
+  h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>新密码</label><input type="password" id="set-new-pwd" style="width:200px"></div>';
   h += '<div class="form-group"><label>确认密码</label><input type="password" id="set-confirm-pwd" style="width:200px"></div>';
   h += '<button class="btn btn-primary" style="align-self:flex-end" onclick="changePassword()">保存</button></div></div>';
@@ -2282,7 +2285,8 @@ function renderSettings(smtp, rl, tz) {
   // 第三行: 收件人 + 管理端域名
   h += '<div class="form-row"><div class="form-group"><label>收件人</label><input id="smtp-to" value="' + he(smtp.to || '') + '" placeholder="admin@example.com"></div>';
   h += '<div class="form-group"><label>管理端域名</label><input id="smtp-mgr-url" value="' + he(smtp.manager_url || '') + '" placeholder="如 https://manager.example.com:30443"><div class="tip">邮件中可点击的管理端链接，留空使用服务器 IP:端口</div></div></div>';
-  h += '<div class="form-group"><label>证书告警天数</label><input id="smtp-cert-days" value="' + he(smtp.cert_expiry_days || '7') + '" style="width:80px"></div></div>';
+  // 第四行: 证书告警天数 (独立一行)
+  h += '<div class="form-row"><div class="form-group"><label>证书告警天数</label><input id="smtp-cert-days" value="' + he(smtp.cert_expiry_days || '7') + '" style="width:80px"></div></div>';
   h += '<div style="margin:12px 0"><b style="font-size:12px;color:var(--c-text2)">通知事件:</b></div><div class="form-row">';
   var evs = [{k:'notify_heartbeat_fail',v:'心跳失败'},{k:'notify_security',v:'安全事件'},{k:'notify_config_change',v:'配置变更'},{k:'notify_system_error',v:'系统错误'},{k:'notify_cert_expiry',v:'证书到期'}];
   evs.forEach(function(ev) {

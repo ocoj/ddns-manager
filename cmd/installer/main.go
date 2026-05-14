@@ -231,9 +231,11 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		// ── 清除旧配置，走全新安装 ──
 		fmt.Println()
 		fmt.Println("  [清除] 正在清理旧配置...")
-		dir := filepath.Dir(agentConfigPath)
-		os.RemoveAll(dir)
-		fmt.Printf("  [OK] 已清除: %s\n", dir)
+		// v1.0.0: 只删除 agent 配置文件，不删整个目录 (可能和 Manager 共享)
+		os.Remove(agentConfigPath)
+		os.Remove(filepath.Join(filepath.Dir(agentConfigPath), "node-agent"))
+		os.Remove(filepath.Join(filepath.Dir(agentConfigPath), "ddns_cache.yaml"))
+		// 保留 certs/ 目录内容，用户可能在其他地方引用
 	}
 
 	// ================================================================
@@ -765,9 +767,13 @@ func detectDDNSGoFull() []string {
 		}
 	} else {
 		// Linux: systemd + bin + configs
-		out, _ := exec.Command("systemctl", "is-active", "ddns-go").Output()
+		// v1.0.0: 用 exit code 判断而非 stdout — 服务已删除后 is-active 仍可能输出 "inactive"
+		cmd := exec.Command("systemctl", "is-active", "ddns-go")
+		out, err := cmd.Output()
 		s := strings.TrimSpace(string(out))
-		if s == "active" || s == "inactive" {
+		// exit 0=active, exit 3=inactive(known unit, not running)
+		// exit 4=unknown(unit not found) — ignore, service already cleaned
+		if err == nil || (cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 3) {
 			items = append(items, fmt.Sprintf("systemd 服务: ddns-go (%s)", s))
 		}
 		for _, cfg := range []string{

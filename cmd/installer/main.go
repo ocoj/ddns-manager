@@ -40,9 +40,9 @@ var (
 
 func init() {
 	if runtime.GOOS == "windows" {
-		agentBaseDir = `C:\ddns-manager`
+		agentBaseDir = `C:\ddns-agent`
 	} else {
-		agentBaseDir = "/opt/ddns-manager"
+		agentBaseDir = "/opt/ddns-agent"
 	}
 	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
 	defaultCertPath = filepath.Join(agentBaseDir, "certs")
@@ -721,21 +721,32 @@ func cleanOldDDNSManager() bool {
 			exec.Command("systemctl", "daemon-reload").Run()
 			cleaned = true
 		}
-		// Remove old versioned binaries
-		entries, _ := os.ReadDir(agentBaseDir)
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			if strings.HasPrefix(e.Name(), "node-agent-v") {
-				os.Remove(filepath.Join(agentBaseDir, e.Name()))
-				cleaned = true
-			}
+		// Remove old versioned binaries from both old and new default paths
+		cleanAgentBinaries(agentBaseDir)
+		// v1.0.0: 同时清理旧默认路径 /opt/ddns-manager (迁移到 ddns-agent)
+		if agentBaseDir != "/opt/ddns-manager" {
+			cleanAgentBinaries("/opt/ddns-manager")
 		}
-		// Remove symlink
+		// Remove symlink (both paths)
 		os.Remove(filepath.Join(agentBaseDir, "node-agent"))
+		if agentBaseDir != "/opt/ddns-manager" {
+			os.Remove("/opt/ddns-manager/node-agent")
+		}
 	}
 	return cleaned
+}
+
+// cleanAgentBinaries removes old versioned node-agent binaries from a directory.
+func cleanAgentBinaries(dir string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), "node-agent-v") {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // ========== ddns-go 完整检测 ==========
@@ -754,7 +765,7 @@ func detectDDNSGoFull() []string {
 			}
 			items = append(items, fmt.Sprintf("Windows 服务: ddns-go (%s)", state))
 		}
-		for _, dir := range []string{`C:\ddns-go`, `C:\ddns-manager\ddns-go`, `C:\ddns\ddns-go`} {
+		for _, dir := range []string{`C:\ddns-go`, `C:\ddns-agent\ddns-go`, `C:\ddns\ddns-go`} {
 			if info, err := os.Stat(dir); err == nil && info.IsDir() {
 				items = append(items, fmt.Sprintf("程序目录: %s", dir))
 			}
@@ -805,7 +816,7 @@ func cleanDDNSGoFull() {
 		time.Sleep(500 * time.Millisecond)
 		exec.Command("sc", "delete", "ddns-go").Run()
 		os.RemoveAll(`C:\ddns-go`)
-		os.RemoveAll(`C:\ddns-manager\ddns-go`)
+		os.RemoveAll(`C:\ddns-agent\ddns-go`)
 		os.RemoveAll(`C:\ddns\ddns-go`)
 		os.Remove(`C:\Users\Administrator\.ddns_go_config.yaml`)
 	} else {
@@ -859,15 +870,15 @@ func runUninstall() {
 		exec.Command("sc", "stop", "node-agent").Run()
 		time.Sleep(time.Second)
 		exec.Command("sc", "delete", "node-agent").Run()
-		os.RemoveAll(`C:\ddns-manager`)
-		os.RemoveAll(filepath.Join(os.Getenv("ProgramData"), "ddns-manager"))
+		os.RemoveAll(`C:\ddns-agent`)
+		os.RemoveAll(filepath.Join(os.Getenv("ProgramData"), "ddns-agent"))
 	} else {
 		exec.Command("systemctl", "stop", "node-agent.timer").Run()
 		exec.Command("systemctl", "disable", "node-agent.timer").Run()
 		os.Remove("/etc/systemd/system/node-agent.service")
 		os.Remove("/etc/systemd/system/node-agent.timer")
 		exec.Command("systemctl", "daemon-reload").Run()
-		os.RemoveAll("/opt/ddns-manager")
+		os.RemoveAll("/opt/ddns-agent")
 	}
 	fmt.Println("[OK] 卸载完成")
 }

@@ -60,9 +60,9 @@ var (
 
 func init() {
 	if runtime.GOOS == "windows" {
-		agentBaseDir = `C:\ddns-manager`
+		agentBaseDir = `C:\ddns-agent`
 	} else {
-		agentBaseDir = "/opt/ddns-manager"
+		agentBaseDir = "/opt/ddns-agent"
 	}
 	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
 }

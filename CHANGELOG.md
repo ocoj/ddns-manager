@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## v1.5.29 (补丁) — 2026-05-15
+
+### 🟠 持续修复（7 项）
+
+- **installer: 安装器与 Agent 版本解耦** — 安装器独立版本 v1.0.0 (`INSTALLER_VERSION`)，
+  文件名 `ddns-installer-linux-${arch}` 不再带 Agent 版本号
+- **installer: 统一安装入口** — install.sh 移除升级快捷路径，新装/重装都由 installer 处理；
+  重装时先显示旧配置信息，用户可选保留升级或清除重装
+- **installer: Agent 默认目录改为 `/opt/ddns-agent`** — 与 Manager (`/opt/ddns-manager`) 分离
+- **installer: ddns-go 误报修复** — `systemctl is-active` 改用 exit code 判断 (exit 4=unknown 不再误报)
+- **installer: 三重安全保护** — 只删 `agent.yaml`/`node-agent`/`ddns_cache.yaml` 具体文件；
+  `cleanAgentBinaries` 检查 agent.yaml 存在才清理；永远不用 `os.RemoveAll(dir)`
+- **installer: readLine 中文乱码修复** — 逐字节读取改 rune 级读取，中文输入正常显示
+- **manager: LoadCertBundle 未设 Name 导致 PFX密码保存后变回 ddns** — 新增 `b.Name = name`，
+  确保 SaveCertBundle 写入正确子目录
+- **manager: ConfigHash 双方为空时永不推送首次配置** — 新增 `|| rec.ConfigHash == ""` 强制推送
+- **docs: 安装接口规范 v1.0** — 冻结的三方接口契约（安装器/Agent/Manager），定义 8 章接口约束
+- **api: 上传二进制自动部署** — 从文件名提取版本号 → 自动设置 AgentVersion → Manager 二进制自动重启
+
+---
+
 ## v1.5.29 — 2026-05-14
 
 ### 🔴 第五次审计修复（12 项）：日志链路 + 一键部署 + DNS 错误上报

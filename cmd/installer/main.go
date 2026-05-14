@@ -728,17 +728,10 @@ func cleanOldDDNSManager() bool {
 			exec.Command("systemctl", "daemon-reload").Run()
 			cleaned = true
 		}
-		// Remove old versioned binaries from both old and new default paths
+		// Remove old versioned binaries
 		cleanAgentBinaries(agentBaseDir)
-		// v1.0.0: 同时清理旧默认路径 /opt/ddns-manager (迁移到 ddns-agent)
-		if agentBaseDir != "/opt/ddns-manager" {
-			cleanAgentBinaries("/opt/ddns-manager")
-		}
-		// Remove symlink (both paths)
+		// Remove symlink
 		os.Remove(filepath.Join(agentBaseDir, "node-agent"))
-		if agentBaseDir != "/opt/ddns-manager" {
-			os.Remove("/opt/ddns-manager/node-agent")
-		}
 	}
 	return cleaned
 }

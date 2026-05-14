@@ -70,50 +70,57 @@ func main() {
 // ========== install wizard ==========
 
 // readLine reads a line from stdin with proper line editing (backspace, Ctrl+C).
-// Uses terminal raw mode to prevent kernel echo interference.
+// v1.0.0: 使用 rune 级读取，正确处理中文等多字节 UTF-8 字符
 func readLine(reader *bufio.Reader) (string, error) {
-	// Put terminal in raw mode so we control echo
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err == nil {
 		defer term.Restore(fd, oldState)
 	}
 
-	var buf []byte
+	var buf strings.Builder
 	for {
-		b, err := reader.ReadByte()
+		r, _, err := reader.ReadRune()
 		if err != nil {
 			return "", err
 		}
 		// Enter (CR or LF)
-		if b == '\r' || b == '\n' {
+		if r == '\r' || r == '\n' {
 			fmt.Print("\r\n")
-			return strings.TrimSpace(string(buf)), nil
+			return strings.TrimSpace(buf.String()), nil
 		}
 		// Backspace / DEL
-		if b == 0x7f || b == 0x08 {
-			if len(buf) > 0 {
-				buf = buf[:len(buf)-1]
+		if r == 0x7f || r == 0x08 {
+			s := buf.String()
+			if len(s) > 0 {
+				// 删除最后一个完整 rune
+				runes := []rune(s)
+				runes = runes[:len(runes)-1]
+				buf.Reset()
+				for _, ru := range runes {
+					buf.WriteRune(ru)
+				}
 				fmt.Print("\b \b")
 			}
 			continue
 		}
 		// Ctrl+C → interrupt
-		if b == 0x03 {
+		if r == 0x03 {
 			fmt.Print("^C\r\n")
 			return "", fmt.Errorf("interrupted")
 		}
 		// Ctrl+U → clear line
-		if b == 0x15 {
-			for range buf {
+		if r == 0x15 {
+			s := buf.String()
+			for range []rune(s) {
 				fmt.Print("\b \b")
 			}
-			buf = buf[:0]
+			buf.Reset()
 			continue
 		}
 		// Printable
-		buf = append(buf, b)
-		fmt.Print(string(b))
+		buf.WriteRune(r)
+		fmt.Print(string(r))
 	}
 }
 

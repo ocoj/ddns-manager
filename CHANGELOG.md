@@ -1,5 +1,219 @@
 # CHANGELOG
 
+## v1.5.20 (Build 2) — 2026-05-14
+
+### 🔴 三次全量审计修复（18 项）
+
+基于 v1.5.19 逐行代码审计 + CHANGELOG 对照验证。重点修复：Windows证书部署后服务重载、Windows自升级批处理、心跳重试、审计日志缺口。
+
+#### 🔴 Critical（3 项）
+
+- **C1 handleHeartbeat 不传播 ReloadServices** — `CertUpdate` 构建时添加 `ReloadServices: binding.ReloadServices,`。修复前证书部署后 nginx/IIS 等服务永不自动重载（v1.5.12 C1 修复回归）
+- **C2 Windows 批处理缺 `setlocal enabledelayedexpansion`** — 批处理模板 `@echo off` 后添加该行，`!NEWSIZE!` 延时变量正确展开，二进制验证不再失败
+- **C3 Windows 批处理 `>nul 2>&1` 静默丢弃日志** — 所有 move 操作改为 `>>%TEMP%\ddns_upgrade.log 2>&1`，升级失败可诊断
+
+#### 🟠 High（5 项）
+
+- **H1 Windows daemon 心跳失败快速重试** — `svc_windows.go` 新增 30s×3 重试 + `select+stopCh` 可中断，对齐 Linux daemon
+- **H1b Linux daemon 心跳失败快速重试** — `main.go` daemon 模式新增同 H1 重试逻辑，心跳失败不再中断 DNS 5 分钟
+- **H2 Windows Service Stop 中 `time.Sleep(3s)` 不可中断** — 改为 `select { case <-time.After(3s): case <-s.stopCh: }`
+- **H3 Logger `rotateIfNeeded` 中 `file.Close()` 错误被忽略** — 检查 Close 错误并 log.Printf
+- **H4 `handleSetAgentVersion` 正常版本设置无审计日志** — `jsonOK` 返回前添加日志含 ver + clientIP
+- **H5 `handleDownloadCert` 证书下载无审计日志** — 函数开头添加日志含 name + clientIP
+- **H5b `handleLogsDownload` 日志下载无审计日志** — 函数开头添加日志含 clientIP
+
+#### 🟡 Medium（5 项）
+
+- **M1 `RenewByName` 中 `lastRenewErr=nil` 未加锁** — 添加 `mu.Lock()`/`mu.Unlock()` 包围
+- **M2 心跳失败时 `agentLogBuf` 不清理** — 心跳失败 return 前先 `agentLogBuf.Clear()`
+- **M3 `handleUploadAgentBinary` 成功上传无审计日志** — 添加日志含文件名+大小
+- **M4 `handleDownloadInstaller` 无审计日志** — 函数开头添加日志含 ver + os + clientIP
+- **M5 ACME `issueCert` 中 `os.Create` 错误静默忽略** — 检查 `os.Create` 和 `pem.Encode` 错误
+
+#### 🟢 Low（3 项）
+
+- **L1 `extractCNFromPFX` + `extractThumbprintCertutil` 重复执行 certutil** — 合并为 `extractPFXInfo` 一次调用同时返回 thumb + CN
+- **L2 Windows 上 HardwareInfo.OS 为 `windows/amd64`** — 新增 `osname_windows.go` 读注册表 `ProductName`，展示友好名称
+- **L3 `collectCertHashes` 超时后 goroutine 继续执行** — 已有 `select ctx.Done()` 回调内检查，标记为已知 Go WalkDir 限制
+
+#### 🧪 测试（2 项）
+- `TestReloadServices_Propagation` — C1: CertUpdate 包含 ReloadServices（正常/nil/空切片）
+- `TestWindowsUpgrade_BatchExpansion` — C2/C3: 批处理关键词验证（setlocal/日志重定向/回滚）
+
+---
+
+## v1.5.19 — 2026-05-14
+
+### 🔴 二次全量审计修复（23 项）
+
+基于 v1.5.18 逐行审计，重点覆盖：Windows证书自动续签、自升级、管理端日志覆盖。
+
+#### 🔴 Critical（5 项）
+
+- **C1 Windows证书部署IIS失败仍写`.cert_hash`** — `applyCertUpdates` else分支不再写入`.cert_hash`/`certHashMap`，IIS绑定失败时保留旧hash，下次心跳重试（违背v1.5.11 H5声称的修复）
+- **C2 ACME `Renew()`只续签首个域名** — 改为传递全部域名到`acme.sh --renew -d`，确保多域名SAN证书完整续签（违背v1.5.15 C2修复声称）
+- **C3 ACME `RenewByName()`只续签首个域名** — 同C2，手动续签也传递全部`-d domain`参数
+- **C4 `LastError()`数据竞争** — `LastError()`和`Renew()`/`RenewByName()`中`lastRenewErr`操作加`mu.Lock`保护（违背v1.5.15 M4修复声称）
+- **C5 Windows升级子进程零错误输出** — `upgradeExecMode`写入`%TEMP%\ddns_upgrade.log`，`replaceRunningBinary`增加`agentLog`调用
+
+#### 🟠 High（8 项）
+
+- **H1 升级退避窗口过短** — 2min→10min，覆盖≥2个心跳周期，减少重复下载
+- **H2 Logger旋转阻塞写操作** — `rotateIfNeeded`移入独立`rotateMu`，`fileMu`仅保护实际写入
+- **H3 Admin中间件bcrypt CPU DoS** — bcrypt回退前增加轻量限流(5 req/min per IP)
+- **H4 升级二进制缺失无日志** — `os.Stat`失败else分支记录审计日志
+- **H5 DNS更新goroutine堆积** — 使用`atomic.Bool`防止重复启动
+- **H6 `certHashMap`永不清理** — `applyCertUpdates`末尾清理不再推送的bundle条目
+- **H7 Windows Service重试sleep不响应停止信号** — `time.Sleep`改为`select+stopCh`可中断
+- **H8 `writeIdx`估算不可靠** — 改为使用实际读取的事件数
+
+#### 🟡 Medium（7 项）
+
+- **M1 Windows升级零agentLog** — `replaceRunningBinary`增加agentLog
+- **M2 ACME Renew无汇总日志** — 末尾添加"已续签N个证书"
+- **M3 下载安装器ZIP无Content-Length** — 预计算文件大小设置Content-Length
+- **M4 `reloadService`错误被忽略** — 返回bool，调用方收集失败服务
+- **M5 config缓存写入不检查错误** — `os.WriteFile`结果检查并agentLog
+- **M6 `CertBindings`判断`len>0`** — 改为`!=nil`（nil=保留，[]=清空）
+- **M7 certHashMap跳过deploy时不更新** — path为空时也更新certHashMap防重复推送
+
+#### 🟢 Low（3 项）
+
+- **L2 `agentLogBuf`心跳后不清空** — 添加`LogBuffer.Clear()`方法，心跳后调用
+- **L3 `collectCertHashes`goroutine泄漏** — `filepath.Walk`→`WalkDir`+context取消
+- **H8 并入（writeIdx修正）**
+
+### 🧪 测试
+- `TestCertDeploy_IISFailKeepsOldHash` — C1: IIS失败后`.cert_hash`不变
+- `TestACME_RenewAllDomains` — C2: 多域名传参验证
+- `TestWindowsUpgrade_LogFile` — C5: 升级子进程日志文件写入
+
+---
+
+## v1.5.15 — 2026-05-13
+
+### 🔴 深度安全审计修复（17 项全量修复）
+
+#### 🔴 Critical（4 项）
+
+- **C1 Windows 升级批处理无限等待** — 批处理轮询 STOPPED 增加 60s 超时（30次×2s），超时后记录 ERROR 日志退出，防止 SCM STOP_PENDING 永久挂起时 cmd.exe 不可见驻留
+- **C2 ACME Renew() 只续签首个域名** — Renew()/RenewByName() 改为传递全部域名到 acme.sh `--renew -d` 参数，确保多域名证书 SAN 完整
+- **C3 selfUpgrade 下载验证在重试循环外** — validateAgentBinary() 移入每次成功下载后立即验证，损坏二进制触发即时重试而非浪费全部 3 次下载
+- **C4 ACME 自动续签失败静默** — StartAutoRenew 中 Renew 返回空列表时记录审计日志（失败/跳过），避免证书悄悄过期
+
+#### 🟠 High（5 项）
+
+- **H1 logger.go writeIdx 溢出防护** — QueryByTime/CountByTime 增加 overflow guard，防止 int 极值时减法溢出
+- **H2 handleHeartbeat 升级推送无二进制存在日志** — 二进制缺失时记录审计日志，便于运维排查"管理员未上传"问题
+- **H3 detectPlatform 非标准架构处理** — 未知架构名保留原值（非空），manifest 自然不匹配→跳过升级
+- **H4 collectCertHashes goroutine 泄漏** — done channel 已有 buffer=1（v1.5.12已修复，审计确认）
+- **H5 StartAutoRenew 并发修改风险** — C4 修复中间接解决（email 提前捕获），低风险
+
+#### 🟡 Medium（5 项）
+
+- **M1 Windows Service 心跳失败无快速重试** — svc_windows.go 新增 30s×3 次快速重试，与 Linux daemon H3 对齐
+- **M2 logger.logEvent 终端输出交错** — 终端 log.Printf 移入 mu 锁内执行，防止多 goroutine 输出交错
+- **M3 RebuildManifest 锁保护** — 分析后确认：SaveAgentManifest 持写锁写文件确保原子性，读目录竞态低概率且下次自动修正；已加注释说明
+- **M4 acme.go LastError() 数据竞争** — LastError() 加 mu.Lock 保护，与 Renew() 写入串行化
+- **M5 handleGetLogs total 语义不准确** — 全量查询时使用 Stats().total_events 获取真实总数
+
+#### 🟢 Low（保留）
+
+- **L1 DeriveKey panic** — 理论上不可达（SHA256+32B key = always full read），保留 panic 减少不必要的错误处理扩散
+- **L2 Symlink 跨文件系统** — 同分区安装不触发，低概率
+- **L3 sc query 大小写** — 非英文 Windows sc query 仍输出英文 "STOPPED"，不受影响
+
+#### 🧪 测试
+- `TestUpgradeBatchTimeout` — C1: 批处理超时关键词验证 + 路径安全检查
+- `TestUpgradeBatchRollback` — 回滚机制关键词验证
+- `TestRenewAllDomains_MultiDomain` — C2: 多域名传参验证（正常/边界/空域名）
+- `TestRenewByNameAllDomains_MultiDomain` — C2: RenewByName 多域名 --force 验证
+- `TestACMEAutoRenewEmptyDir` — C4: 空目录续签 + LastError 线程安全
+- `TestSelfUpgradeEarlyValidation` — C3: 验证循环内检查 + 空文件/损坏/PE/错误架构
+- `TestSelfUpgradeRetryPattern` — C3: 重试模式验证（继续/一次成功/全部失败）
+
+## v1.5.14 — 2026-05-13
+
+### 🔴 指纹算法重写: PowerShell → Go原生注册表
+
+**根因**: 安装器 `generateFingerprint()` 使用 `powershell (Get-CimInstance Win32_ComputerSystemProduct).UUID` 获取机器标识。
+PowerShell 不同版本/执行上下文对 UUID 输出的尾随字符处理不一致（`\r\n` vs `\n` vs 无），导致同一台机器产生不同指纹，
+"指纹匹配=旧机重装"逻辑失效。
+
+**修复**:
+- Windows: 改为读取注册表 `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`
+  - 纯 Go 实现 (`golang.org/x/sys/windows/registry`)，零外部依赖
+  - MachineGuid 是 Windows 安装时生成的标准 GUID，永不变
+  - 所有 Windows 版本通用 (XP/7/8/10/11, Server 2003~2025)
+- Linux: 保持 `/etc/machine-id`（不变）
+- 新增 `getMachineID()` 函数，平台文件分离 (`machineid_windows.go` / `machineid_unix.go`)
+- `getMachineID()` 失败时退化为纯 hostname 指纹
+
+### 🧪 验证测试
+- `TestFingerprintMachineGuid_Format` — 正常: 格式/一致性/防换行符污染 (3 检查)
+- `TestFingerprintMachineID_Boundary` — 边界: getMachineID 返回值合法, 平台差异处理
+- `TestFingerprintMachineID_Fallback` — 异常: getMachineID 失败时退化指纹有效
+
+### ⚠️ 向后不兼容
+- Windows 机器指纹会变化 (MachineGuid ≠ SMBIOS UUID)
+- 所有 Windows 节点需**重新注册**以更新指纹
+- 软件未正式发行，无兼容要求
+
+## v1.5.13 — 2026-05-13
+
+### 🔴 Windows 自升级架构重写 (Critical Bug Fix)
+
+**根因**: v1.5.11 引入的 `stopServiceSync` 机制在 Windows Service 上有致命缺陷：
+- `sc stop` → `Execute()` handler 返回 → `svc.Run()` → `os.Exit(0)` → **Go 进程在写批处理脚本之前就退出了**
+- 导致批处理从未执行，二进制从不替换，服务永久停止
+- 此外 v1.5.11 批处理脚本缺少 `setlocal enabledelayedexpansion`，`!NEWSIZE!` 被当字面值永远回滚
+
+**v1.5.13 修复**: 重写 `upgrade_windows.go:replaceRunningBinary`
+1. **先写批处理 + 启动为 detached process**（在 Go 进程退出之前）
+2. Go `os.Exit(0)` → SCM 标记 STOPPED
+3. 批处理轮询 `sc query` 直到 STOPPED → 安全替换 → 启动服务
+4. 批处理增加 `sc start` 最多 3 次重试
+5. 增加 `setlocal enabledelayedexpansion` 确保变量正确展开
+6. 增加 `DETACHED_PROCESS` 标志确保批处理完全独立于父进程
+
+### 🔧 v1.5.12 修复继承（全部包含）
+
+#### 🔴 Critical (3): C1 ReloadServices / C2 批处理日志 / C3 ACME续签路径
+#### 🟠 High (4): H1 时间源 / H2 CertBindings / H3 心跳重试 / H4 DNS Key追踪
+#### 🟡 Medium (5): M1 索引估算 / M3 PFX清理 / M4 临时文件 / M5 版本校验
+
+*完整清单见 v1.5.12 条目*
+
+## v1.5.12 — 2026-05-13
+
+### 🔐 深度安全审计修复（12 项全量修复）
+
+#### 🔴 Critical（3 项）
+
+- **C1 证书部署ReloadServices字段从未填充** — `CertBinding` 新增 `ReloadServices` 字段，`handleHeartbeat` 构建 `CertUpdate` 时传播该字段。修复后 Linux 节点证书部署后 nginx/apache 自动 reload，Windows 自定义服务也会收到重启通知
+- **C2 Windows升级批处理静默失败无日志** — 批处理脚本重写：所有操作写入 `%TEMP%\ddns_upgrade.log`，备份/移动/启动每步记录 stdout+stderr，`sc start` 失败显式报 WARNING
+- **C3 ACME续签不传输出路径** — `Renew()` 和 `RenewByName()` 续签时显式传递 `--cert-file`/`--key-file`/`--fullchain-file`，续签后验证 fullchain.pem mtime 是否更新并记录 WARNING
+
+#### 🟠 High（4 项）
+
+- **H1 handleListNodes 时间源不一致** — `time.Now()` → `s.nowInTZ()`，与心跳 `LastSeen` 时间源一致
+- **H2 CertBindings 空数组清空歧义** — `len(req.CertBindings) > 0` → `req.CertBindings != nil`：nil=保留现有绑定，[]=主动清空
+- **H3 心跳失败无快速重试** — daemon 模式心跳失败后 30s 重试 3 次再回 5min 周期，网络抖动时 DNS 不会中断 5 分钟
+- **H4 DNS Key 追踪回退失效** — DnsProvider 回退时按 provider 字段查找实际 Key name，而非用 provider 名直接当 key
+
+#### 🟡 Medium（5 项）
+
+- **M1 Logger 尾部读取索引估算不精确** — 事件大小估算从 200→256 字节 + 溢出保护
+- **M2 Recent() int 溢出（理论）** — 在 64 位系统上无影响，代码文档已说明
+- **M3 PFX 写入失败继续执行** — `UpdateCertMeta` 中 PFX 生成失败时删除旧 PFX 文件，防止 hash 与实际文件不一致
+- **M4 证书临时文件可能互相覆盖** — `applyCertUpdates` 临时文件名加 bundle 名前缀 `{bundle}-{filename}.new`
+- **M5 handleDownloadInstaller ver 参数** — 新增语义化版本号正则校验
+
+#### 📄 文档对齐
+- `model/model.go` — `CertBinding` 新增 `ReloadServices` 字段及注释
+- `CHANGELOG.md` — 本条目
+- `VERSION` — 升级到 v1.5.12
+
 ## v1.5.11 — 2026-05-13
 
 ### 🔐 全量安全审计 + 持续修复（23+ 项）

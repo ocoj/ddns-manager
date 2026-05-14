@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -23,6 +24,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kk/ddns-manager/internal/crypto"
@@ -32,12 +34,22 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=x.y.z"
 var version = "dev"
+var lastConfigHash string
+var certHashMap = map[string]string{}
+var certHashMapMu sync.Mutex // H6: protects certHashMap from concurrent access
 
 // dnsUpdater is the global DNS updater instance (initialized once via sync.Once)
 var (
-	dnsUpdater     *DNSUpdater
-	dnsUpdaterOnce sync.Once
+	dnsUpdater       *DNSUpdater
+	dnsUpdaterOnce   sync.Once
+	dnsUpdateRunning atomic.Bool // H5: prevents goroutine stacking on config changes
 )
+var agentLogBuf = newLogBuffer(100)
+func agentLog(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	log.Print(msg)
+	agentLogBuf.Write(msg)
+}
 
 // base paths — defaults, overridable via -dir flag
 var (
@@ -143,6 +155,12 @@ func collectHardware() *model.HardwareInfo {
 			}
 		}
 	}
+	// v1.5.20 L2: Windows 上读注册表获取友好名称 (如 "Windows Server 2022 Standard")
+	if runtime.GOOS == "windows" {
+		if winName := osProductName(); winName != "" {
+			hw.OS = winName
+		}
+	}
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		log.Printf("[hw] 获取网卡列表失败: %v", err)
@@ -202,6 +220,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		Fingerprint: cfg.Fingerprint,
 		Status: model.NodeStatus{
 			AgentVersion: version,
+			CertPath:     cfg.CertPath,
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
 			CertHashes:   certHashes,
@@ -220,8 +239,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	// 3. Send heartbeat
 	resp := sendHeartbeat(cfg, req)
 	if resp == nil {
+		// v1.5.20 M2: 心跳失败前也清空日志缓冲，防止下次心跳携带双倍旧日志
+		agentLogBuf.Clear()
 		return fmt.Errorf("心跳失败")
 	}
+	// L2: clear log buffer after heartbeat to prevent stale entries
+	agentLogBuf.Clear()
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
 	if resp.Config != nil && resp.Config.YAML != "" {
@@ -321,6 +344,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			path = cfg.CertPath
 		}
 		if path == "" {
+			// M7: mark bundle as processed to prevent repeated push
+			certHashMapMu.Lock()
+			certHashMap[cu.BundleName] = cu.CertHash
+			certHashMapMu.Unlock()
 			continue
 		}
 		os.MkdirAll(path, 0o700)
@@ -390,8 +417,15 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		}
 
 		// Process service reload hints from Manager
+		// M4: collect failed service reloads for logging
+		var failedServices []string
 		for _, svc := range cu.ReloadServices {
-			reloadService(svc)
+			if !reloadService(svc) {
+				failedServices = append(failedServices, svc)
+			}
+		}
+		if len(failedServices) > 0 {
+			agentLog("证书部署: 服务重载失败: %v (bundle=%s)", failedServices, cu.BundleName)
 		}
 
 		// H5: 仅在 IIS 绑定成功(或非Windows)后才写入 .cert_hash
@@ -404,16 +438,31 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			log.Printf("[cert] 证书文件已写入但 IIS 绑定失败: %s, 下次心跳重试", cu.BundleName)
 		}
 	}
+	// H6: Clean stale certHashMap entries (bundles no longer pushed by Manager)
+	certHashMapMu.Lock()
+	for bundle := range certHashMap {
+		found := false
+		for _, cu := range updates {
+			if cu.BundleName == bundle {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(certHashMap, bundle)
+		}
+	}
+	certHashMapMu.Unlock()
 }
 
 // reloadService reloads or restarts a system service after cert deployment.
 // Supports systemd service names (Linux) and Windows service names.
-func reloadService(svc string) {
+func reloadService(svc string) bool {
 	if runtime.GOOS == "windows" {
 		// Windows: try appcmd recycle first (IIS), then net stop/start
 		if strings.Contains(strings.ToLower(svc), "iis") || strings.Contains(strings.ToLower(svc), "w3svc") {
 			recycleIISAppPools()
-			return
+			return true
 		}
 		// Generic Windows service restart
 		exec.Command("sc", "stop", svc).Run()
@@ -423,22 +472,25 @@ func reloadService(svc string) {
 			log.Printf("[cert] 服务重启失败 %s: %v: %s", svc, err, string(out))
 		} else {
 			log.Printf("[cert] 服务已重启: %s", svc)
+			return true
 		}
-		return
+		return false
 	}
 	// Linux: try reload first (nginx -s reload, systemctl reload), then restart
-	out, err := exec.Command("systemctl", "reload", svc).CombinedOutput()
+	_, err := exec.Command("systemctl", "reload", svc).CombinedOutput()
 	if err != nil {
 		// reload not supported, try restart
 		out2, err2 := exec.Command("systemctl", "restart", svc).CombinedOutput()
 		if err2 != nil {
 			log.Printf("[cert] 服务重载失败 %s: %v: %s", svc, err2, string(out2))
+			return false
 		} else {
 			log.Printf("[cert] 服务已重启: %s", svc)
+			return true
 		}
 	} else {
 		log.Printf("[cert] 服务已重载: %s", svc)
-		_ = out
+		return true
 	}
 }
 
@@ -495,21 +547,29 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 	// 超时保护: NFS 卡住时 30s 后取消 Walk（filepath.Walk 不支持 context，
 	// 通过 goroutine + channel 实现超时控制）
 	maxDepth := 5
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	done := make(chan struct{}, 1)
 	go func() {
-		filepath.Walk(cfg.CertPath, func(p string, info os.FileInfo, err error) error {
+		// L3: use WalkDir with context cancellation support
+		filepath.WalkDir(cfg.CertPath, func(p string, d os.DirEntry, err error) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if err != nil {
 				log.Printf("[cert] 遍历目录错误 %s: %v", p, err)
 				return nil
 			}
-			if info.IsDir() {
+			if d.IsDir() {
 				rel, _ := filepath.Rel(cfg.CertPath, p)
 				if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= maxDepth {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if info.Name() == ".cert_hash" {
+			if d.Name() == ".cert_hash" {
 				data, err := os.ReadFile(p)
 				if err == nil {
 					result[filepath.Dir(p)] = strings.TrimSpace(string(data))
@@ -723,8 +783,8 @@ func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBindin
 	}
 
 	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
-	thumb := extractThumbprintCertutil(pfxFile)
-	certCN := extractCNFromPFX(pfxFile)
+	// v1.5.20 L1: 合并一次 certutil -dump 同时提取指纹和 CN
+	thumb, certCN := extractPFXInfo(pfxFile)
 	if thumb == "" {
 		log.Printf("PFX 证书指纹提取失败: %s", bundleName)
 		return false
@@ -967,48 +1027,36 @@ func autoBindExisting(thumb, certCN string) {
 	}
 	log.Printf("IIS 自动绑定: %d/%d 绑定已更新 (CN=%s)", updated, len(bindings), certCN)
 }
-
-// extractThumbprintCertutil 使用 certutil 提取 PFX 证书指纹。
-// certutil -dump 输出格式固定（不受语言/版本影响），比 PowerShell Write-Host 解析更可靠:
-//   Cert Hash(sha1): a1b2c3d4e5f6789012345678901234567890abcd
-func extractThumbprintCertutil(pfxFile string) string {
+// extractPFXInfo 合并一次 certutil -dump 同时提取指纹和 CN。
+// v1.5.20 L1: 原 extractThumbprintCertutil + extractCNFromPFX 各执行一次 certutil,
+// 现合并为一次调用减少进程开销。
+func extractPFXInfo(pfxFile string) (thumb string, cn string) {
 	out, err := exec.Command("certutil", "-dump", pfxFile).CombinedOutput()
 	if err != nil {
 		log.Printf("[cert] certutil -dump 失败: %v", err)
-		return ""
+		return "", ""
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "Cert Hash(sha1):") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Cert Hash(sha1):"))
+			thumb = strings.TrimSpace(strings.TrimPrefix(line, "Cert Hash(sha1):"))
 		}
-	}
-	return ""
-}
-
-// extractCNFromPFX 通过 certutil 解析 PFX 文件获取 CN（通用名称）。
-// certutil 输出中 Issuer/Subject 行格式固定:
-//   Subject: CN=app.example.com, O=Org, ...
-func extractCNFromPFX(pfxFile string) string {
-	out, err := exec.Command("certutil", "-dump", pfxFile).CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "Subject:") {
 			subject := strings.TrimPrefix(line, "Subject:")
 			subject = strings.TrimSpace(subject)
 			if idx := strings.Index(subject, "CN="); idx != -1 {
-				cn := subject[idx+3:]
+				cn = subject[idx+3:]
 				if comma := strings.IndexByte(cn, ','); comma != -1 {
 					cn = cn[:comma]
 				}
-				return strings.ToLower(strings.TrimSpace(cn))
+				cn = strings.ToLower(strings.TrimSpace(cn))
 			}
 		}
+		if thumb != "" && cn != "" {
+			break
+		}
 	}
-	return ""
+	return
 }
 
 // ── Windows Trust (MotW removal) ──
@@ -1052,22 +1100,38 @@ func main() {
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, os.Interrupt)
 			log.Printf("[daemon] %s 已启动, 版本=%s", runtime.GOOS, version)
+			// v1.5.20 H1: 心跳失败后 30s×3 快速重试，防止网络抖动导致 DNS 中断 5 分钟
+			doHeartbeatWithRetry := func() {
+				if err := doHeartbeat(cfg); err != nil {
+					log.Printf("[daemon] 心跳失败: %v", err)
+					for i := 0; i < 3; i++ {
+						select {
+						case <-time.After(30 * time.Second):
+							log.Printf("[daemon] 第%d次重试...", i+1)
+							if err := doHeartbeat(cfg); err != nil {
+								log.Printf("[daemon] 重试%d失败: %v", i+1, err)
+							} else {
+								log.Printf("[daemon] 重试%d成功", i+1)
+								return
+							}
+						case <-ch:
+							return
+						}
+					}
+					log.Printf("[daemon] 3次重试均失败, 等待下一轮心跳周期")
+				}
+			}
 			// 启动时立即执行一次心跳 + DNS 更新，不等 5 分钟
-			// （daemon 重启后若等首个 tick，DNS 会中断 5 分钟）
 			go func() {
 				log.Println("[daemon] 执行首次心跳...")
-				if err := doHeartbeat(cfg); err != nil {
-					log.Printf("首次心跳失败: %v", err)
-				}
+				doHeartbeatWithRetry()
 			}()
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					if err := doHeartbeat(cfg); err != nil {
-						log.Printf("心跳失败: %v", err)
-					}
+					doHeartbeatWithRetry()
 				case <-ch:
 					log.Println("[daemon] 正在关闭")
 					return

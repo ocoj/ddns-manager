@@ -36,7 +36,8 @@ var statusIconMap = map[string]string{
 // Manager handles structured logging.
 type Manager struct {
 	mu         sync.Mutex   // protects ring buffer (events, writeIdx)
-	fileMu     sync.Mutex   // protects file writes and rotation
+	fileMu     sync.Mutex   // protects file writes only (rotation moved to rotateMu)
+	rotateMu   sync.Mutex   // H2: serialises rotation, avoids blocking concurrent writes
 	file       *os.File
 	logPath    string
 	events     []Event       // in-memory ring buffer
@@ -168,12 +169,8 @@ func (m *Manager) reloadFromDisk() {
 	for i, e := range allEvents[start:] {
 		m.events[i] = e
 	}
-	// writeIdx: if we tail-read, totalEvents is an estimate; correct it
-	if totalEvents > 0 && totalEvents > len(allEvents) {
-		m.writeIdx = totalEvents
-	} else {
-		m.writeIdx = len(allEvents)
-	}
+	// H8: use actual event count, not file-size-based estimate
+	m.writeIdx = len(allEvents)
 	m.mu.Unlock()
 
 	log.Printf("[logger] 从磁盘回读 %d 条事件 (缓存 %d)", len(allEvents), len(allEvents)-start)
@@ -349,7 +346,10 @@ func (m *Manager) rotateIfNeeded() {
 		return
 	}
 
-	m.file.Close()
+	// v1.5.20 H3: 检查 Close 错误，防止文件描述符泄漏
+	if err := m.file.Close(); err != nil {
+		log.Printf("[logger] 关闭当前日志文件失败: %v", err)
+	}
 	rotated := strings.TrimSuffix(m.logPath, ".log") + "-" + time.Now().In(m.tz).Format("2006-01-02") + ".log"
 	os.Rename(m.logPath, rotated)
 
@@ -410,12 +410,10 @@ func (m *Manager) logEvent(e Event) {
 	m.writeIdx++
 	m.mu.Unlock()
 
-	// File I/O under separate lock to avoid blocking ring buffer readers during disk ops
-	m.fileMu.Lock()
-	defer m.fileMu.Unlock()
-
-	// rotate if needed
+	// H2: rotation under separate rotateMu, avoiding blocking concurrent writes
+	m.rotateMu.Lock()
 	m.rotateIfNeeded()
+	m.rotateMu.Unlock()
 
 	// check disk space (debounced, once per minute)
 	if m.lastDiskCheck.Add(time.Minute).Before(time.Now()) {
@@ -423,11 +421,13 @@ func (m *Manager) logEvent(e Event) {
 		m.lastDiskCheck = time.Now()
 	}
 
-	// write to file (check error in production; log to stderr as last resort)
+	// File write under fileMu only (no rotation inside)
+	m.fileMu.Lock()
 	data, _ := json.Marshal(e)
 	if _, err := m.file.Write(append(data, '\n')); err != nil {
 		log.Printf("[logger] write error: %v", err)
 	}
+	m.fileMu.Unlock()
 
 	// 终端实时输出 (在锁外执行)
 	statusIcon := statusIconMap[e.Status]

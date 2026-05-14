@@ -398,7 +398,7 @@ th{text-align:left}
 <div class="modal-overlay" id="modal-acme-account"><div class="modal-box" style="width:500px"><h3><span id="modal-acme-title">添加 ACME 帐号</span><button class="modal-close" onclick="closeModal('modal-acme-account')">&times;</button></h3><div class="form-group"><label>Email</label><input id="acme-email" placeholder="admin@example.com"></div><div class="form-group"><label>CA</label><select id="acme-ca"><option>Let's Encrypt</option><option>ZeroSSL</option><option>Google Trust Services</option></select></div><div class="form-group"><label>Key Type</label><select id="acme-keytype"><option>EC256</option><option>RSA2048</option><option>RSA4096</option></select></div><div class="form-group"><label>EAB KID (ZeroSSL 必填)</label><input id="acme-eabkid"></div><div class="form-group"><label>EAB HMAC (ZeroSSL 必填)</label><input id="acme-eabkey"></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-acme-account')">取消</button><button class="btn btn-primary" onclick="saveACMEAccount()">提交</button></div></div></div>
 <div class="modal-overlay" id="modal-acme-issue"><div class="modal-box" style="width:560px"><h3>ACME 申请证书<button class="modal-close" onclick="closeModal('modal-acme-issue')">&times;</button></h3><div class="form-group"><label>帐号</label><select id="acme-issue-account"></select></div><div class="form-group"><label>域名 (逗号分隔)</label><input id="acme-issue-domains" placeholder="example.com,*.example.com"><div class="tip">泛域名(*.example.com)需要 DNS-01 验证，必须选 DNS 提供商</div></div><div class="form-group"><label>DNS 提供商 (DNS-01 必选)</label><select id="acme-issue-dns"><option value="">-- HTTP-01 (非泛域名) --</option></select></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-acme-issue')">取消</button><button class="btn btn-primary" id="acme-issue-btn" onclick="issueACME()">申请</button></div><div id="acme-log" style="display:none;margin-top:12px;background:#1a1a2e;color:#00ff88;padding:10px;border-radius:6px;font:12px Consolas,monospace;max-height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div></div></div>
 <div class="modal-overlay" id="modal-cert-detail"><div class="modal-box" style="width:460px"><h3>证书详情<button class="modal-close" onclick="closeModal('modal-cert-detail')">&times;</button></h3><div id="cert-detail-body" style="font-size:13px;line-height:2"></div></div></div>
-<div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
+<div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="form-group"><label>PFX 密码</label><input id="cupload-pfxpw" placeholder="默认 ddns" style="width:200px"></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
 <div class="modal-overlay" id="modal-dnskey-add"><div class="modal-box" style="width:420px"><h3>添加 DNS Key<button class="modal-close" onclick="closeModal('modal-dnskey-add')">&times;</button></h3><div class="form-group"><label>名称</label><input id="dnskey-name" placeholder="e.g. 阿里云-生产"><div class="tip">自定义名称，同一供应商可建多个 Key</div></div><div class="form-group"><label>提供商</label><select id="dnskey-provider"><option value="">-- 请选择 --</option><option value="alidns">阿里云 (alidns)</option><option value="aliesa">阿里云国际 (aliesa)</option><option value="tencentcloud">腾讯云 (tencentcloud)</option><option value="dnspod">DNSPod (dnspod)</option><option value="cloudflare">Cloudflare</option><option value="huaweicloud">华为云 (huaweicloud)</option><option value="baiducloud">百度云 (baiducloud)</option><option value="porkbun">Porkbun</option><option value="godaddy">GoDaddy</option><option value="namecheap">Namecheap</option><option value="namesilo">NameSilo</option><option value="dynv6">Dynv6</option><option value="dnsla">DNSLA</option><option value="dynadot">Dynadot</option><option value="vercel">Vercel</option><option value="cloudns">ClouDNS</option><option value="trafficroute">TrafficRoute</option><option value="callback">Callback</option><option value="spaceship">Spaceship</option><option value="edgeone">EdgeOne</option><option value="gcore">Gcore</option><option value="nsone">NS1</option><option value="name_com">Name.com</option><option value="rainyun">Rainyun</option><option value="eranet">Eranet</option><option value="nowcn">NowCN</option><option value="tnethk">TnetHK</option><option value="hipmdnsmgr">HiPM DNS</option></select></div><div class="form-group"><label>Access Key ID</label><input id="dnskey-ak" placeholder=""></div><div class="form-group"><label>Secret Key</label><input id="dnskey-sk" placeholder=""></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-dnskey-add')">取消</button><button class="btn btn-primary" onclick="saveDNSKey()">保存</button></div></div></div>
 
 <script>
@@ -507,6 +507,7 @@ function normalizeNode(id, n) {
     arch: hw.arch || '',
     interfaces: hw.interfaces || [],
     pending: !n.config_yaml || !n.config_sent_at,
+    cert_path: st.cert_path || '',  // 客户端上报的证书安装路径
     config: cfg || {},
     raw: n
   };
@@ -1356,6 +1357,9 @@ async function openNodeConfig(id) {
   var cr = await apiJSON('/api/admin/certs');
   var certs = cr.data || [];
 
+  // 客户端上报的默认证书路径（心跳中携带），新建证书绑定时自动填入
+  window._ncfgCertPath = node.cert_path || '';
+
   document.getElementById('modal-node-title').textContent = '节点配置: ' + node.name;
   var cfg = node.config || {};
   var ipv4 = cfg.ipv4 || {}, ipv6 = cfg.ipv6 || {};
@@ -1471,7 +1475,8 @@ function certBindingRow(i, b, certs) {
   });
   if (arr.length === 0) h += '<option value="">-- 无 --</option>';
   h += '</select>';
-  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)" style="flex:1">';
+  var cpPlaceholder = window._ncfgCertPath ? '客户端路径: ' + window._ncfgCertPath : '部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)';
+  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(cpPlaceholder) + '" style="flex:1">';
   h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   return h;
 }
@@ -1757,12 +1762,18 @@ async function showCertDetail(name) {
   if (isACME && d.email) rows.push(['ACME 账号', he(d.email)]);
   if (d.hash) rows.push(['Hash', '<span class="mono">' + he(d.hash.substring(0,16)) + '...</span>']);
   var h = '<table style="font-size:13px"><tbody>';
+  h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap">PFX 密码</td><td style="padding:6px 0"><input id="cert-pfxpw" placeholder="ddns" style="width:140px;height:26px;font-size:12px"> <button class="btn btn-sm" onclick="saveCertPFXPassword(''+jsStr(name)+'')">保存</button></td></tr>';
   rows.forEach(function(r) {
     h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap;vertical-align:top">' + r[0] + '</td><td style="padding:6px 0">' + r[1] + '</td></tr>';
   });
   h += '</tbody></table>';
   document.getElementById('cert-detail-body').innerHTML = h;
   openModal('modal-cert-detail');
+}
+async function saveCertPFXPassword(name) {
+  var pw = document.getElementById('cert-pfxpw').value.trim() || 'ddns';
+  var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/pfx-password', 'POST', {pfx_password: pw});
+  if (r.ok) { toast('PFX 密码已保存'); }
 }
 async function uploadCert() {
   var name = document.getElementById('cupload-name').value.trim();
@@ -1771,6 +1782,8 @@ async function uploadCert() {
   if (!files || files.length === 0) { toast('请选择证书文件', 'error'); return; }
   var fd = new FormData();
   fd.append('name', name);
+  var pfxpw = (document.getElementById('cupload-pfxpw') || {}).value || '';
+  if (pfxpw) fd.append('pfx_password', pfxpw);
   for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
   var btn = document.getElementById('cupload-btn');
   btn.disabled = true; btn.textContent = '上传中...';

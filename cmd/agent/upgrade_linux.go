@@ -94,11 +94,14 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 }
 
 // restartAgentAfterUpgrade 在自升级完成后立即触发一次心跳，避免 Linux oneshot
-// 模式下的 5 分钟 DNS 更新中断。systemd timer 的 RandomizedDelaySec 仍会产生延迟。
-// 实现: 通过 systemctl start node-agent.service 触发即时执行。
+// 模式下的 5 分钟 DNS 更新中断。
+//
+// v1.5.13 修复: 使用 --no-block 防止 systemctl 等待当前进程完成（死锁）。
+// 在 oneshot 模式下调用 systemctl start 自身会因 systemd 等待服务完成而永久阻塞。
+// --no-block 使 systemctl 仅排队启动请求后立即返回。
 func restartAgentAfterUpgrade() {
-	// 触发即时心跳 — 非阻塞，失败不影响升级流程
-	cmd := exec.Command("systemctl", "start", "node-agent.service")
+	// 触发即时心跳 — 非阻塞（--no-block），失败不影响升级流程
+	cmd := exec.Command("systemctl", "start", "--no-block", "node-agent.service")
 	if err := cmd.Run(); err != nil {
 		// node-agent.service 是 oneshot，可能在退出前已被 timer 触发
 		// 失败记录日志但不应该影响升级结果

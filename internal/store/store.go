@@ -183,6 +183,7 @@ type CertBundle struct {
 	ExpiresAt  time.Time         `json:"expires_at"`
 	Domains    []string          `json:"domains"`
 	Hash       string            `json:"hash"`
+	PFXPassword string           `json:"pfx_password,omitempty"` // PFX 证书密码
 }
 
 func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
@@ -644,6 +645,10 @@ func (s *ManagerStore) DeleteAgentBinary(name string) error {
 // 每个平台取版本号最高的二进制文件。上传/删除后自动调用。
 // 文件名格式: node-agent-v{VERSION}-{os}-{arch}[.exe]
 func (s *ManagerStore) RebuildManifest() {
+	// 注意: RebuildManifest 不持锁扫描目录。
+	// SaveAgentManifest 内部持写锁写文件，确保 manifest 原子性。
+	// 读目录期间可能有 SaveAgentBinary 正在写入，极端情况下可能读到部分文件，
+	// 但下次 RebuildManifest (上传/删除触发) 会自动修正。
 	entries, err := os.ReadDir(s.AgentBinDir())
 	if err != nil {
 		return

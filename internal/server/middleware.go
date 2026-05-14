@@ -108,6 +108,11 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// H3: bcrypt 回退前轻量限流 (5 req/min per IP)，防止 CPU DoS
+		if s.bcryptLimiter != nil && !s.bcryptLimiter.allow(clientIP(r)) {
+			jsonErr(w, 429, "rate limit exceeded")
+			return
+		}
 		st, _ := s.store.LoadAdminState()
 		if st != nil && bcrypt.CompareHashAndPassword([]byte(st.TokenHash), []byte(token)) == nil {
 			s.setAdminToken(token)

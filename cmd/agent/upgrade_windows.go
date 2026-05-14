@@ -33,6 +33,8 @@ import (
 // The version parameter is accepted for signature compatibility with Linux but ignored
 // on Windows (the binary filename is managed by the batch script's move command).
 func replaceRunningBinary(curExe, newExe, version string) error {
+	// M1: log upgrade start to agent log buffer
+	agentLog("自升级: 启动升级子进程 ver=%s", version)
 	dir := filepath.Dir(curExe)
 
 	// Escape paths for batch file — reject paths with shell metacharacters to prevent command injection.
@@ -55,14 +57,15 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	// M3: Batch script with rollback — backup old binary, move new over old,
 	// verify the move, restore from backup on failure.
 	script := fmt.Sprintf("@echo off\r\n"+
+		"setlocal enabledelayedexpansion\r\n"+ // v1.5.20 C2: 延时变量展开
 		"set OLD=%s\r\n"+
 		"set NEW=%s\r\n"+
 		"set BAK=%s.old.bak\r\n"+
 		"echo [ddns] Upgrading...\r\n"+
 		// Backup old binary for rollback
-		"move /y \"%%OLD%%\" \"%%BAK%%\" >nul 2>&1\r\n"+
+		"move /y \"%%OLD%%\" \"%%BAK%%\" >>\"%%TEMP%%\\ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 升级日志可诊断
 		// Move new binary into place
-		"move /y \"%%NEW%%\" \"%%OLD%%\" >nul 2>&1\r\n"+
+		"move /y \"%%NEW%%\" \"%%OLD%%\" >>\"%%TEMP%%\\ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 升级日志可诊断
 		// M3: Verify new binary exists and has expected size
 		"if exist \"%%OLD%%\" (\r\n"+
 		"  for %%%%A in (\"%%OLD%%\") do set NEWSIZE=%%%%~zA\r\n"+
@@ -75,7 +78,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		")\r\n"+
 		// M3: Rollback — new binary failed, restore from backup
 		"echo [ddns] Upgrade FAILED, rolling back...\r\n"+
-		"move /y \"%%BAK%%\" \"%%OLD%%\" >nul 2>&1\r\n"+
+		"move /y \"%%BAK%%\" \"%%OLD%%\" >>\"%%TEMP%%\\ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 回滚日志可诊断
 		"sc start node-agent\r\n"+
 		":done\r\n"+
 		"del \"%%~f0\" & exit\r\n",

@@ -22,18 +22,36 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 	s.stopCh = make(chan struct{})
 
 	go func() {
-		// initial heartbeat
-		if err := doHeartbeat(s.cfg); err != nil {
-			log.Printf("[daemon] 首次心跳失败: %v", err)
+		// v1.5.20 H1: 心跳失败后 30s×3 快速重试，防止网络抖动导致 DNS 中断 5 分钟
+		doHeartbeatWithRetry := func() {
+			if err := doHeartbeat(s.cfg); err != nil {
+				log.Printf("[daemon] 心跳失败: %v", err)
+				// 快速重试: 30s × 3 次，使用 select+stopCh 可中断
+				for i := 0; i < 3; i++ {
+					select {
+					case <-time.After(30 * time.Second):
+						log.Printf("[daemon] 第%d次重试...", i+1)
+						if err := doHeartbeat(s.cfg); err != nil {
+							log.Printf("[daemon] 重试%d失败: %v", i+1, err)
+						} else {
+							log.Printf("[daemon] 重试%d成功", i+1)
+							return
+						}
+					case <-s.stopCh:
+						return
+					}
+				}
+				log.Printf("[daemon] 3次重试均失败, 等待下一轮心跳周期")
+			}
 		}
+		// 首次心跳（带重试）
+		doHeartbeatWithRetry()
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if err := doHeartbeat(s.cfg); err != nil {
-					log.Printf("[daemon] 心跳失败: %v", err)
-				}
+				doHeartbeatWithRetry()
 			case <-s.stopCh:
 				log.Printf("[daemon] Windows 服务正在停止")
 				return
@@ -53,7 +71,11 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 			log.Printf("[daemon] 收到停止信号")
 			status <- svc.Status{State: svc.StopPending}
 			close(s.stopCh)
-			time.Sleep(3 * time.Second)
+			// v1.5.20 H2: 可中断等待，SCM 重复 stop 时不再阻塞
+			select {
+			case <-time.After(3 * time.Second):
+			case <-s.stopCh:
+			}
 			return false, 0
 		}
 	}

@@ -34,6 +34,7 @@ type Server struct {
 	heartbeatLimiter *rateLimiter
 	loginLimiter     *rateLimiter
 	pingLimiter      *rateLimiter // lightweight limit for /api/ping (1000 req/min)
+	bcryptLimiter    *rateLimiter // H3: bcrypt fallback rate limit (5 req/min per IP)
 	rateLock         sync.RWMutex
 	// concurrency protection
 	adminTokenMu sync.RWMutex
@@ -161,6 +162,7 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 		version:         version,
 		accessCollector: newAccessStatsCollector(cfg.DataDir),
 		pingLimiter:     newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
+		bcryptLimiter:   newRateLimiter(5),    // H3: bcrypt 回退限流 5 req/min per IP
 	}
 	st, err := s.LoadAdminState()
 	if err != nil {

@@ -150,6 +150,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 						job.Triggered = now.Format(time.RFC3339)
 						job.RetryCount++
 						agentCfg.UpgradeState[nodeID] = job
+					} else {
+						// H4: log missing binary for ops troubleshooting
+						s.logMgr.LogWithNode("upgrade", "二进制缺失", nodeID,
+							fmt.Sprintf("manifest=%s file=%s", binKey, manifestFile), "warning")
 					}
 				}
 			}
@@ -207,6 +211,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		resp.CertUpdates = append(resp.CertUpdates, &model.CertUpdate{
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: binding.DeployPath,
+			ReloadServices: binding.ReloadServices, // v1.5.20 C1: 传播证书部署后需重载的服务列表
 		})
 		// H1: 证书下发成功记录审计日志，运维可追踪证书分发到哪些节点
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
@@ -303,7 +308,8 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.ConfigYAML = string(data)
-	if len(req.CertBindings) > 0 {
+	// M6: nil=保留, empty slice=清空
+	if req.CertBindings != nil {
 		rec.CertBindings = req.CertBindings
 	}
 	rec.ConfigHash = ""

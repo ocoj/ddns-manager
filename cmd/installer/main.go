@@ -226,7 +226,31 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	// Step 3/5: 节点名称 + 服务端重名指纹检查
 	// ================================================================
 	stepWait(3, 5, "节点名称")
-	fingerprint := generateFingerprint()
+
+	// 生成机器指纹 (Go原生, 无外部依赖)
+	var fingerprint string
+	for {
+		var fpErr error
+		fingerprint, fpErr = generateFingerprint()
+		if fpErr == nil {
+			break
+		}
+		fmt.Println()
+		fmt.Printf("  [错误] 无法获取机器标识: %v\n", fpErr)
+		fmt.Println("  可能原因:")
+		fmt.Println("    1. 权限不足 — 请以管理员身份运行安装向导")
+		fmt.Println("    2. 杀毒软件拦截 — 尝试临时关闭实时防护")
+		fmt.Println("    3. 系统文件损坏 — 检查注册表或 /etc/machine-id")
+		fmt.Println()
+		fmt.Print("  按 R 重试, 其他键退出安装: ")
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(strings.ToLower(choice))
+		if choice != "r" {
+			fmt.Println("  [FAIL] 用户退出安装")
+			os.Exit(1)
+		}
+	}
+
 	if nodeName == "" {
 		fmt.Print("  节点名称 (如 win-pc): ")
 		nodeName, _ = reader.ReadString('\n')
@@ -493,8 +517,9 @@ Description=ddns-manager Node Agent Timer
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=300s
-RandomizedDelaySec=30s
+# OnCalendar触发独立于service激活历史，timer重启不会卡死
+OnCalendar=*:0/3
+RandomizedDelaySec=15s
 
 [Install]
 WantedBy=timers.target
@@ -766,18 +791,19 @@ func copyFile(src, dst string) error {
 	return d.Sync()
 }
 
-func generateFingerprint() string {
+func generateFingerprint() (string, error) {
+	// ⚠️ 禁止使用外部工具 (PowerShell/WMI) 获取机器标识 ——
+	// Windows PowerShell 版本/模块差异导致输出尾随字符不稳定 (\r\n vs \n vs 无),
+	// 同一台机器产生不同指纹, v1.5.13 已造成生产故障。
+	// 改为 Go 原生注册表 MachineGuid (Windows) / /etc/machine-id (Linux)。
+	// 详见 machineid_windows.go / machineid_unix.go。
 	hostname, _ := os.Hostname()
-	var mid []byte
-	if runtime.GOOS == "windows" {
-		out, _ := exec.Command("powershell", "-NoProfile", "-Command",
-			"(Get-CimInstance Win32_ComputerSystemProduct).UUID").Output()
-		mid = out
-	} else {
-		mid, _ = os.ReadFile("/etc/machine-id")
+	machineID, err := getMachineID()
+	if err != nil {
+		return "", err
 	}
-	h := sha256.Sum256([]byte(hostname + string(mid)))
-	return "sha256:" + hex.EncodeToString(h[:])
+	h := sha256.Sum256([]byte(hostname + machineID))
+	return "sha256:" + hex.EncodeToString(h[:]), nil
 }
 
 func generatePassword() string {

@@ -204,6 +204,9 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request) {
+	// v1.5.20 H5: 日志下载审计追踪
+	s.logMgr.Log("system", "日志已下载",
+		fmt.Sprintf("ip=%s", clientIP(r)), "info")
 	archivePath, err := s.logMgr.ArchiveLogs()
 	if err != nil {
 		// fallback: serve the main events.log directly
@@ -323,6 +326,9 @@ func (s *Server) handleSetAgentVersion(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "保存版本失败")
 		return
 	}
+	// v1.5.20 H4: 强制版本设置完整审计日志
+	s.logMgr.Log("upgrade", "强制版本已设置",
+		fmt.Sprintf("ver=%s ip=%s", req.LatestVersion, clientIP(r)), "success")
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleListAgentBinaries(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +359,7 @@ func (s *Server) handleUploadAgentBinary(w http.ResponseWriter, r *http.Request)
 				continue
 			}
 			s.store.SaveAgentBinary(h.Filename, data)
+			s.logMgr.Log("agent", "已上传", fmt.Sprintf("%s (%d bytes)", h.Filename, len(data)), "success") // v1.5.20 M3
 		}
 	}
 	// Rebuild manifest after successful uploads
@@ -510,6 +517,9 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request) {
 	ver := strings.TrimSpace(r.URL.Query().Get("ver"))
 	osName := strings.TrimSpace(r.URL.Query().Get("os"))
+	// v1.5.20 M4: 安装包下载审计日志
+	s.logMgr.Log("agent", "安装包已下载",
+		fmt.Sprintf("ver=%s os=%s ip=%s", ver, osName, clientIP(r)), "info")
 	if ver == "" || osName == "" {
 		jsonErr(w, http.StatusBadRequest, "ver 和 os 参数必填")
 		return
@@ -560,8 +570,14 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 	readmeContent := strings.ReplaceAll(readmeTemplate, "__VERSION__", ver)
 	readmeContent = strings.ReplaceAll(readmeContent, "\n", "\r\n")
 
-	// 流式打包 ZIP — 大文件通过 io.Copy 直接写入，不缓冲到内存
+	// M3: pre-calculate total size for Content-Length (client download progress)
+	agentInfo, _ := os.Stat(agentPath)
+	instInfo, _ := os.Stat(instPath)
+	const zipOverheadPerFile = 76
+	totalUncompressed := agentInfo.Size() + instInfo.Size() + int64(len(batContent)+len(readmeContent))
+	totalSize := totalUncompressed + zipOverheadPerFile*4 + 22 // 4 files + EOCD
 	zipName := "ddns-manager-install-v" + ver + "-" + osName + ".zip"
+	w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", zipName))
 	w.Header().Set("Content-Type", "application/zip")
 

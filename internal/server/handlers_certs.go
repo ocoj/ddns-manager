@@ -184,10 +184,12 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 	keyPEM, hasKey := findPrivateKeyFile(files)
 	if hasCert && hasKey {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
-		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
+		pfxPassword := r.FormValue("pfx_password")
+	if pfxPassword == "" { pfxPassword = "ddns" }
+	if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
 			files["cert.pfx"] = pfxData
 		}
-		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
 			files["cert-modern.pfx"] = modernData
 		}
 	}
@@ -221,6 +223,9 @@ func (s *Server) handleDownloadCert(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "未找到")
 		return
 	}
+	// v1.5.20 H5: 证书下载审计追踪（含私钥，需记录）
+	s.logMgr.Log("cert", "已下载",
+		fmt.Sprintf("name=%s ip=%s", name, clientIP(r)), "info")
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", name))
 	zw := zip.NewWriter(w)
@@ -517,10 +522,12 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if certPEM != nil && keyPEM != nil {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
-		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns"); pfxErr == nil {
+		pfxPassword := r.FormValue("pfx_password")
+	if pfxPassword == "" { pfxPassword = "ddns" }
+	if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
 			bundle.Files["cert.pfx"] = pfxData
 		}
-		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
 			bundle.Files["cert-modern.pfx"] = modernData
 		}
 	}
@@ -646,11 +653,16 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 // Returns the file content and true if found. Used for PFX auto-generation from uploaded PEM files.
 func findPEMFile(files map[string][]byte, exts ...string) ([]byte, bool) {
 	for name, data := range files {
+		if strings.Contains(strings.ToLower(name), "fullchain") {
+			for _, ext := range exts {
+				if strings.HasSuffix(strings.ToLower(name), ext) { return data, true }
+			}
+		}
+	}
+	for name, data := range files {
 		lower := strings.ToLower(name)
 		for _, ext := range exts {
-			if strings.HasSuffix(lower, ext) {
-				return data, true
-			}
+			if strings.HasSuffix(lower, ext) { return data, true }
 		}
 	}
 	return nil, false
@@ -669,3 +681,51 @@ func findPrivateKeyFile(files map[string][]byte) ([]byte, bool) {
 }
 
 // ── admin: logs ──
+
+func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	var req struct{ PFXPassword string `json:"pfx_password"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "格式错误")
+		return
+	}
+	if req.PFXPassword == "" { req.PFXPassword = "ddns" }
+
+	bundle, err := s.store.LoadCertBundle(name)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "证书未找到")
+		return
+	}
+	bundle.PFXPassword = req.PFXPassword
+	if err := s.store.SaveCertBundle(bundle); err != nil {
+		jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 重新生成 PFX
+	var certPEM, keyPEM []byte
+	for fname, content := range bundle.Files {
+		lower := strings.ToLower(fname)
+		if strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt") {
+			if certPEM == nil || strings.Contains(lower, "fullchain") {
+				certPEM = content
+			}
+		}
+		if strings.HasSuffix(lower, ".key") || strings.Contains(string(content), "PRIVATE KEY") {
+			if keyPEM == nil { keyPEM = content }
+		}
+	}
+	if certPEM != nil && keyPEM != nil {
+		if pfxData, err := mycrypto.GeneratePFX(certPEM, keyPEM, req.PFXPassword); err == nil {
+			bundle.Files["cert.pfx"] = pfxData
+		}
+		if modernData, err := mycrypto.GeneratePFXModern(certPEM, keyPEM, req.PFXPassword); err == nil {
+			bundle.Files["cert-modern.pfx"] = modernData
+		}
+		bundle.Hash = computeBundleHash(bundle.Files)
+		s.store.SaveCertBundle(bundle)
+	}
+
+	s.logMgr.Log("cert", "PFX密码已更新", name, "success")
+	jsonOK(w, map[string]string{"status": "ok"})
+}

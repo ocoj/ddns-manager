@@ -16,12 +16,14 @@ type HeartbeatReq struct {
 	Fingerprint string        `json:"fingerprint"`
 	Status      NodeStatus    `json:"status"`
 	ConfigHash  string        `json:"config_hash,omitempty"`
-	Logs        []string      `json:"logs,omitempty"`
+	Logs        []string      `json:"logs,omitempty"`           // DNS 更新日志
+	AgentLogs   []string      `json:"agent_logs,omitempty"`     // Agent 操作日志（升级/证书/配置/心跳）
 	Hardware    *HardwareInfo `json:"hardware,omitempty"`
 }
 
 type NodeStatus struct {
 	AgentVersion string            `json:"agent_version"`
+	CertPath     string            `json:"cert_path,omitempty"`     // 客户端实际证书目录
 	CertHashes   map[string]string `json:"cert_hashes,omitempty"`
 	IPv4         string            `json:"ipv4"`
 	IPv6         string            `json:"ipv6"`
@@ -69,8 +71,9 @@ type DNSKeyRecord struct {
 }
 
 type CertBinding struct {
-	BundleName string `json:"bundle_name"`
-	DeployPath string `json:"deploy_path"`
+	BundleName     string   `json:"bundle_name"`
+	DeployPath     string   `json:"deploy_path"`
+	ReloadServices []string `json:"reload_services,omitempty"` // 证书部署后需重载的服务 (systemd/windows service names)
 }
 
 type CertUpdate struct {
@@ -79,6 +82,7 @@ type CertUpdate struct {
 	Files               map[string]string `json:"files"`
 	TargetPath          string            `json:"target_path"`
 	ReloadServices      []string          `json:"reload_services,omitempty"`
+	PFXPassword         string            `json:"pfx_password,omitempty"`     // PFX 证书密码（用户自设，非硬编码）
 }
 
 type AgentUpdate struct {
@@ -150,6 +154,7 @@ type AgentConfig struct {
 	Fingerprint     string             `json:"fingerprint" yaml:"fingerprint"`
 	Password        string             `json:"password" yaml:"password"`
 	CertPath        string             `json:"cert_path" yaml:"cert_path"`
+	PFXPassword     string             `json:"pfx_password" yaml:"pfx_password"` // 默认 PFX 密码（可被证书级覆盖）
 	VerifySSL       bool               `json:"verify_ssl" yaml:"verify_ssl"`
 	IISCertBindings []CertToIISBinding `json:"iis_cert_bindings,omitempty" yaml:"iis_cert_bindings,omitempty"`
 }

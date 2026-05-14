@@ -242,6 +242,14 @@ func (lb *LogBuffer) Write(msg string) {
 	lb.pos++
 }
 
+// Clear empties the log buffer (L2: prevent stale log accumulation).
+func (lb *LogBuffer) Clear() {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	lb.buf = make([]string, lb.size)
+	lb.pos = 0
+}
+
 func (lb *LogBuffer) Recent(n int) []string {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()

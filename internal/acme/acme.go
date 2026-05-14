@@ -204,7 +204,11 @@ func (m *Manager) GetLog() string {
 }
 
 // LastError returns the last error encountered during renewal (if any).
-func (m *Manager) LastError() error { return m.lastRenewErr }
+func (m *Manager) LastError() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastRenewErr
+}
 
 // AccountInfo returns the ACME account metadata.
 func (m *Manager) AccountInfo() AccountInfo {
@@ -424,12 +428,19 @@ func (m *Manager) issueCert(ctx context.Context, domains []string, ct string) (s
 	firstDomain := domains[0]
 	certDir := filepath.Join(m.certsDir, firstDomain)
 	os.MkdirAll(certDir, 0o700)
-	fullchain, _ := os.Create(filepath.Join(certDir, "fullchain.pem"))
+	// v1.5.20 M5: 检查文件创建错误
+	fullchain, err := os.Create(filepath.Join(certDir, "fullchain.pem"))
+	if err != nil {
+		return "", fmt.Errorf("create fullchain.pem: %w", err)
+	}
 	for _, der := range derChain {
 		pem.Encode(fullchain, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 	}
 	fullchain.Close()
-	keyFile, _ := os.Create(filepath.Join(certDir, "privkey.pem"))
+	keyFile, err := os.Create(filepath.Join(certDir, "privkey.pem"))
+	if err != nil {
+		return "", fmt.Errorf("create privkey.pem: %w", err)
+	}
 	switch k := certKey.(type) {
 	case *ecdsa.PrivateKey:
 		b, _ := x509.MarshalECPrivateKey(k)
@@ -478,18 +489,26 @@ func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 		if len(domains) == 0 { domains = []string{cert.Subject.CommonName} }
 		log.Printf("[acme] 正在续期: %s (到期日 %s)", strings.Join(domains, ","), cert.NotAfter.Format("2006-01-02"))
 		if acmeShPath != "" {
-			cmd := exec.CommandContext(ctx, acmeShPath, "--renew", "-d", domains[0])
+			// C2: 传递全部域名到 acme.sh --renew，确保多域名 SAN 证书所有域名续签
+			args := []string{"--renew"}
+			for _, d := range domains {
+				args = append(args, "-d", d)
+			}
+			cmd := exec.CommandContext(ctx, acmeShPath, args...)
 			cmd.Dir = certDir
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				m.lastRenewErr = fmt.Errorf("renew %s: %w\n%s", domains[0], err, out)
-				log.Printf("[acme] 续期失败 %s: %v\n%s", domains[0], err, out)
+				// C4: 锁保护 lastRenewErr 写入（与 LastError() 串行化）
+				m.mu.Lock()
+				m.lastRenewErr = fmt.Errorf("renew %s: %w\n%s", strings.Join(domains, ","), err, out)
+				m.mu.Unlock()
+				log.Printf("[acme] 续期失败 %s: %v\n%s", strings.Join(domains, ","), err, out)
 				continue
 			}
 			log.Printf("[acme] 续期输出:\n%s", string(out))
 		} else {
 			// acme.sh not available → skip (pure-Go HTTP-01 path not suitable for auto-renew)
-			log.Printf("[acme] acme.sh 不可用，跳过 %s 续期", domains[0])
+			log.Printf("[acme] acme.sh 不可用，跳过 %s 续期", strings.Join(domains, ","))
 			continue
 		}
 		// C1: 续期成功后更新 cert bundle hash + meta.json，确保下次心跳下发新证书
@@ -498,12 +517,19 @@ func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 		}
 		renewed = append(renewed, e.Name())
 	}
+	// M2: 续签汇总日志，便于运维判断续签是否正常工作
+	if len(renewed) > 0 {
+		log.Printf("[acme] 续签完成: 已续签 %d 个证书", len(renewed))
+	}
 	return renewed
 }
 
 // RenewByName forces renewal of a specific certificate (ignoring expiry threshold).
 func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed bool) {
+	// v1.5.20 M1: lastRenewErr 写入加锁，与 LastError() 读串行化
+	m.mu.Lock()
 	m.lastRenewErr = nil
+	m.mu.Unlock()
 	certDir := filepath.Join(m.certsDir, certName)
 	data, err := os.ReadFile(filepath.Join(certDir, "meta.json"))
 	if err != nil {
@@ -534,17 +560,28 @@ func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed boo
 	acmeShPath := m.acmeShPath
 	m.mu.Unlock()
 	if acmeShPath != "" {
-		cmd := exec.CommandContext(ctx, acmeShPath, "--renew", "-d", domains[0], "--force")
+		// C3: 传递全部域名到 acme.sh --renew --force，确保多域名 SAN 所有域名续签
+		args := []string{"--renew"}
+		for _, d := range domains {
+			args = append(args, "-d", d)
+		}
+		args = append(args, "--force")
+		cmd := exec.CommandContext(ctx, acmeShPath, args...)
 		cmd.Dir = certDir
 		out, err := cmd.CombinedOutput()
 		log.Printf("[acme] 续期输出:\n%s", string(out))
-		m.AppendLog(fmt.Sprintf("acme.sh --renew -d %s --force\n%s\n", domains[0], string(out)))
+		m.AppendLog(fmt.Sprintf("acme.sh %s\n%s\n", strings.Join(args, " "), string(out)))
 		if err != nil {
+			// C4: 锁保护 lastRenewErr 写入
+			m.mu.Lock()
 			m.lastRenewErr = fmt.Errorf("renew: %w\n%s", err, string(out))
+			m.mu.Unlock()
 			return false
 		}
 	} else {
+		m.mu.Lock()
 		m.lastRenewErr = fmt.Errorf("acme.sh not available")
+		m.mu.Unlock()
 		return false
 	}
 	// C1/H3: 续期成功后更新 cert bundle hash + meta.json，确保下次心跳下发新证书

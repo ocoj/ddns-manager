@@ -197,6 +197,8 @@ func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, err
 	}
+	// 确保 Name 总是从目录名获取（meta.json 可能缺失 name 字段）
+	b.Name = name
 	b.Files = map[string][]byte{}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

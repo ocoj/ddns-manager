@@ -314,8 +314,11 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.ConfigYAML = string(data)
-	// M6: nil=保留, empty slice=清空
-	if req.CertBindings != nil {
+	// M6: nil=保留, empty slice=清空: 同步 ConfigYAML 中的 cert_bindings
+	// 防止 ConfigYAML 已为 [] 但 CertBindings 残留旧值导致持续推送
+	if req.CertBindings != nil && len(req.CertBindings) == 0 {
+		rec.CertBindings = nil  // 显式清空
+	} else if req.CertBindings != nil {
 		rec.CertBindings = req.CertBindings
 	}
 	rec.ConfigHash = ""

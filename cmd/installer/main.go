@@ -307,7 +307,8 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 
 	if nodeName == "" {
 		fmt.Print("  节点名称 (如 win-pc): ")
-		nodeName, err := readLine(reader)
+		var err error
+		nodeName, err = readLine(reader)  // v1.5.29: 修复变量遮蔽 — 用 = 而非 :=
 		if err != nil {
 			fmt.Println("\n  [FAIL] 取消安装")
 			os.Exit(1)

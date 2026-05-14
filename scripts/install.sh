@@ -29,11 +29,11 @@ detect_version() {
         ver=$(curl -fsSL --connect-timeout 10 "$MANAGER/api/ping" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)
     fi
     if [ -z "$ver" ]; then
-        echo "[!] 无法从管理端获取版本号 ($MANAGER/api/ping)"
-        echo "    请手动指定: VERSION=x.y.z bash -c \"\$(curl -fsSL $MANAGER/bin/install.sh)\""
+        echo "[!] 无法从管理端获取版本号 ($MANAGER/api/ping)" >&2
+        echo "    请手动指定: VERSION=x.y.z bash -c \"\$(curl -fsSL $MANAGER/bin/install.sh)\"" >&2
         exit 1
     fi
-    echo "  管理端版本: v$ver"
+    echo "  管理端版本: v$ver" >&2
     echo "$ver"
 }
 

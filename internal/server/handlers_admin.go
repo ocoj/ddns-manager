@@ -669,14 +669,8 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 	readmeContent := strings.ReplaceAll(readmeTemplate, "__VERSION__", ver)
 	readmeContent = strings.ReplaceAll(readmeContent, "\n", "\r\n")
 
-	// M3: pre-calculate total size for Content-Length (client download progress)
-	agentInfo, _ := os.Stat(agentPath)
-	instInfo, _ := os.Stat(instPath)
-	const zipOverheadPerFile = 76
-	totalUncompressed := agentInfo.Size() + instInfo.Size() + int64(len(batContent)+len(readmeContent))
-	totalSize := totalUncompressed + zipOverheadPerFile*4 + 22 // 4 files + EOCD
+	// M3: 移除预估算 Content-Length，实际压缩后大小与未压缩差异大导致传输截断
 	zipName := "ddns-manager-install-v" + ver + "-" + osName + ".zip"
-	w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", zipName))
 	w.Header().Set("Content-Type", "application/zip")
 

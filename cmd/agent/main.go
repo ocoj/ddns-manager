@@ -699,8 +699,8 @@ func validateAgentBinary(path string) error {
 func upgradeLogger(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
-	// Also write to temp file for post-upgrade diagnostics
-	f, err := os.OpenFile(filepath.Join(os.TempDir(), "ddns_upgrade_agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Also write to install dir for post-upgrade diagnostics
+	f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade_agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
 		f.Close()

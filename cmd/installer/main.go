@@ -640,6 +640,13 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 			fmt.Printf("  [!] 服务启动失败: %v: %s\n  请检查安装目录权限\n", err, string(out))
 		} else {
 			fmt.Println("  [OK] Windows 服务已安装并启动")
+			// v1.0.0: 添加安装目录到 Windows Defender 排除，防止升级时杀软拦截二进制替换
+			if out, err := exec.Command("powershell", "-Command",
+				fmt.Sprintf("Add-MpPreference -ExclusionPath '%s' -Force", agentBaseDir)).CombinedOutput(); err != nil {
+				fmt.Printf("  [!] Defender 排除添加失败(非关键): %s\n", strings.TrimSpace(string(out)))
+			} else {
+				fmt.Printf("  [OK] 已添加 Defender 排除: %s\n", agentBaseDir)
+			}
 		}
 	} else {
 		svc := fmt.Sprintf(`[Unit]

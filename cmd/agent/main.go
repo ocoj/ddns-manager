@@ -1212,6 +1212,16 @@ func main() {
 	if *installDir != "" {
 		setBaseDir(*installDir)
 	}
+	// v1.5.29: 自动检测旧安装 — 新默认路径无 agent.yaml 时回退到可执行文件目录
+	if _, err := os.Stat(agentConfigPath); os.IsNotExist(err) {
+		if exe, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exe)
+			if _, err := os.Stat(filepath.Join(exeDir, "agent.yaml")); err == nil {
+				log.Printf("[agent] 检测到旧安装目录: %s", exeDir)
+				setBaseDir(exeDir)
+			}
+		}
+	}
 	initAgentLog()
 
 	if *showVersion {

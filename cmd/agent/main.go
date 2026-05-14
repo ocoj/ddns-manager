@@ -52,6 +52,17 @@ func agentLog(format string, args ...interface{}) {
 	agentLogBuf.Write(msg)
 }
 
+// initAgentLog 将 Agent 日志同时输出到安装目录下的 agent.log 和 stderr
+func initAgentLog() {
+	os.MkdirAll(agentBaseDir, 0700)
+	f, err := os.OpenFile(filepath.Join(agentBaseDir, "agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return // 写不了安装目录就算了，至少 stderr 还能用
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.Printf("[agent] 日志文件: %s", filepath.Join(agentBaseDir, "agent.log"))
+}
+
 // base paths — defaults, overridable via -dir flag
 var (
 	agentBaseDir    string
@@ -1201,6 +1212,7 @@ func main() {
 	if *installDir != "" {
 		setBaseDir(*installDir)
 	}
+	initAgentLog()
 
 	if *showVersion {
 		fmt.Printf("node-agent v%s\nPublisher: Lanxun CO.,Ltd.\n", version)

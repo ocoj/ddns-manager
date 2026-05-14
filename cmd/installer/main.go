@@ -49,7 +49,8 @@ func init() {
 }
 
 // ========== main ==========
-
+// ⚠️ 安装接口契约: 本文档定义的所有行为受 docs/安装接口规范.md 约束
+//    安装器 v1.0.0 冻结 — 修改接口逻辑需升级安装器主版本号
 func main() {
 	managerURL := flag.String("manager-url", "", "manager server URL")
 	nodeName := flag.String("name", "", "node name")

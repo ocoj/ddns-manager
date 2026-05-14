@@ -193,7 +193,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s err=%v", binding.BundleName, err), "warning")
 			continue
 		}
-		if h, ok := req.Status.CertHashes[binding.DeployPath]; ok && h == bundle.Hash {
+		// C2: hash key 对齐 Agent 侧 collectCertHashes 的键名
+		hashKey := binding.DeployPath
+		if hashKey == "" {
+			hashKey = req.Status.CertPath
+		}
+		if h, ok := req.Status.CertHashes[hashKey]; ok && h == bundle.Hash {
 			continue
 		}
 		encFiles := map[string]string{}

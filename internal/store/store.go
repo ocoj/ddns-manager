@@ -239,7 +239,7 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	extra := map[string]interface{}{}
 	if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
 		if ex := map[string]interface{}{}; json.Unmarshal(data, &ex) == nil {
-			structKeys := map[string]bool{"name":true,"files":true,"target_path":true,"expires_at":true,"domains":true,"hash":true}
+			structKeys := map[string]bool{"name":true,"files":true,"target_path":true,"expires_at":true,"domains":true,"hash":true,"pfx_password":true}
 			for k, v := range ex {
 				if !structKeys[k] {
 					extra[k] = v

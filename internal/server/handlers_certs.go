@@ -108,7 +108,7 @@ func (s *Server) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(files)
 	// parse cert details
-	detail := map[string]interface{}{"name": name, "files": files, "hash": b.Hash}
+	detail := map[string]interface{}{"name": name, "files": files, "hash": b.Hash, "pfx_password": b.PFXPassword}
 	var certPEM []byte
 	for fn, content := range b.Files {
 		if strings.HasSuffix(strings.ToLower(fn), ".pem") || strings.HasSuffix(strings.ToLower(fn), ".crt") {
@@ -698,6 +698,7 @@ func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request
 	}
 	bundle.PFXPassword = req.PFXPassword
 	if err := s.store.SaveCertBundle(bundle); err != nil {
+		s.logMgr.Log("cert", "PFX密码保存失败", "name="+name+" err="+err.Error(), "error")
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

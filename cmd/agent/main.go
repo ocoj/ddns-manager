@@ -769,6 +769,7 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 
 	// replaceRunningBinary handles platform-specific replacement.
 	// This line should never be reached on Windows (CreateProcess detaches).
+	agentLog("自升级完成: v%s → v%s", version, update.Version)
 	log.Printf("自升级: 即将退出")
 	os.Exit(0)
 	return nil
@@ -783,7 +784,7 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 			`$cert.Import($pfx, '%s', 'DefaultKeySet');`+
 			`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');`+
 			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`,
-		pfxPassword, escapedPath)
+		escapedPath, pfxPassword)  // v1.5.20 C1 FIX: 参数顺序: path 在前, password 在后
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
 		log.Printf("PFX导入到证书存储失败: %v: %s", err, string(out))

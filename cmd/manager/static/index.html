@@ -20,7 +20,7 @@
 }
 html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--c-text);background:var(--c-bg)}
 #app{display:flex;height:100vh;overflow:hidden}
-#app.login-page #sidebar,#app.login-page #main-area{display:none}
+#app.login-page{display:none}
 #sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--c-primary-bg);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0}
 #main-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
 #topbar{height:var(--topbar-h);min-height:var(--topbar-h);background:var(--c-card);border-bottom:1px solid var(--c-border);display:flex;align-items:center;padding:0 20px;justify-content:space-between}
@@ -44,7 +44,7 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .side-nav .item svg{width:25px;height:25px;flex-shrink:0}
 .side-footer{padding:12px 16px;font-size:11px;color:var(--c-text2);border-top:1px solid rgba(0,0,0,.06)}
 
-.login-wrap{height:100vh;display:flex!important;align-items:center;justify-content:center;background:linear-gradient(135deg,#eef2ff,#c7d2fe)}
+.login-wrap{height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#eef2ff,#c7d2fe)}
 .login-card{background:var(--c-card);border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);padding:40px 36px;width:380px;max-width:90vw;text-align:center}
 .login-card svg{width:48px;height:48px;margin-bottom:8px}
 .login-card h1{font-size:20px;color:var(--c-primary);margin-bottom:4px}
@@ -52,9 +52,9 @@ html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',
 .login-card .field{margin-bottom:16px;text-align:left}
 .login-card label{display:block;font-size:12px;color:var(--c-text2);margin-bottom:4px}
 .login-card input{width:100%;height:38px;border:1px solid var(--c-input-border);border-radius:var(--radius);padding:0 12px;font-size:14px;outline:none;transition:border .2s}
-.login-card input:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)}
-.login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;display:none}
-.login-card .err.show{display:block}
+.login-card input:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)!important;outline:1px solid var(--c-primary)!important}
+.login-card input:-webkit-autofill,.login-card input:-webkit-autofill:focus{border:1px solid var(--c-input-border)!important;box-shadow:0 0 0 2px rgba(22,119,255,.1)!important;-webkit-box-shadow:0 0 0 30px #fff inset!important}
+.login-card .err{color:var(--c-red);font-size:12px;margin-top:8px;min-height:18px}
 
 .card{background:var(--c-card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 24px;margin-bottom:16px}
 .card h3{font-size:14px;font-weight:600;color:var(--c-text);margin-bottom:12px}
@@ -384,11 +384,12 @@ th{text-align:left}
     <img src="/logo.png" width="48" height="48" alt="logo" style="display:block;margin:0 auto 8px">
     <h1>DDNS-Manager</h1>
     <p class="sub">分布式 DDNS 节点管理平台</p>
-    <form id="login-form" onsubmit="doLogin();return false">
-    <div class="field"><label>管理员密码</label><input type="password" id="login-pwd" placeholder="输入密码" autofocus></div>
-    <div class="err" id="login-err">密码错误</div>
+    <form id="login-form">
+    <div class="field"><label>管理员密码</label><input type="password" id="login-pwd" placeholder="输入密码" autofocus autocomplete="new-password"></div>
+    <div class="err" id="login-err"></div>
     <button class="btn-login" id="login-btn" type="submit">登 录</button>
     </form>
+    <iframe id="login-frame" name="login-frame" style="display:none"></iframe>
     <p style="margin-top:12px;font-size:11px;color:var(--c-text2)">默认密码: Admin12345 · 首次登录请修改</p>
   </div>
 </div>
@@ -543,41 +544,45 @@ function normalizeEvents(events) {
 }
 
 // ========== LOGIN ==========
-async function doLogin(e) {
-  if (e && e.preventDefault) e.preventDefault();
+// v1.5.20: 零依赖登录 — 即使JS报错也能工作
+function doLogin(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
   var btn = document.getElementById('login-btn');
   var pwEl = document.getElementById('login-pwd');
-  if (!pwEl) { console.error('login-pwd not found'); return; }
+  var errEl = document.getElementById('login-err');
+  if (!btn || !pwEl) return;
   var pwd = pwEl.value;
-  if (!pwd) return;
+  if (!pwd) { errEl.textContent = '请输入密码'; return; }
   btn.disabled = true;
   btn.textContent = '登录中...';
-  var errEl = document.getElementById('login-err');
-  errEl.classList.remove('show');
+  errEl.textContent = '';
   try {
-    var r = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({password: pwd})
-    });
-    var data = await r.json();
-    if (r.ok && data && data.token) {
-      saveToken(data.token);
-      errEl.classList.remove('show');
-      initApp();
-      if (data.password_changed === false) {
-        toast('首次登录，建议修改默认密码', 'warning');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/auth/login', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== 4) return;
+      btn.disabled = false;
+      btn.textContent = '登 录';
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          if (data && data.token) {
+            saveToken(data.token);
+            initApp();
+            return;
+          }
+        } catch(e) {}
       }
-    } else {
-      errEl.textContent = (data && data.error) || '密码错误';
-      errEl.classList.add('show');
-    }
-  } catch (e) {
-    errEl.textContent = '网络错误: ' + (e.message || '无法连接服务器');
-    errEl.classList.add('show');
+      errEl.textContent = '密码错误或网络异常';
+    };
+    xhr.send(JSON.stringify({password: pwd}));
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '登 录';
+    errEl.textContent = '请求失败: ' + (e.message || '');
   }
-  btn.disabled = false;
-  btn.textContent = '登 录';
+  return false;
 }
 
 // ========== INIT ==========
@@ -1730,7 +1735,15 @@ async function downloadCert(name) {
   } catch(e) { toast('下载失败', 'error'); }
 }
 async function downloadPFX(name) {
-  var pw = prompt('请输入 PFX 密码 (\u22656 字符):', 'ddns');
+  // 自动获取已保存的 PFX 密码作为默认值
+  var defaultPw = 'ddns';
+  try {
+    var detail = await apiJSON('/api/admin/certs/' + encodeURIComponent(name));
+    if (detail.ok && detail.data && detail.data.pfx_password) {
+      defaultPw = detail.data.pfx_password;
+    }
+  } catch(e) { /* fallback to ddns */ }
+  var pw = prompt('请输入 PFX 密码 (\u22656 字符):', defaultPw);
   if (pw === null) return;
   if (pw.length < 6) { toast('密码至少 6 个字符', 'error'); return; }
   try {
@@ -1771,7 +1784,7 @@ async function showCertDetail(name) {
   if (isACME && d.email) rows.push(['ACME 账号', he(d.email)]);
   if (d.hash) rows.push(['Hash', '<span class="mono">' + he(d.hash.substring(0,16)) + '...</span>']);
   var h = '<table style="font-size:13px"><tbody>';
-  h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap">PFX 密码</td><td style="padding:6px 0"><input id="cert-pfxpw" placeholder="ddns" style="width:140px;height:26px;font-size:12px"> <button class="btn btn-sm" onclick="saveCertPFXPassword(''+jsStr(name)+'')">保存</button></td></tr>';
+  h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap">PFX 密码</td><td style="padding:6px 0"><input id="cert-pfxpw" value="'+he(d.pfx_password||'')+'" placeholder="ddns" style="width:140px;height:26px;font-size:12px;border:1px solid var(--c-input-border);border-radius:4px;outline:none"> <button class="btn btn-sm" onclick="saveCertPFXPassword(&#39;'+jsStr(name)+'&#39;)">保存</button></td></tr>';
   rows.forEach(function(r) {
     h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap;vertical-align:top">' + r[0] + '</td><td style="padding:6px 0">' + r[1] + '</td></tr>';
   });
@@ -1780,9 +1793,16 @@ async function showCertDetail(name) {
   openModal('modal-cert-detail');
 }
 async function saveCertPFXPassword(name) {
-  var pw = document.getElementById('cert-pfxpw').value.trim() || 'ddns';
-  var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/pfx-password', 'POST', {pfx_password: pw});
-  if (r.ok) { toast('PFX 密码已保存'); }
+  var pwEl = document.getElementById('cert-pfxpw');
+  if (!pwEl) { toast('输入框未找到', 'error'); return; }
+  var pw = pwEl.value.trim() || 'ddns';
+  try {
+    var r = await apiJSON('/api/admin/certs/' + encodeURIComponent(name) + '/pfx-password', {method: 'POST', body: {pfx_password: pw}});
+    if (r.ok) { toast('PFX 密码已保存'); }
+    else { toast('保存失败: ' + ((r.data && r.data.error) || '未知错误'), 'error'); }
+  } catch(e) {
+    toast('网络错误: ' + (e.message || '请求失败'), 'error');
+  }
 }
 async function uploadCert() {
   var name = document.getElementById('cupload-name').value.trim();
@@ -2515,17 +2535,22 @@ document.addEventListener('click', function() {
   document.querySelectorAll('.more-menu.show').forEach(function(m) { m.classList.remove('show'); });
 });
 
-// Ensure login button works (attach listener as fallback for inline onclick)
+// 登录按钮三重保险: onclick + addEventListener on both button and form
 (function() {
-  var btn = document.getElementById('login-btn');
   var form = document.getElementById('login-form');
-  if (btn && !btn._bound) {
-    btn._bound = true;
-    btn.addEventListener('click', function(e) { e.preventDefault(); doLogin(e); });
+  if (form) {
+    form.addEventListener('submit', doLogin);
   }
-  if (form && !form._bound) {
-    form._bound = true;
-    form.addEventListener('submit', function(e) { e.preventDefault(); doLogin(e); });
+  var btn = document.getElementById('login-btn');
+  if (btn) {
+    btn.addEventListener('click', doLogin);
+  }
+  // 输入框回车也触发
+  var pwInput = document.getElementById('login-pwd');
+  if (pwInput) {
+    pwInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doLogin(e);
+    });
   }
 })();
 </script>

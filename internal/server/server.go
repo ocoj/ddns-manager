@@ -316,6 +316,7 @@ func (s *Server) Router() *mux.Router {
 	a.HandleFunc("/certs/{name}", s.handleDeleteCert).Methods("DELETE")
 	a.HandleFunc("/certs/{name}/download", s.handleDownloadCert).Methods("GET")
 	a.HandleFunc("/certs/{name}/pfx", s.handleDownloadPFX).Methods("GET")
+	a.HandleFunc("/certs/{name}/pfx-password", s.handleSetCertPFXPassword).Methods("POST")
 	a.HandleFunc("/certs/{name}/renew", s.handleRenewCert).Methods("POST")
 	// acme (multi-account)
 	a.HandleFunc("/acme/all", s.handleACMEList).Methods("GET")

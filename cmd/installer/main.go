@@ -625,10 +625,25 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 			exec.Command("sc", "delete", "node-agent").Run()
 			time.Sleep(time.Second)
 		}
-		// 创建服务
-		out, err := exec.Command("sc", "create", "node-agent",
-			"binPath=", binPath, "start=", "auto",
-			"DisplayName=", "ddns-manager Node Agent").CombinedOutput()
+		// 创建服务 (v1.0.0: 重试处理 1072 服务标记删除中)
+		var out []byte
+		var err error
+		for i := 0; i < 5; i++ {
+			if i > 0 {
+				time.Sleep(2 * time.Second)
+				fmt.Printf("  重试创建服务 (%d/5)...\n", i+1)
+			}
+			out, err = exec.Command("sc", "create", "node-agent",
+				"binPath=", binPath, "start=", "auto",
+				"DisplayName=", "ddns-manager Node Agent").CombinedOutput()
+			if err == nil {
+				break
+			}
+			// 1072 = 服务已标记为删除, SCM 尚未完成清理, 等待后重试
+			if !strings.Contains(string(out), "1072") {
+				break
+			}
+		}
 		if err != nil {
 			log.Fatalf("创建 Windows 服务失败: %v: %s", err, string(out))
 		}

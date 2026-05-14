@@ -89,6 +89,7 @@ if [ -f "$YAML" ]; then
     echo "done v${VER}"
 
 # ── 新装 (需 sudo) ──
+# v1.0.0: 安装器独立版本，始终使用符号链接名（指向最新版安装器）
 else
     if [ "$(id -u)" -ne 0 ]; then
         echo "新装需要 root 权限, 请用 sudo 运行"
@@ -96,19 +97,13 @@ else
         exit 1
     fi
 
-    BIN="ddns-installer-v${VER}-linux-${ARCH}"
+    BIN="ddns-installer-linux-${ARCH}"
     TMP="/tmp/ddns-installer-$$"
     rm -f /tmp/ddns-installer /tmp/ddns-installer-* 2>/dev/null || true
 
-    # 尝试版本化下载, 404 则回退到通用符号链接 (指向最新版)
-    # v1.5.29 C3: 回退下载增加错误处理
     if ! download_and_verify "$MANAGER/bin/$BIN" "$TMP"; then
-        echo "v${VER} 安装器不可用, 使用最新版符号链接"
-        BIN="ddns-installer-linux-${ARCH}"
-        if ! download_and_verify "$MANAGER/bin/$BIN" "$TMP"; then
-            echo "[!] 安装器下载失败，请检查管理端 /bin/ 目录"
-            exit 1
-        fi
+        echo "[!] 安装器下载失败，请检查管理端 /bin/ 目录"
+        exit 1
     fi
     chmod +x "$TMP"
     exec "$TMP" -manager-url "$MANAGER"

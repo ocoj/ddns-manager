@@ -388,21 +388,20 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 
 	// ================================================================
 	// Step 4/5: 安装 Agent 二进制 (本地优先 → 网络下载兜底)
+	// v1.0.0: 安装器版本独立于 Agent 版本，始终下载符号链接指向的最新版
 	// ================================================================
 	stepWait(4, 5, "安装 Agent")
-	agentName := "node-agent-v" + version + "-" + goos + "-" + goarch
-	agentBin := filepath.Join(agentBaseDir, agentName)
-	agentLink := filepath.Join(agentBaseDir, "node-agent")
+	// 使用符号链接名下载（服务器上指向最新版 agent），本地直接存为 node-agent
+	downloadName := "node-agent-" + goos + "-" + goarch  // 服务器符号链接名
+	agentBin := filepath.Join(agentBaseDir, "node-agent") // 直接存为 node-agent
 	if runtime.GOOS == "windows" {
+		downloadName += ".exe"
 		agentBin += ".exe"
-		agentLink += ".exe"
 	}
 
 	installed := false
 
 	// 策略1: 同目录本地文件 (zip 包场景，零网络依赖)
-	// ZIP 内 agent 是版本化文件名 node-agent-v{VERSION}-{os}-{arch}.exe
-	// 扫描同目录匹配即可，不要求固定名
 	if agentFile := findLocalAgent(exeDir()); agentFile != "" {
 		fmt.Printf("  从本地复制 %s ... ", filepath.Base(agentFile))
 		if err := copyFile(agentFile, agentBin); err != nil {
@@ -479,20 +478,9 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		}
 	}
 	os.Chmod(agentBin, 0755)
-	// 创建符号链接, systemd 引用 node-agent → 自动指向当前版本
-	os.Remove(agentLink)
-	if runtime.GOOS == "windows" {
-		// Windows 不支持符号链接给普通文件, 直接用版本化文件名
-		// node-agent.exe 作为服务入口, 用版本化二进制重命名
-		if err := copyFile(agentBin, agentLink); err != nil {
-			log.Fatalf("复制 agent 到 node-agent.exe 失败: %v", err)
-		}
-	} else {
-		if err := os.Symlink(agentName, agentLink); err != nil {
-			log.Fatalf("创建符号链接失败: %v", err)
-		}
-	}
-	fmt.Printf("  [OK] Agent 已安装 (%s)\n", agentName)
+	// v1.0.0: 安装器直接下载 node-agent 符号链接指向的最新版
+	// 保存为 node-agent，不再需要版本化文件名+符号链接的二次跳转
+	fmt.Printf("  [OK] Agent 已安装\n")
 
 	// ================================================================
 	// Step 5/5: 注册节点 & 安装服务
@@ -539,7 +527,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 
 	// 安装系统服务
 	if runtime.GOOS == "windows" {
-		binPath := fmt.Sprintf(`"%s" -daemon`, agentLink)
+		binPath := fmt.Sprintf(`"%s" -daemon`, agentBin)
 		if serviceExists("node-agent") {
 			exec.Command("sc", "stop", "node-agent").Run()
 			time.Sleep(time.Second)
@@ -570,7 +558,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=%s -heartbeat
-`, agentLink)
+`, agentBin)
 		timer := `[Unit]
 Description=ddns-manager Node Agent Timer
 

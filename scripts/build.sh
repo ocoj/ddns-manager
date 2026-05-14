@@ -33,6 +33,9 @@ fi
 # VER_NUM 去掉 v 前缀用于文件名 (v1.5.3 → 1.5.3)
 VER_NUM="${VERSION#v}"
 
+# v1.0.0: 安装器独立版本，与 Agent 版本解耦
+INSTALLER_VERSION="$(cat "$PROJECT_DIR/INSTALLER_VERSION" 2>/dev/null || echo "1.0.0")"
+
 # signing config (set via env or leave empty to skip)
 SIGNCERT_FILE="${SIGNCERT_FILE:-}"
 SIGNCERT_PASSWORD="${SIGNCERT_PASSWORD:-}"
@@ -40,6 +43,7 @@ TIMESTAMP_URL="${TIMESTAMP_URL:-http://timestamp.digicert.com}"
 SIGNTOOL="${SIGNTOOL:-signtool}"
 
 LDFLAGS="-s -w -X main.version=${VER_NUM}"
+INSTALLER_LDFLAGS="-s -w -X main.version=${INSTALLER_VERSION}"
 
 echo "============================================"
 echo " ddns-manager Build"
@@ -160,15 +164,15 @@ build_installer() {
         armv7|arm) goarch="arm"; goarm="7"; arch="arm" ;;
     esac
     echo ""
-    echo "-- Building Installer (linux/$arch) --"
+    echo "-- Building Installer v${INSTALLER_VERSION} (linux/$arch) --"
     cd "$PROJECT_DIR/cmd/installer"
     out="$BUILD_DIR/ddns-installer-linux-${arch}"
     if [ -n "$goarm" ]; then
-        GOOS=linux GOARCH="$goarch" GOARM="$goarm" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
+        GOOS=linux GOARCH="$goarch" GOARM="$goarm" CGO_ENABLED=0 go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
     else
-        GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
+        GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
     fi
-    ver_out="$BUILD_DIR/ddns-installer-v${VER_NUM}-linux-${arch}"
+    ver_out="$BUILD_DIR/ddns-installer-v${INSTALLER_VERSION}-linux-${arch}"
     cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
     chmod +x "$out" "$ver_out"
     echo "  OK $out"
@@ -178,11 +182,11 @@ build_installer() {
 build_installer_win() {
     local goarch="$1"
     echo ""
-    echo "-- Building Installer (windows/$goarch) --"
+    echo "-- Building Installer v${INSTALLER_VERSION} (windows/$goarch) --"
     cd "$PROJECT_DIR/cmd/installer"
     out="$BUILD_DIR/ddns-installer-windows-${goarch}.exe"
-    GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
-    ver_out="$BUILD_DIR/ddns-installer-v${VER_NUM}-windows-${goarch}.exe"
+    GOOS=windows GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
+    ver_out="$BUILD_DIR/ddns-installer-v${INSTALLER_VERSION}-windows-${goarch}.exe"
     cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
     echo "  OK $out"
     echo "  OK $ver_out (versioned)"

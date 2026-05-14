@@ -281,6 +281,8 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 
 	// 7. Self-upgrade (keep v1 logic)
 	if resp.AgentUpdate != nil {
+		// v1.5.20 Fix3: 升级前发送当前日志缓冲，升级后 os.Exit 会丢失
+		agentLog("收到升级推送: v%s → v%s", version, resp.AgentUpdate.Version)
 		if err := selfUpgrade(cfg, resp.AgentUpdate); err != nil {
 			log.Printf("自升级失败: %v", err)
 		}
@@ -534,6 +536,12 @@ func recycleIISAppPools() {
 		log.Printf("[cert] IIS 已重置 (iisreset)")
 	}
 }
+func fileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil { return -1 }
+	return fi.Size()
+}
+
 func fileSHA256(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -686,6 +694,18 @@ func validateAgentBinary(path string) error {
 	}
 	return nil
 }
+// upgradeLogger writes upgrade step logs to %TEMP%\ddns_upgrade_agent.log
+// so logs survive os.Exit(0) when replacing the running binary.
+func upgradeLogger(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	log.Print(msg)
+	// Also write to temp file for post-upgrade diagnostics
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "ddns_upgrade_agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
+		f.Close()
+	}
+}
 
 func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	exePath, _ := os.Executable()
@@ -703,49 +723,72 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		url = strings.TrimRight(cfg.ManagerURL, "/") + "/" + strings.TrimLeft(url, "/")
 	}
 
-	log.Printf("自升级: 正在下载 %s 从 %s", update.Version, url)
+	upgradeLogger("======== 自升级开始 ========")
+	upgradeLogger("版本=%s exe=%s url=%s", update.Version, exePath, url)
 	tmpFile := exePath + ".new"
 
 	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟。
 	// 每次迭代用独立闭包确保 defer 在迭代结束时立即执行（HTTP body / 文件句柄零泄漏）。
 	// BUGFIX(C1): HTTP 非 200 不应 return — return 杀死整个重试循环，3 次重试形同虚设。
 	// 改为 continue 继续下一轮，只在所有迭代耗尽后才返回最终错误。
+	// v1.5.20 Fix1: 使用普通循环替代闭包，手控资源释放，避免 defer 在重试间泄漏
 	var downloadErr error
+	var contentLen int64
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
-			log.Printf("自升级: 重试 %d/3 ...", attempt+1)
+			upgradeLogger("下载重试 %d/3", attempt+1)
 		}
-		downloadErr = func() error {
-			hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute)
-			resp, err := hc.Get(url)
-			if err != nil {
-				return fmt.Errorf("attempt %d: %w", attempt+1, err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != 200 {
-				return fmt.Errorf("attempt %d: HTTP %d", attempt+1, resp.StatusCode)
-			}
-			f2, err := os.Create(tmpFile)
-			if err != nil {
-				return fmt.Errorf("attempt %d: create tmp: %w", attempt+1, err)
-			}
-			defer f2.Close()
-			if _, err := io.Copy(f2, io.LimitReader(resp.Body, 100<<20)); err != nil {
-				return fmt.Errorf("attempt %d: write: %w", attempt+1, err)
-			}
-			return nil
-		}()
-		if downloadErr == nil {
-			break // 成功
+		// 每次重试前清理失败的临时文件
+		os.Remove(tmpFile)
+		hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute)
+		resp, err := hc.Get(url)
+		if err != nil {
+			downloadErr = fmt.Errorf("attempt %d: %w", attempt+1, err)
+			upgradeLogger("下载失败: %v", downloadErr)
+			continue
 		}
-		log.Printf("自升级: %v", downloadErr)
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			downloadErr = fmt.Errorf("attempt %d: HTTP %d", attempt+1, resp.StatusCode)
+			upgradeLogger("下载失败: %v", downloadErr)
+			continue
+		}
+		contentLen = resp.ContentLength
+		f2, err := os.Create(tmpFile)
+		if err != nil {
+			resp.Body.Close()
+			downloadErr = fmt.Errorf("attempt %d: create tmp: %w", attempt+1, err)
+			upgradeLogger("下载失败: %v", downloadErr)
+			continue
+		}
+		n, copyErr := io.Copy(f2, io.LimitReader(resp.Body, 100<<20))
+		f2.Close()
+		resp.Body.Close()
+		if copyErr != nil {
+			downloadErr = fmt.Errorf("attempt %d: write: %w", attempt+1, copyErr)
+			upgradeLogger("下载失败: %v", downloadErr)
+			continue
+		}
+		downloadErr = nil
+		upgradeLogger("下载成功 (%d 字节, Content-Length=%d)", n, contentLen)
+		break
+	}
+	// v1.5.20 Fix2: 验证下载大小 >= Content-Length * 80%，防止截断
+	if downloadErr == nil && contentLen > 0 {
+		fs := fileSize(tmpFile)
+		if fs > 0 && float64(fs) < float64(contentLen)*0.8 {
+			upgradeLogger("下载不完整: 实际=%d Content-Length=%d", fs, contentLen)
+			downloadErr = fmt.Errorf("downloaded %d bytes (expected ~%d)", fs, contentLen)
+		}
 	}
 	if downloadErr != nil {
+		upgradeLogger("下载彻底失败(3次重试用尽): %v", downloadErr)
 		os.Remove(tmpFile)
 		return fmt.Errorf("自升级下载: %w", downloadErr)
 	}
 
+	upgradeLogger("验证二进制...") // write before validate in case it hangs
 	if err := validateAgentBinary(tmpFile); err != nil {
 		os.Remove(tmpFile)
 		return fmt.Errorf("binary validation: %w", err)
@@ -758,8 +801,9 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		}
 	}
 
-	log.Printf("自升级: 正在替换 %s → v%s", exePath, update.Version)
+	upgradeLogger("开始替换二进制: %s → v%s", exePath, update.Version)
 	if err := replaceRunningBinary(exePath, tmpFile, update.Version); err != nil {
+		upgradeLogger("替换失败: %v", err)
 		return fmt.Errorf("replace: %w", err)
 	}
 
@@ -770,8 +814,7 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 
 	// replaceRunningBinary handles platform-specific replacement.
 	// This line should never be reached on Windows (CreateProcess detaches).
-	agentLog("自升级完成: v%s → v%s", version, update.Version)
-	log.Printf("自升级: 即将退出")
+	upgradeLogger("替换成功! 即将退出进程...") // 写入文件后再os.Exit
 	os.Exit(0)
 	return nil
 }

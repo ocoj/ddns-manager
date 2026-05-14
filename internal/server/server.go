@@ -353,6 +353,8 @@ func (s *Server) Router() *mux.Router {
 
 	// /bin/ file server — explicit HandleFunc avoids PathPrefix("/") conflict
 	r.HandleFunc("/bin/{filename:.*}", s.handleBinFile).Methods("GET")
+	// /dl/ alternative download path — some proxies (NPM) block /bin/
+	r.HandleFunc("/dl/{filename:.*}", s.handleBinFile).Methods("GET")
 
 	// static SPA served by cmd/manager/main.go
 	return r

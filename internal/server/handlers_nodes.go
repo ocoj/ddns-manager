@@ -141,9 +141,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				safeName := strings.ReplaceAll(strings.ReplaceAll(manifestFile, "..", ""), "/", "")
 				if safeName != "" && safeName == manifestFile {
 					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
-						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "bin/" + safeName}
+						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "dl/" + safeName}
 					s.logMgr.LogWithNode("upgrade", "升级已推送", nodeID,
-						fmt.Sprintf("ver=%s url=bin/%s", agentCfg.LatestVersion, safeName), "info")
+						fmt.Sprintf("ver=%s url=dl/%s", agentCfg.LatestVersion, safeName), "info")
 						if agentCfg.UpgradeState == nil {
 							agentCfg.UpgradeState = make(map[string]store.UpgJob)
 						}

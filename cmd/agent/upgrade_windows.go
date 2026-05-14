@@ -33,14 +33,15 @@ import (
 // The version parameter is accepted for signature compatibility with Linux but ignored
 // on Windows (the binary filename is managed by the batch script's move command).
 func replaceRunningBinary(curExe, newExe, version string) error {
-	// M1: log upgrade start to agent log buffer
-	agentLog("自升级: 启动升级子进程 ver=%s", version)
+	// v1.5.20: 详细步骤日志，写入 %TEMP%\ddns_upgrade_agent.log
+	upgradeLogger("Phase1: 停止服务 node-agent")
 	dir := filepath.Dir(curExe)
 
 	// Escape paths for batch file — reject paths with shell metacharacters to prevent command injection.
 	// Valid Windows install paths should only contain safe ASCII characters.
 	for _, p := range []string{curExe, newExe} {
 		if strings.ContainsAny(p, "&|<>^%\"") {
+			upgradeLogger("路径安全检查失败: %s", p)
 			return fmt.Errorf("unsafe path for batch script: %s", p)
 		}
 	}
@@ -48,11 +49,13 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	// === Phase 1: Synchronously stop the service BEFORE launching detached batch ===
 	// This eliminates the race: when the Go process exits, SCM sees the service
 	// is already stopped and won't try to restart the old binary.
+	upgradeLogger("Phase1: stopServiceSync 完成")
 	stopServiceSync("node-agent", 30*time.Second)
 
 	// === Phase 2: Write detached batch script ===
 	// At this point the service IS stopped, so the old .exe is not locked.
 	scriptPath := filepath.Join(dir, "agent_upgrade.bat")
+	upgradeLogger("Phase2: 写升级批处理 %s", scriptPath)
 
 	// M3: Batch script with rollback — backup old binary, move new over old,
 	// verify the move, restore from backup on failure.
@@ -86,6 +89,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
 		// If script write fails, restart the service (we already stopped it)
+		upgradeLogger("批处理写入失败: %v", err)
 		startServiceSafe("node-agent")
 		return fmt.Errorf("write upgrade script: %w", err)
 	}
@@ -101,6 +105,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	si.Flags = windows.STARTF_USESHOWWINDOW
 	si.ShowWindow = windows.SW_HIDE
 
+	upgradeLogger("Phase3: 启动分离进程执行批处理...")
 	err := windows.CreateProcess(
 		nil, // lpApplicationName
 		cmdLine, // lpCommandLine
@@ -111,10 +116,12 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	)
 	if err != nil {
 		// If CreateProcess fails, restart the service with old binary
+		upgradeLogger("CreateProcess失败: %v", err)
 		startServiceSafe("node-agent")
 		return fmt.Errorf("create detached process: %w", err)
 	}
 
+	upgradeLogger("分离进程已启动 (PID=%d)", pi.ProcessId)
 	windows.CloseHandle(pi.Process)
 	windows.CloseHandle(pi.Thread)
 	return nil
@@ -123,21 +130,31 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 // stopServiceSync stops a Windows service and polls until it reaches STOPPED state.
 // Used before binary replacement to prevent SCM from restarting the old binary.
 func stopServiceSync(serviceName string, timeout time.Duration) {
+	upgradeLogger("执行 sc stop %s", serviceName)
 	exec.Command("sc", "stop", serviceName).Run()
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out, err := exec.Command("sc", "query", serviceName).CombinedOutput()
 		if err != nil {
-			// sc query failed — service likely doesn't exist or already stopped
-			return
+			// v1.5.20 Fix4: sc query 失败不直接 return，检查进程是否仍在运行
+			tlOut, tlErr := exec.Command("tasklist", "/fi", "imagename eq "+serviceName+".exe", "/fo", "csv").CombinedOutput()
+			if tlErr != nil || !strings.Contains(string(tlOut), serviceName+".exe") {
+				upgradeLogger("sc query 失败但进程不存在, 认为已停止")
+				return
+			}
+			upgradeLogger("sc query 失败但进程仍在, 继续轮询...")
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 		if strings.Contains(string(out), "STOPPED") {
+			upgradeLogger("服务已停止 (STOPPED)")
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	// Timeout: force kill
+	upgradeLogger("停止超时, force kill node-agent.exe")
 	exec.Command("taskkill", "/f", "/im", "node-agent.exe").Run()
 	time.Sleep(1 * time.Second)
 }

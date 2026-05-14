@@ -176,25 +176,20 @@ func TestSelfUpgradeNoDeferInLoop(t *testing.T) {
 	// 验证: retry loop 使用闭包包装 (defer-in-loop 修复)
 	// 修复前: for attempt := ... { defer resp.Body.Close() }  ← BUG
 	// 修复后: func() error { for attempt := ... { defer resp.Body.Close() } }() ← 正确
-	hasClosureWrapped := strings.Contains(funcBody, "func() error") &&
-		strings.Contains(funcBody, "for attempt")
+	// v1.5.20 Fix1: retry loop 改用手动资源管理 (resp.Body.Close + f2.Close)
+	// 替代了闭包模式的 defer-in-loop 修复 — 更高效且无闭包开销
+	hasManualClose := strings.Contains(funcBody, "resp.Body.Close()") &&
+		!strings.Contains(funcBody, "defer resp.Body.Close()")
 
-	if hasClosureWrapped {
-		t.Log("✅ selfUpgrade 下载重试已用闭包包装 (defer-in-loop 已修复)")
+	if hasManualClose {
+		t.Log("✅ selfUpgrade 下载重试已用手动资源管理 (无 defer-in-loop)")
 	} else {
-		t.Error(`selfUpgrade 下载重试未用闭包包装 — defer-in-loop 可能累积连接泄漏
-修复: 将 for 循环包装为立即执行的闭包:
-  downloadErr = func() error {
-    for attempt := 0; attempt < 3; attempt++ {
-      resp, err := hc.Get(url)
-      defer resp.Body.Close()  // ✅ 闭包内, 函数返回时执行
-      ...
-    }
-  }()`)
+		t.Error(`selfUpgrade 下载重试资源管理不正确 — 可能导致连接泄漏
+修复: 每次重试后手动调用 resp.Body.Close() 和 f2.Close()`)
 	}
 
 	// 验证: 有 defer-in-loop 防护注释
-	if !strings.Contains(funcBody, "defer-in-loop") && !strings.Contains(funcBody, "defer 在循环中") {
-		t.Log("⚠️ 建议在闭包处添加注释说明 defer-in-loop 修复")
+	if !strings.Contains(funcBody, "os.Remove(tmpFile)") {
+		t.Log("⚠️ 建议在重试循环前添加临时文件清理 (os.Remove)")
 	}
 }

@@ -30,3 +30,5 @@ ddns-installer
 
 # 备份文件
 *.bak
+admin_token.txt
+installer.exe

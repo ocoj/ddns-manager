@@ -13,6 +13,7 @@ import (
 	"github.com/kk/ddns-manager/internal/acme"
 	srvcfg "github.com/kk/ddns-manager/internal/config"
 	"github.com/kk/ddns-manager/internal/logger"
+	"github.com/kk/ddns-manager/internal/notify"
 	"github.com/kk/ddns-manager/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -126,18 +127,21 @@ func (s *Server) nowInTZ() time.Time {
 // matching email in meta.json are renewed; user-uploaded certs are skipped.
 
 func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
+	// ACME 自动续签 (每24小时)
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
+		// 启动时立即扫描证书过期
+		s.scanCertExpiry()
 		for {
 			select {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				mgrs := s.acmeMgrList()
+				totalRenewed := 0
 				for _, mgr := range mgrs {
 					renewed := mgr.Renew(ctx)
 					for _, name := range renewed {
-						// 重新加载bundle确保Store缓存与磁盘一致
 						if b, err := s.store.LoadCertBundle(name); err == nil {
 							if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
 								log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
@@ -146,14 +150,117 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 						s.logMgr.Log("acme", "自动续期成功",
 							fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
 					}
+					totalRenewed += len(renewed)
 				}
 				cancel()
+				// v1.5.29 H2: ACME 空续签记录审计日志 (修复 v1.5.19 C4 回归)
+				if totalRenewed == 0 {
+					soonExpiring := s.countExpiringCerts(30)
+					if soonExpiring > 0 {
+						s.logMgr.Log("acme", "自动续期",
+							fmt.Sprintf("无证书续签 (%d个证书30天内到期, 请检查acme.sh/证书配置)", soonExpiring), "warning")
+					} else {
+						s.logMgr.Log("acme", "自动续期", "无到期证书", "info")
+					}
+				}
+				s.scanCertExpiry()
 			case <-shutdown:
 				log.Println("[acme] 续期协程已停止")
 				return
 			}
 		}
 	}()
+
+	// 心跳失败检测 (每5分钟)
+	go func() {
+		heartbeatTicker := time.NewTicker(5 * time.Minute)
+		defer heartbeatTicker.Stop()
+		notified := make(map[string]time.Time)
+		for {
+			select {
+			case <-heartbeatTicker.C:
+				nodes, _ := s.store.LoadNodes()
+				now := s.nowInTZ()
+				for id, n := range nodes {
+					if !n.Approved {
+						continue
+					}
+					if now.Sub(n.LastSeen) > 10*time.Minute {
+						if lastNotified, ok := notified[id]; ok && now.Sub(lastNotified) < 1*time.Hour {
+							continue
+						}
+						notified[id] = now
+						s.tryNotify("heartbeat_fail", "节点离线",
+							fmt.Sprintf("节点 %s 超过10分钟未心跳 (最后心跳: %s)", id, n.LastSeen.Format("01-02 15:04")))
+					}
+				}
+			case <-shutdown:
+				return
+			}
+		}
+	}()
+}
+
+// scanCertExpiry checks all cert bundles and sends email alerts for those expiring within 30 days.
+func (s *Server) scanCertExpiry() {
+	names, err := s.store.ListCertBundles()
+	if err != nil {
+		return
+	}
+	var alerts []notify.CertAlert
+	for _, name := range names {
+		b, err := s.store.LoadCertBundle(name)
+		if err != nil {
+			continue
+		}
+		for _, content := range b.Files {
+			if exp, _ := parseCertExpiry(content); exp != "" {
+				expTime, err := time.Parse("2006-01-02", exp)
+				if err != nil {
+					continue
+				}
+				daysLeft := int(time.Until(expTime).Hours() / 24)
+				if daysLeft <= 30 && daysLeft >= 0 {
+					alerts = append(alerts, notify.CertAlert{
+						BundleName: name,
+						DaysLeft:   daysLeft,
+						ExpiresAt:  exp,
+					})
+				}
+				break
+			}
+		}
+	}
+	s.tryNotifyCertExpiry(alerts)
+}
+
+// countExpiringCerts 统计指定天数内过期的证书数量 (v1.5.29 H2)
+func (s *Server) countExpiringCerts(days int) int {
+	names, err := s.store.ListCertBundles()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, name := range names {
+		b, err := s.store.LoadCertBundle(name)
+		if err != nil {
+			continue
+		}
+		for _, content := range b.Files {
+			if exp, _ := parseCertExpiry(content); exp != "" {
+				expTime, err := time.Parse("2006-01-02", exp)
+				if err != nil {
+					continue
+				}
+				daysLeft := int(time.Until(expTime).Hours() / 24)
+				if daysLeft <= days && daysLeft >= 0 {
+					count++
+				}
+				break
+			}
+		}
+	}
+	return count
 }
 
 func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string) *Server {

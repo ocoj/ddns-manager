@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.getAdminToken())) != 1 {
 		if err := bcrypt.CompareHashAndPassword([]byte(st.TokenHash), []byte(token)); err != nil {
 			s.logMgr.LogAuth("登录失败", "admin", clientIP(r), "密码错误", "error")
+			s.tryNotify("security", "管理员登录失败", fmt.Sprintf("ip=%s", clientIP(r)))
 			jsonErr(w, http.StatusUnauthorized, "密码错误")
 			return
 		}
@@ -759,3 +761,36 @@ func isMaskedPassword(s string) bool {
 }
 
 // ── SMTP notification trigger helpers ──
+
+// tryNotify sends an email notification if SMTP is configured and the event type is enabled.
+// Runs in a background goroutine to avoid blocking the request handler.
+func (s *Server) tryNotify(eventType, title, detail string) {
+	go func() {
+		cfg, err := s.store.LoadSMTPConfig()
+		if err != nil || cfg == nil {
+			log.Printf("[smtp] 通知跳过 (%s): SMTP未配置", eventType)
+			return
+		}
+		if err := cfg.SendEventAlert(eventType, title, detail); err != nil {
+			log.Printf("[smtp] 通知发送失败 (%s): %v", eventType, err)
+		} else {
+			log.Printf("[smtp] 通知已发送 (%s): %s", eventType, title)
+		}
+	}()
+}
+
+// tryNotifyCertExpiry sends certificate expiry alerts.
+func (s *Server) tryNotifyCertExpiry(alerts []notify.CertAlert) {
+	if len(alerts) == 0 {
+		return
+	}
+	go func() {
+		cfg, err := s.store.LoadSMTPConfig()
+		if err != nil || cfg == nil {
+			return
+		}
+		if err := cfg.SendCertAlert(alerts); err != nil {
+			log.Printf("[smtp] 证书过期通知失败: %v", err)
+		}
+	}()
+}

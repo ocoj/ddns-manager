@@ -585,6 +585,11 @@ func (s *ManagerStore) ListAgentBinaries() ([]map[string]interface{}, error) {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "node-agent") {
 			continue
 		}
+		// v1.5.28: 跳过符号链接 (如 node-agent-latest → node-agent-v1.5.28-*)
+		// 符号链接在 Web UI 中显示 0KB 且无版本号, 造成混淆
+		if e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		info, _ := e.Info()
 		version := ""
 		if m := verRe.FindStringSubmatch(e.Name()); m != nil {
@@ -610,6 +615,10 @@ func (s *ManagerStore) ListAgentVersions() ([]string, error) {
 	var versions []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "node-agent") {
+			continue
+		}
+		// v1.5.28: 跳过符号链接
+		if e.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		if m := verRe.FindStringSubmatch(e.Name()); m != nil {

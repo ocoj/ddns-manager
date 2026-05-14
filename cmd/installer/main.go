@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/kk/ddns-manager/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -65,6 +67,54 @@ func main() {
 }
 
 // ========== install wizard ==========
+
+// readLine reads a line from stdin with proper line editing (backspace, Ctrl+C).
+// Uses terminal raw mode to prevent kernel echo interference.
+func readLine(reader *bufio.Reader) (string, error) {
+	// Put terminal in raw mode so we control echo
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err == nil {
+		defer term.Restore(fd, oldState)
+	}
+
+	var buf []byte
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		// Enter (CR or LF)
+		if b == '\r' || b == '\n' {
+			fmt.Print("\r\n")
+			return strings.TrimSpace(string(buf)), nil
+		}
+		// Backspace / DEL
+		if b == 0x7f || b == 0x08 {
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+				fmt.Print("\b \b")
+			}
+			continue
+		}
+		// Ctrl+C → interrupt
+		if b == 0x03 {
+			fmt.Print("^C\r\n")
+			return "", fmt.Errorf("interrupted")
+		}
+		// Ctrl+U → clear line
+		if b == 0x15 {
+			for range buf {
+				fmt.Print("\b \b")
+			}
+			buf = buf[:0]
+			continue
+		}
+		// Printable
+		buf = append(buf, b)
+		fmt.Print(string(b))
+	}
+}
 
 func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	reader := bufio.NewReader(os.Stdin)
@@ -136,7 +186,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		fmt.Println("  |  是否清除 ddns-go？[y/N]: _                  |")
 		fmt.Println("  +-------------------------------------------+")
 		fmt.Print("  > ")
-		confirm, _ := reader.ReadString('\n')
+		confirm, _ := readLine(reader)
 		if strings.TrimSpace(strings.ToLower(confirm)) != "y" {
 			fmt.Println("  [FAIL] 用户取消安装 — ddns-go 冲突未解决")
 			os.Exit(1)
@@ -154,7 +204,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	if managerURL == "" {
 		for {
 			fmt.Print("  管理端地址 (如 http://192.168.1.100:9877): ")
-			managerURL, _ = reader.ReadString('\n')
+			managerURL, _ = readLine(reader)
 			managerURL = strings.TrimSpace(managerURL)
 			if managerURL == "" {
 				fmt.Println("  [!] 地址不能为空")
@@ -193,7 +243,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	stepWait(2, 5, "安装目录")
 	if installDir == "" {
 		fmt.Printf("  安装目录 [默认 %s]: ", agentBaseDir)
-		input, _ := reader.ReadString('\n')
+		input, _ := readLine(reader)
 		input = strings.TrimSpace(input)
 		if input != "" {
 			installDir = input
@@ -203,7 +253,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		if !filepath.IsAbs(installDir) {
 			fmt.Printf("  [!] 必须是绝对路径 (如 %s)\n", agentBaseDir)
 			fmt.Printf("  安装目录 [默认 %s]: ", agentBaseDir)
-			input, _ := reader.ReadString('\n')
+			input, _ := readLine(reader)
 			input = strings.TrimSpace(input)
 			if input == "" {
 				installDir = "" // use default
@@ -243,7 +293,11 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		fmt.Println("    3. 系统文件损坏 — 检查注册表或 /etc/machine-id")
 		fmt.Println()
 		fmt.Print("  按 R 重试, 其他键退出安装: ")
-		choice, _ := reader.ReadString('\n')
+		choice, err := readLine(reader)
+		if err != nil {
+			fmt.Println("\n  [FAIL] 用户退出安装")
+			os.Exit(1)
+		}
 		choice = strings.TrimSpace(strings.ToLower(choice))
 		if choice != "r" {
 			fmt.Println("  [FAIL] 用户退出安装")
@@ -253,7 +307,11 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 
 	if nodeName == "" {
 		fmt.Print("  节点名称 (如 win-pc): ")
-		nodeName, _ = reader.ReadString('\n')
+		nodeName, err := readLine(reader)
+		if err != nil {
+			fmt.Println("\n  [FAIL] 取消安装")
+			os.Exit(1)
+		}
 		nodeName = strings.TrimSpace(nodeName)
 		if nodeName == "" {
 			log.Fatal("节点名称不能为空")
@@ -268,7 +326,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		if existingCfg.NodeID != nodeName {
 			fmt.Printf("  原节点名: %s, 新节点名: %s\n", existingCfg.NodeID, nodeName)
 			fmt.Print("  是否替换原注册？[Y/n]: ")
-			confirm, _ := reader.ReadString('\n')
+			confirm, _ := readLine(reader)
 			confirm = strings.TrimSpace(strings.ToLower(confirm))
 			if confirm != "" && confirm != "y" {
 				// 用户选择保留原名称
@@ -298,14 +356,14 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		if remoteFp == fingerprint {
 			fmt.Printf("  [!] 节点 '%s' 已存在，指纹匹配 — 旧机重装\n", nodeName)
 			fmt.Print("  是否继承原配置并覆盖安装？[Y/n]: ")
-			confirm, _ := reader.ReadString('\n')
+			confirm, _ := readLine(reader)
 			confirm = strings.TrimSpace(strings.ToLower(confirm))
 			if confirm == "" || confirm == "y" {
 				fmt.Printf("  [OK] 将继承原节点配置\n")
 				break
 			}
 			fmt.Print("  请输入新节点名: ")
-			n, _ := reader.ReadString('\n')
+			n, _ := readLine(reader)
 			n = strings.TrimSpace(n)
 			if n == "" {
 				fmt.Println("  [FAIL] 取消安装")
@@ -317,7 +375,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 		// 指纹不匹配 → 新机抢名，拒绝
 		fmt.Printf("  [!] 节点名 '%s' 已被其他机器占用 (指纹不匹配)\n", nodeName)
 		fmt.Print("  请输入新节点名 (或回车取消): ")
-		n, _ := reader.ReadString('\n')
+		n, _ := readLine(reader)
 		n = strings.TrimSpace(n)
 		if n == "" {
 			fmt.Println("  [FAIL] 取消安装")

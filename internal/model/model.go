@@ -3,12 +3,13 @@ package model
 import "time"
 
 type DDNSHealthInfo struct {
-	Running   bool   `json:"running"`
-	LastOK    bool   `json:"last_ok"`
-	LastError string `json:"last_error,omitempty"`
-	LogLine   string `json:"log_line,omitempty"`
-	Status    string `json:"status,omitempty"`
-	StatusMsg string `json:"status_msg,omitempty"`
+	Running       bool     `json:"running"`
+	LastOK        bool     `json:"last_ok"`
+	LastError     string   `json:"last_error,omitempty"`
+	FailedDomains []string `json:"failed_domains,omitempty"` // v1.5.29 H1: 具体失败域名列表
+	LogLine       string   `json:"log_line,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	StatusMsg     string   `json:"status_msg,omitempty"`
 }
 
 type HeartbeatReq struct {
@@ -28,6 +29,7 @@ type NodeStatus struct {
 	IPv4         string            `json:"ipv4"`
 	IPv6         string            `json:"ipv6"`
 	DDNSHealth   *DDNSHealthInfo   `json:"ddns_health,omitempty"`
+	CertErrors   []string          `json:"cert_errors,omitempty"`   // v1.5.29 H5: 证书部署失败详情
 }
 
 type HeartbeatResp struct {

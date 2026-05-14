@@ -1,5 +1,53 @@
 # CHANGELOG
 
+## v1.5.29 — 2026-05-14
+
+### 🔴 第五次审计修复（12 项）：日志链路 + 一键部署 + DNS 错误上报
+
+基于 v1.5.28 逐行审计，重点修复：AgentLogs 上报时序错误、Manager 日志处理缺失、
+install.sh 版本硬编码/无校验、DNS 失败域名丢失、ACME 空续签日志回归。
+
+#### 🔴 Critical（3 项）
+
+- **C1 AgentLogs 赋值时序错误（数据丢失）** — `doHeartbeat` 中 `agentLogBuf.Drain()` 在 `sendHeartbeat()` 之后调用，
+  导致 Agent 操作日志写入已废弃的局部变量，永不到达 Manager。修复：Drain 移到 sendHeartbeat 之前，
+  心跳失败时恢复日志到缓冲防止丢失
+- **C2 Manager 完全不处理 AgentLogs / Logs** — `handleHeartbeat` 从未读取 `req.Logs`/`req.AgentLogs`。
+  修复：DNS 更新日志写入 category=dns-update，Agent 操作日志写入 category=agent，各限制 20 条
+- **C3 install.sh 版本硬编码 + 无下载校验** — 硬编码 `VER="1.5.27"` 每次发版需手动更新；下载后无 SHA256 校验。
+  修复：移除硬编码，改为从 `/api/ping` 动态获取（失败时退出并提示）；增加 .sha256 文件校验
+
+#### 🟠 High（5 项）
+
+- **H1 DNS 更新失败原因丢失具体域名** — `LastError` 只有笼统的"部分域名更新失败"。
+  修复：`DNSStatus` 新增 `FailedDomains []string`，`LastError` 包含具体失败域名列表
+- **H2 ACME 自动续签空结果无日志（v1.5.19 C4 回归）** — Renew 返回空 renewals 时无审计日志。
+  修复：`StartAutoRenew` 增加空结果判断 + `countExpiringCerts()` 辅助函数
+- **H3 配置变更触发的 DNS 更新结果被丢弃** — `go func()` 调用 `runDNSUpdateWithTimeout` 结果被忽略。
+  修复：捕获结果写 agentLog，失败时记录具体错误
+- **H4 install.sh 版本检测依赖非标准工具** — `grep -o | cut` 精简系统可能缺失。
+  修复：改用 POSIX 标准的 `sed` 单工具解析
+- **H5 证书部署失败原因不上报 Manager** — 解密/写入/IIS 失败只写本地 log。
+  修复：`applyCertUpdates` 返回 `certErrors []string`，通过 AgentLogs 上报
+
+#### 🟡 Medium（4 项）
+
+- **M1 DNSUpdater.Run() 多 DNS 配置段 IP 覆盖** — 多 DNSConf 时后面覆盖前面的 IP。
+  修复：取第一个非空 IP
+- **M2 Daemon shutdown 时 DNS goroutine 泄漏** — shutdown 不等待 DNS 更新完成。
+  修复：等待 `dnsUpdateRunning` 变为 false（最多 30 秒）
+- **M3 心跳日志不含 DDNS 错误详情** — 只显示 `ddns=ERR` 不含 LastError。
+  修复：ERR/DOWN 时附加 `err=...` 和 `failed=...`
+- **M4 VERSION 升级 + 全平台构建** — VERSION → v1.5.29，
+  生成 10 个 .sha256 校验文件供 install.sh 使用
+
+#### 🧪 测试环境部署
+- Manager (10.0.0.1): v1.5.29 ✅
+- Client A Linux (10.0.0.2): v1.5.29 ✅ 心跳正常
+- Client B Windows (10.0.0.3): v1.5.28 → 由心跳自动升级到 v1.5.29
+
+---
+
 ## v1.5.26 — 2026-05-14
 
 ### 🟢 全平台二进制补齐 + Windows 自动升级实机验证

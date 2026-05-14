@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +21,13 @@ import (
 
 // DNSStatus holds the result of the last DNS update run.
 type DNSStatus struct {
-	Running   bool      // DNSUpdater is running
-	LastOK    bool      // last update succeeded
-	LastError string    // last error message (if any)
-	IPv4      string    // current public IPv4
-	IPv6      string    // current public IPv6
-	LastRun   time.Time // timestamp of last run
+	Running       bool      // DNSUpdater is running
+	LastOK        bool      // last update succeeded
+	LastError     string    // last error message (if any)
+	FailedDomains []string  // v1.5.29 H1: 具体失败域名列表
+	IPv4          string    // current public IPv4
+	IPv6          string    // current public IPv6
+	LastRun       time.Time // timestamp of last run
 }
 
 // LastLine returns error line for health reporting.
@@ -90,34 +92,45 @@ func (u *DNSUpdater) Run() DNSStatus {
 		domains := provider.AddUpdateDomainRecords()
 
 		// Extract detected IPs for heartbeat reporting
-		if domains.Ipv4Addr != "" {
+		// v1.5.29 M1: 多DNS配置段时取第一个非空IP，不覆盖
+		if domains.Ipv4Addr != "" && u.status.IPv4 == "" {
 			u.status.IPv4 = domains.Ipv4Addr
 		}
-		if domains.Ipv6Addr != "" {
+		if domains.Ipv6Addr != "" && u.status.IPv6 == "" {
 			u.status.IPv6 = domains.Ipv6Addr
 		}
 
 		// Check results — any failure marks the whole run as failed
+		// v1.5.29 H1: 收集失败域名详情，后续上报到 Manager
 		allOK := true
+		var failedDomains []string
 		for _, d := range domains.Ipv4Domains {
 			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
 				allOK = false
-				u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s", d.String()))
+				domainStr := d.String()
+				u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s", domainStr))
+				failedDomains = append(failedDomains, domainStr)
 			}
 		}
 		for _, d := range domains.Ipv6Domains {
 			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
 				allOK = false
-				u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s", d.String()))
+				domainStr := d.String()
+				u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s", domainStr))
+				failedDomains = append(failedDomains, domainStr)
 			}
 		}
 
 		if !allOK {
 			u.status.LastOK = false
-			u.status.LastError = "部分域名更新失败"
-			log.Printf("[dns] DNS更新失败 (提供商 %s)", dc.DNS.Name)
-		} else if len(domains.Ipv4Domains) > 0 || len(domains.Ipv6Domains) > 0 {
-			u.logBuf.Write("DNS更新完成")
+			u.status.LastError = fmt.Sprintf("DNS更新失败: %s", strings.Join(failedDomains, ", "))
+			u.status.FailedDomains = failedDomains
+			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, u.status.LastError)
+		} else {
+			u.status.FailedDomains = nil
+			if len(domains.Ipv4Domains) > 0 || len(domains.Ipv6Domains) > 0 {
+				u.logBuf.Write("DNS更新完成")
+			}
 		}
 	}
 

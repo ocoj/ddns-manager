@@ -226,10 +226,11 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			IPv6:         status.IPv6,
 			CertHashes:   certHashes,
 			DDNSHealth: &model.DDNSHealthInfo{
-				Running:   status.Running,
-				LastOK:    status.LastOK,
-				LastError: status.LastError,
-				LogLine:   status.LastLine(),
+				Running:       status.Running,
+				LastOK:        status.LastOK,
+				LastError:     status.LastError,
+				FailedDomains: status.FailedDomains,
+				LogLine:       status.LastLine(),
 			},
 		},
 		ConfigHash: lastConfigHash,  // use Manager-pushed hash, not self-computed
@@ -237,18 +238,22 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		Hardware:   collectHardware(),
 	}
 
+	// v1.5.29 C1: 在 sendHeartbeat 之前填充 AgentLogs (修复 v1.5.22 H2 回归)
+	// 原代码在 sendHeartbeat 之后 Drain，导致日志写入已废弃的 req 局部变量而丢失
+	if agentLogBuf.Len() > 0 {
+		req.AgentLogs = agentLogBuf.Drain()
+	}
+
 	// 3. Send heartbeat
 	heartbeatFailed.Store(false)
 	resp := sendHeartbeat(cfg, req)
 	if resp == nil {
-		// v1.5.22 H2: 心跳失败时标记 failed，不 Clear 日志缓冲
-		// agentLogBuf 中的操作日志会在下一次成功心跳的 AgentLogs 字段中发送
+		// v1.5.29 C1: 心跳失败时恢复 AgentLogs 到缓冲，防止丢失
 		heartbeatFailed.Store(true)
+		for _, logLine := range req.AgentLogs {
+			agentLogBuf.Write(logLine)
+		}
 		return fmt.Errorf("心跳失败")
-	}
-	// v1.5.22 H2: 心跳成功时发送累积的 Agent 操作日志 (证书部署/升级/配置变更)
-	if agentLogBuf.Len() > 0 {
-		req.AgentLogs = agentLogBuf.Drain()
 	}
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
@@ -272,10 +277,16 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 					log.Printf("[config] 缓存写入失败: %v", writeErr)
 					agentLog("配置缓存写入失败: %v (磁盘可能已满)", writeErr)
 				}
-				// v1.5.22 C4: 使用 atomic.Bool 防止 goroutine 堆积
+				// v1.5.29 C4: 捕获配置变更触发的DNS更新结果，防止失败静默
 				if dnsUpdateRunning.CompareAndSwap(false, true) {
 					go func() {
-						runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
+						cfgStatus := runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
+						if !cfgStatus.LastOK {
+							agentLog("配置变更后DNS更新失败: %s", cfgStatus.LastError)
+							log.Printf("[dns] 配置变更后DNS更新失败: %s", cfgStatus.LastError)
+						} else {
+							agentLog("配置变更后DNS更新完成 ipv4=%s ipv6=%s", cfgStatus.IPv4, cfgStatus.IPv6)
+						}
 						dnsUpdateRunning.Store(false)
 					}()
 				} else {
@@ -285,8 +296,16 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		}
 	}
 
-	// 5. Cert deploy (keep v1 logic)
-	applyCertUpdates(cfg, resp.CertUpdates)
+	// 5. v1.5.29 H5: 证书部署错误回报 Manager 便于诊断
+	certErrors := applyCertUpdates(cfg, resp.CertUpdates)
+	// 将本轮证书部署错误加入心跳请求 (下个心跳随 Status.CertErrors 上报)
+	// 注意: 这里修改 req 是在 sendHeartbeat 成功返回之后, 本轮心跳已发送。
+	// 证书错误将附加到 AgentLogs 中, 随下个心跳一起上报。
+	if len(certErrors) > 0 {
+		for _, ce := range certErrors {
+			agentLog("证书部署错误: %s", ce)
+		}
+	}
 
 	// 6. Config error — node config rendering failed on manager side
 	if resp.ConfigError != "" {
@@ -350,7 +369,8 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) *model.Heartb
 
 // applyCertUpdates processes certificate updates from heartbeat response.
 // Deploys cert files → updates IIS bindings (Windows) → reloads services → recycles app pools.
-func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
+// v1.5.29 H5: 返回证书部署错误列表，供心跳上报 Manager 诊断
+func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (certErrors []string) {
 	if len(updates) == 0 {
 		return
 	}
@@ -378,6 +398,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			plain, err := crypto.Decrypt(ct, key)
 			if err != nil {
 				log.Printf("[cert] 解密失败 %s/%s: %v", cu.BundleName, name, err)
+				certErrors = append(certErrors, fmt.Sprintf("%s: 解密失败 %s", cu.BundleName, name))
 				continue
 			}
 			tmp := filepath.Join(path, name+".new")
@@ -386,11 +407,13 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			if we := os.WriteFile(tmp, plain, 0o600); we != nil {
 				log.Printf("[cert] 写入失败 %s/%s: %v", cu.BundleName, name, we)
 				agentLog("证书部署: 写入失败 %s/%s: %v", cu.BundleName, name, we)
+				certErrors = append(certErrors, fmt.Sprintf("%s: 写入失败 %s (%v)", cu.BundleName, name, we))
 				continue
 			}
 			if re := os.Rename(tmp, dst); re != nil {
 				log.Printf("[cert] 重命名失败 %s/%s: %v", cu.BundleName, name, re)
 				agentLog("证书部署: 重命名失败 %s/%s: %v", cu.BundleName, name, re)
+				certErrors = append(certErrors, fmt.Sprintf("%s: 重命名失败 %s (%v)", cu.BundleName, name, re))
 				continue
 			}
 			agentLog("证书部署: 写入文件 %s/%s (%d bytes)", cu.BundleName, name, len(plain))
@@ -473,6 +496,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			}
 		}
 		if len(failedServices) > 0 {
+			certErrors = append(certErrors, fmt.Sprintf("%s: 服务重载失败 %v", cu.BundleName, failedServices))
 			agentLog("证书部署: 服务重载失败: %v (bundle=%s)", failedServices, cu.BundleName)
 		} else if len(cu.ReloadServices) > 0 {
 			agentLog("证书部署: 服务重载完成 (%d个服务) bundle=%s", len(cu.ReloadServices), cu.BundleName)
@@ -490,6 +514,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			agentLog("证书部署: 完成 %s -> %s (hash=%s...)", cu.BundleName, path, cu.CertHash[:14])
 			log.Printf("[cert] 已部署: %s -> %s", cu.BundleName, path)
 		} else {
+			certErrors = append(certErrors, fmt.Sprintf("%s: IIS绑定失败, 下次心跳重试", cu.BundleName))
 			agentLog("证书部署: 文件已写入但IIS绑定失败 %s, 下次心跳重试", cu.BundleName)
 			log.Printf("[cert] 证书文件已写入但 IIS 绑定失败: %s, 下次心跳重试", cu.BundleName)
 		}
@@ -510,6 +535,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		}
 	}
 	certHashMapMu.Unlock()
+	return certErrors
 }
 
 // reloadService reloads or restarts a system service after cert deployment.
@@ -1237,8 +1263,16 @@ func main() {
 				case <-ticker.C:
 					doHeartbeatWithRetry()
 				case <-ch:
-					log.Println("[daemon] 正在关闭")
-					return
+				log.Println("[daemon] 正在关闭...")
+				// v1.5.29 M2: 等待正在运行的 DNS 更新完成，防止 goroutine 泄漏
+				waitStart := time.Now()
+				for dnsUpdateRunning.Load() && time.Since(waitStart) < 30*time.Second {
+					time.Sleep(200 * time.Millisecond)
+				}
+				if dnsUpdateRunning.Load() {
+					log.Println("[daemon] DNS 更新超时未完成，强制退出")
+				}
+				return
 				}
 			}
 		}

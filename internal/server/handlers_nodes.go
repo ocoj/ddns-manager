@@ -42,11 +42,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	rec, ok := nodes[nodeID]
 	if !ok {
 		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, "未知节点ID", "warning")
+		s.tryNotify("security", "未知节点心跳", fmt.Sprintf("node=%s ip=%s", nodeID, clientIP(r)))
 		jsonErr(w, http.StatusUnauthorized, "未知节点")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(rec.PasswordHash), []byte(password)); err != nil {
 		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("密码错误 IP=%s", clientIP(r)), "warning")
+		s.tryNotify("security", "心跳认证失败", fmt.Sprintf("node=%s 密码错误 ip=%s", nodeID, clientIP(r)))
 		jsonErr(w, http.StatusUnauthorized, "密码错误")
 		return
 	}
@@ -82,9 +84,33 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if req.Hardware != nil {
 		rec.Hardware = req.Hardware
 	}
-	// 记录心跳: DDNS 健康状态变更或首次心跳（含 IPv4/IPv6）
-	s.logMgr.LogWithNode("heartbeat", "收到心跳", nodeID,
-		fmt.Sprintf("ddns=%s ipv4=%s ipv6=%s", h.Status, req.Status.IPv4, req.Status.IPv6), "info")
+	// v1.5.29 M3: 记录心跳含 DDNS 错误详情和失败域名
+	detail := fmt.Sprintf("ddns=%s ipv4=%s ipv6=%s", h.Status, req.Status.IPv4, req.Status.IPv6)
+	if h.Status != "OK" {
+		if h.LastError != "" {
+			detail += fmt.Sprintf(" err=%s", h.LastError)
+		}
+		if len(h.FailedDomains) > 0 {
+			detail += fmt.Sprintf(" failed=%s", strings.Join(h.FailedDomains, ","))
+		}
+	}
+	s.logMgr.LogWithNode("heartbeat", "收到心跳", nodeID, detail, "info")
+
+	// v1.5.29 C2: 处理 Agent 上报的 DNS 更新日志和操作日志
+	// 限制最多各 20 条，防止日志洪泛
+	logLimit := 20
+	for i, logLine := range req.Logs {
+		if i >= logLimit {
+			break
+		}
+		s.logMgr.LogWithNode("dns-update", "DNS日志", nodeID, logLine, "info")
+	}
+	for i, logLine := range req.AgentLogs {
+		if i >= logLimit {
+			break
+		}
+		s.logMgr.LogWithNode("agent", "Agent操作", nodeID, logLine, "info")
+	}
 	resp := model.HeartbeatResp{OK: true, Timestamp: s.nowInTZ().Format(time.RFC3339)}
 
 	// ── 升级推送（审批门控之前）──

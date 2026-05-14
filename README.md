@@ -32,7 +32,7 @@ scp build/ddns-manager-linux-amd64 user@server:/opt/ddns-manager/
 ssh user@server "systemctl restart ddns-manager"
 
 # 部署节点 (一键安装)
-curl -fsSL https://MANAGER:9877/bin/install.sh | sh -s -- -m https://MANAGER:9877 -n my-node
+bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 ```
 
 ## 技术栈
@@ -46,7 +46,7 @@ curl -fsSL https://MANAGER:9877/bin/install.sh | sh -s -- -m https://MANAGER:987
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.5.26** | v1.5.26 第四次审计修复(15项) + Windows自升级死锁修复 + 全平台二进制
+| ddns-manager | **v1.5.29** | v1.5.29 第五次审计修复(12项) — 日志链路 + 一键部署 + DNS 错误上报
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 
 > **注意**: 本项目处于开发测试阶段，从未正式发布。v1、v2 仅为开发过程中的自然版本演进标识。部署更新时需全新部署，不保证与旧版本数据格式兼容。

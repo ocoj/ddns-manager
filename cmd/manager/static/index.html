@@ -1975,7 +1975,7 @@ function renderVersions(verData, binData, nodes) {
   h += '</select></div>';
   h += '<div class="form-group" style="flex:0 1 180px"><label>系统</label><select id="deploy-os" onchange="deployOs=this.value;toggleDeployButton()">';
   ['linux-amd64','linux-arm64','linux-armv7','windows-amd64'].forEach(function(o) {
-    var label = o === 'linux-amd64' ? 'Linux (amd64)' : o === 'linux-arm64' ? 'Linux (arm64)' : o === 'linux-armv7' ? 'Linux (armv7)' : 'Windows (amd64)';
+    var label = o === 'linux-amd64' ? 'Linux (自动检测)' : o === 'linux-arm64' ? 'Linux ARM64' : o === 'linux-armv7' ? 'Linux ARMv7' : 'Windows (amd64)';
     h += '<option value="' + o + '"' + (deployOs === o ? ' selected' : '') + '>' + label + '</option>';
   });
   h += '</select></div>';
@@ -2059,8 +2059,6 @@ function getDeployCmd() {
   var agentBin = 'node-agent' + (ver ? '-v' + ver : '') + '-' + os + (isWin ? '.exe' : '');
   var instBin = 'ddns-installer' + (ver ? '-v' + ver : '') + '-' + os + (isWin ? '.exe' : '');
   if (isWin) {
-    // Windows: 已装节点升级 — 轮询等待服务停止(最多30s), 确保文件可覆盖
-    // Windows: Add-Type C# 证书信任 + Net.WebClient 下载 — Win7+ 全兼容
     var ps = 'powershell -Command "';
     ps += 'Add-Type -TypeDefinition \'public class DDMTrust{public static bool Cert(object a,object b,object c,object d){return true;}}\';';
     ps += ' [Net.ServicePointManager]::ServerCertificateValidationCallback = [DDMTrust]::Cert;';
@@ -2079,22 +2077,12 @@ function getDeployCmd() {
     ps += ' catch { Write-Host (\'DL FAIL: \' + `$_.Exception.Message); exit 1 };';
     ps += ' Start-Process `$env:TEMP/ddns-installer.exe -ArgumentList \'-manager-url ' + origin + '\' -Wait';
     ps += '}"';
-
     return ps;
   }
-  // Linux: 版本化命名 — 下载到 node-agent-v{VERSION}-{os}-{arch}, 更新符号链接
-  var sh = 'if [ -f /opt/ddns-manager/agent.yaml ]; then ';
-  sh += 'sudo systemctl stop node-agent.timer 2>/dev/null; ';
-  sh += 'curl -fsSLk ' + origin + '/bin/' + agentBin + ' -o /opt/ddns-manager/' + agentBin + ' && ';
-  sh += 'chmod +x /opt/ddns-manager/' + agentBin + ' && ';
-  sh += 'ln -sf ' + agentBin + ' /opt/ddns-manager/node-agent && ';
-  sh += 'sudo systemctl start node-agent.timer 2>/dev/null; ';
-  sh += 'else ';
-  sh += 'curl -fsSLk ' + origin + '/bin/' + instBin + ' -o /tmp/ddns-installer && ';
-  sh += 'chmod +x /tmp/ddns-installer && ';
-  sh += '/tmp/ddns-installer -manager-url ' + origin + ' -name "$(hostname)"; ';
-  sh += 'fi';
-  return sh;
+  // Linux: 一键脚本, 架构自动检测, 升级/新装自动判断
+  // 版本通过 VERSION 环境变量传入
+  var cmd = 'VERSION=' + (ver || '1.5.27') + ' bash -c "$(curl -fsSL ' + origin + '/bin/install.sh)"';
+  return cmd;
 }
 
 async function copyDeployCmd() {

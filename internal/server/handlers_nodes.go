@@ -176,7 +176,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				renderErr.Error(), "error")
 			// 回传错误给 Agent，便于诊断
 			resp.ConfigError = renderErr.Error()
-		} else if rendered != "" && req.ConfigHash != cfgHash {
+		} else if rendered != "" && req.ConfigHash != rec.ConfigHash {
 			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
 				fmt.Sprintf("%d bytes", len(rendered)), "success")
 			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}

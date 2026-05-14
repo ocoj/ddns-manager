@@ -231,7 +231,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				LogLine:   status.LastLine(),
 			},
 		},
-		ConfigHash: dnsUpdater.ConfigHash(),
+		ConfigHash: lastConfigHash,  // use Manager-pushed hash, not self-computed
 		Logs:       dnsUpdater.RecentLogs(10),
 		Hardware:   collectHardware(),
 	}
@@ -248,11 +248,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
 	if resp.Config != nil && resp.Config.YAML != "" {
-		if resp.Config.Hash != req.ConfigHash {
+		if resp.Config.Hash != lastConfigHash {
 			if err := dnsUpdater.ApplyConfig([]byte(resp.Config.YAML)); err != nil {
 				log.Printf("配置应用失败: %v", err)
 			} else {
-				// Cache encrypted config for next oneshot run (AES-256-GCM)
+				lastConfigHash = resp.Config.Hash  // accept Manager's hash
+			// Cache encrypted config for next oneshot run (AES-256-GCM)
 				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
 				os.MkdirAll(filepath.Dir(configCachePath()), 0700)
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),

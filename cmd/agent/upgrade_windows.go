@@ -97,7 +97,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	// === Phase 3: Launch detached batch process ===
 	// Pass cmd /c as the command line, nil app name.
 	// The batch script will move the binary, verify, and restart the service.
-	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`cmd /c ""%s""`, scriptPath))
+	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`cmd /c "%s"`, scriptPath)) // v1.5.22: 单层引号, 避免CMD误解析
 
 	var si windows.StartupInfo
 	var pi windows.ProcessInformation

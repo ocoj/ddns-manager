@@ -737,7 +737,12 @@ func cleanOldDDNSManager() bool {
 }
 
 // cleanAgentBinaries removes old versioned node-agent binaries from a directory.
+// v1.0.0: 双重保护 — 只在目录下有 agent.yaml 时才清理（证明这是 agent 安装目录）
 func cleanAgentBinaries(dir string) {
+	// 安全检查: 目录不存在或无 agent.yaml → 跳过（防止误删 Manager 文件）
+	if _, err := os.Stat(filepath.Join(dir, "agent.yaml")); os.IsNotExist(err) {
+		return
+	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.IsDir() {

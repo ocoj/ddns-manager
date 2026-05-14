@@ -156,6 +156,87 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	fmt.Printf("  系统: %s  主机名: %s\n\n", osName, hostname)
 
 	// ================================================================
+	// 重装检测: 已有旧配置时让用户选保留升级还是清除重装
+	// v1.0.0: 安装器统一入口，不再在 install.sh 中分流
+	// ================================================================
+	if existingCfg, err := loadConfig(agentConfigPath); err == nil {
+		fmt.Println()
+		fmt.Println("  +-------------------------------------------+")
+		fmt.Println("  |  [!] 检测到已有安装                         |")
+		fmt.Printf("  |                                            |\n")
+		fmt.Printf("  |  节点名: %-34s|\n", existingCfg.NodeID)
+		fmt.Printf("  |  管理端: %-34s|\n", existingCfg.ManagerURL)
+		fmt.Println("  |                                            |")
+		fmt.Println("  |  保留旧配置直接升级？[Y/n]: _                |")
+		fmt.Println("  +-------------------------------------------+")
+		fmt.Print("  > ")
+		choice, _ := readLine(reader)
+		choice = strings.TrimSpace(strings.ToLower(choice))
+
+		if choice == "" || choice == "y" {
+			// ── 保留旧配置，直接升级 ──
+			fmt.Println()
+			fmt.Printf("  [升级] 保留配置，下载最新 Agent ...\n")
+
+			// 使用旧配置中的 manager_url
+			if existingCfg.ManagerURL != "" {
+				managerURL = existingCfg.ManagerURL
+			}
+			baseURL := strings.TrimRight(managerURL, "/")
+
+			agentURL := baseURL + "/bin/node-agent-" + goos + "-" + goarch
+			if runtime.GOOS == "windows" {
+				agentURL += ".exe"
+			}
+
+			// 使用旧配置中的安装目录
+			dir := filepath.Dir(agentConfigPath)
+			agentBin := filepath.Join(dir, "node-agent")
+			if runtime.GOOS == "windows" {
+				agentBin += ".exe"
+			}
+
+			fmt.Printf("  下载 %s ... ", agentURL)
+			if err := retryDo(3, "下载 agent", func() error {
+				resp, err := client.Get(agentURL)
+				if err != nil {
+					return err
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode != 200 {
+					return fmt.Errorf("HTTP %d", resp.StatusCode)
+				}
+				f, err := os.Create(agentBin)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				_, err = io.Copy(f, resp.Body)
+				return err
+			}); err != nil {
+				log.Fatalf("下载失败: %v", err)
+			}
+			os.Chmod(agentBin, 0755)
+			fmt.Println("[OK]")
+
+			// 更新 symlink (如果存在) 并重启 timer
+			if runtime.GOOS != "windows" {
+				exec.Command("systemctl", "restart", "node-agent.timer").Run()
+			}
+			fmt.Println()
+			fmt.Println("  [OK] 升级完成，配置未变")
+			return
+		}
+
+		// ── 清除旧配置，走全新安装 ──
+		fmt.Println()
+		fmt.Println("  [清除] 正在清理旧配置...")
+		dir := filepath.Dir(agentConfigPath)
+		os.RemoveAll(dir)
+		fmt.Printf("  [OK] 已清除: %s\n", dir)
+	}
+
+	// ================================================================
 	// Step 0/5: 环境检查 — 旧版清理 + ddns-go 冲突检测
 	// ================================================================
 	stepWait(0, 5, "环境检查")

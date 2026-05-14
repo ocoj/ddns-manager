@@ -212,6 +212,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: binding.DeployPath,
 			ReloadServices: binding.ReloadServices, // v1.5.20 C1: 传播证书部署后需重载的服务列表
+			PFXPassword: bundle.PFXPassword,        // v1.5.20: 传播证书级 PFX 密码
 		})
 		// H1: 证书下发成功记录审计日志，运维可追踪证书分发到哪些节点
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,

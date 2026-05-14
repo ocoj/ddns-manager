@@ -382,11 +382,19 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		// 双PFX: Modern优先(AES-256) → 失败降级Legacy(3DES) → 无PFX走openssl
 		iisOK := true
 		if runtime.GOOS == "windows" {
+			// v1.5.20: 证书级 PFX 密码 → 配置级 → 默认 "ddns"
+			pfxPwd := cu.PFXPassword
+			if pfxPwd == "" {
+				pfxPwd = cfg.PFXPassword
+			}
+			if pfxPwd == "" {
+				pfxPwd = "ddns"
+			}
 			pfxImported := false
 			// 1. 优先尝试 Modern PFX (Win10 1809+, 更强加密)
 			if hasModernPFX && modernPFXFile != "" {
 				if _, err := os.Stat(modernPFXFile); err == nil {
-					iisOK = importPFXToIIS(modernPFXFile, cu.BundleName, cfg.IISCertBindings)
+					iisOK = importPFXToIIS(modernPFXFile, cu.BundleName, pfxPwd, cfg.IISCertBindings)
 					if iisOK {
 						pfxImported = true
 						recycleIISAppPools()
@@ -399,7 +407,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			// 2. Modern失败或不存在 → 降级到 Legacy PFX (Win7/Win2016 兼容)
 			if !pfxImported && hasLegacyPFX && legacyPFXFile != "" {
 				if _, err := os.Stat(legacyPFXFile); err == nil {
-					iisOK = importPFXToIIS(legacyPFXFile, cu.BundleName, cfg.IISCertBindings)
+					iisOK = importPFXToIIS(legacyPFXFile, cu.BundleName, pfxPwd, cfg.IISCertBindings)
 					if iisOK {
 						pfxImported = true
 						recycleIISAppPools()
@@ -766,16 +774,16 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	return nil
 }
 
-func importPFXToIIS(pfxFile, bundleName string, bindings []model.CertToIISBinding) bool {
+func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.CertToIISBinding) bool {
 	// 1. import PFX to Windows cert store
 	escapedPath := strings.ReplaceAll(pfxFile, "'", "''")
 	ps := fmt.Sprintf(
 		`$pfx = Get-Content '%s' -AsByteStream -Raw;`+
 			`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;`+
-			`$cert.Import($pfx, 'ddns', 'DefaultKeySet');`+
+			`$cert.Import($pfx, '%s', 'DefaultKeySet');`+
 			`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');`+
 			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`,
-		escapedPath)
+		pfxPassword, escapedPath)
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
 		log.Printf("PFX导入到证书存储失败: %v: %s", err, string(out))
@@ -853,7 +861,7 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 	escapedPFX := strings.ReplaceAll(pfxFile, "'", "''")
 	ps := `$pfx = Get-Content '` + escapedPFX + `' -AsByteStream -Raw;` +
 		`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;` +
-		`$cert.Import($pfx, 'ddns', 'DefaultKeySet');` +
+		`$cert.Import($pfx, '%s', 'DefaultKeySet');` +
 		`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');` +
 		`$store.Open('ReadWrite'); $store.Add($cert); $store.Close()`
 	if out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput(); err != nil {

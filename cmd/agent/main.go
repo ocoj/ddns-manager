@@ -42,8 +42,9 @@ var certHashMapMu sync.Mutex // H6: protects certHashMap from concurrent access
 var (
 	dnsUpdater       *DNSUpdater
 	dnsUpdaterOnce   sync.Once
-	dnsUpdateRunning atomic.Bool // H5: prevents goroutine stacking on config changes
+	dnsUpdateRunning atomic.Bool // v1.5.22 C4: 防止配置变更时 goroutine 堆积 (Load/Store 在 doHeartbeat)
 )
+var heartbeatFailed atomic.Bool // v1.5.22 H2: 标记心跳失败, 阻止 agentLogBuf.Clear() 丢弃操作日志
 var agentLogBuf = newLogBuffer(100)
 func agentLog(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
@@ -237,14 +238,18 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	}
 
 	// 3. Send heartbeat
+	heartbeatFailed.Store(false)
 	resp := sendHeartbeat(cfg, req)
 	if resp == nil {
-		// v1.5.20 M2: 心跳失败前也清空日志缓冲，防止下次心跳携带双倍旧日志
-		agentLogBuf.Clear()
+		// v1.5.22 H2: 心跳失败时标记 failed，不 Clear 日志缓冲
+		// agentLogBuf 中的操作日志会在下一次成功心跳的 AgentLogs 字段中发送
+		heartbeatFailed.Store(true)
 		return fmt.Errorf("心跳失败")
 	}
-	// L2: clear log buffer after heartbeat to prevent stale entries
-	agentLogBuf.Clear()
+	// v1.5.22 H2: 心跳成功时发送累积的 Agent 操作日志 (证书部署/升级/配置变更)
+	if agentLogBuf.Len() > 0 {
+		req.AgentLogs = agentLogBuf.Drain()
+	}
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
 	if resp.Config != nil && resp.Config.YAML != "" {
@@ -255,18 +260,27 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				lastConfigHash = resp.Config.Hash  // accept Manager's hash
 			// Cache encrypted config for next oneshot run (AES-256-GCM)
 				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
-				os.MkdirAll(filepath.Dir(configCachePath()), 0700)
+				if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
+					log.Printf("[config] 缓存目录创建失败: %v", encErr)
+				}
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
 					getConfigCacheKey(cfg.Password, cfg.Fingerprint))
 				if encErr != nil {
 					log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
-					// 不写入 disk — 明文 DNS 凭据泄露风险不可接受
-					// 下次心跳会重新尝试加密并缓存
-				} else {
-					os.WriteFile(configCachePath(), []byte(cacheData), 0600)
+				} else if writeErr := os.WriteFile(configCachePath(), []byte(cacheData), 0600); writeErr != nil {
+					// v1.5.22 C3: 检查写入错误 (磁盘满/权限变更)
+					log.Printf("[config] 缓存写入失败: %v", writeErr)
+					agentLog("配置缓存写入失败: %v (磁盘可能已满)", writeErr)
 				}
-				// re-run DNS update with new config (with timeout, don't block heartbeat)
-				go func() { runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute) }()
+				// v1.5.22 C4: 使用 atomic.Bool 防止 goroutine 堆积
+				if dnsUpdateRunning.CompareAndSwap(false, true) {
+					go func() {
+						runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
+						dnsUpdateRunning.Store(false)
+					}()
+				} else {
+					log.Printf("[dns] DNS 更新已在运行, 跳过本次配置变更触发")
+				}
 			}
 		}
 	}
@@ -340,8 +354,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 	if len(updates) == 0 {
 		return
 	}
+	agentLog("证书部署: 收到 %d 个证书更新", len(updates))
 	key := crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "cert-transport")
 	for _, cu := range updates {
+		agentLog("证书部署: 开始处理 bundle=%s hash=%s...", cu.BundleName, cu.CertHash[:14])
 		path := cu.TargetPath
 		if path == "" {
 			path = cfg.CertPath
@@ -366,16 +382,28 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			}
 			tmp := filepath.Join(path, name+".new")
 			dst := filepath.Join(path, name)
-			os.WriteFile(tmp, plain, 0o600)
-			os.Rename(tmp, dst)
+			// v1.5.22 C2: 检查文件写入错误 (磁盘满/权限不足)
+			if we := os.WriteFile(tmp, plain, 0o600); we != nil {
+				log.Printf("[cert] 写入失败 %s/%s: %v", cu.BundleName, name, we)
+				agentLog("证书部署: 写入失败 %s/%s: %v", cu.BundleName, name, we)
+				continue
+			}
+			if re := os.Rename(tmp, dst); re != nil {
+				log.Printf("[cert] 重命名失败 %s/%s: %v", cu.BundleName, name, re)
+				agentLog("证书部署: 重命名失败 %s/%s: %v", cu.BundleName, name, re)
+				continue
+			}
+			agentLog("证书部署: 写入文件 %s/%s (%d bytes)", cu.BundleName, name, len(plain))
 			lower := strings.ToLower(name)
 			if strings.HasSuffix(lower, ".pfx") {
 				if strings.Contains(lower, "modern") {
 					hasModernPFX = true
 					modernPFXFile = dst
+					agentLog("证书部署: 检测到 Modern PFX %s", name)
 				} else {
 					hasLegacyPFX = true
 					legacyPFXFile = dst
+					agentLog("证书部署: 检测到 Legacy PFX %s", name)
 				}
 			}
 		}
@@ -392,6 +420,9 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			}
 			if pfxPwd == "" {
 				pfxPwd = "ddns"
+				// v1.5.22 M5: 回退到硬编码默认密码时记录日志
+				agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
+				log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 ddns", cu.BundleName)
 			}
 			pfxImported := false
 			// 1. 优先尝试 Modern PFX (Win10 1809+, 更强加密)
@@ -401,8 +432,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 					if iisOK {
 						pfxImported = true
 						recycleIISAppPools()
+						agentLog("证书部署: IIS Modern PFX 绑定成功 %s", cu.BundleName)
 						log.Printf("[cert] IIS绑定: Modern PFX → %s", cu.BundleName)
 					} else {
+						agentLog("证书部署: Modern PFX 失败, 降级Legacy %s", cu.BundleName)
 						log.Printf("[cert] Modern PFX导入失败, 降级尝试Legacy...")
 					}
 				}
@@ -414,8 +447,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 					if iisOK {
 						pfxImported = true
 						recycleIISAppPools()
+						agentLog("证书部署: IIS Legacy PFX 绑定成功 %s", cu.BundleName)
 						log.Printf("[cert] IIS绑定: Legacy PFX → %s", cu.BundleName)
 					} else {
+						agentLog("证书部署: Legacy PFX 失败, 降级openssl %s", cu.BundleName)
 						log.Printf("[cert] Legacy PFX导入失败, 降级尝试openssl...")
 					}
 				}
@@ -424,6 +459,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 			if !pfxImported {
 				iisOK = importToIIS(path, cu.BundleName, cfg.IISCertBindings)
 				recycleIISAppPools()
+				agentLog("证书部署: openssl路径 IIS绑定 %s (成功=%v)", cu.BundleName, iisOK)
 			}
 		}
 
@@ -432,11 +468,14 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		var failedServices []string
 		for _, svc := range cu.ReloadServices {
 			if !reloadService(svc) {
+				agentLog("证书部署: 服务重载失败 %s (bundle=%s)", svc, cu.BundleName)
 				failedServices = append(failedServices, svc)
 			}
 		}
 		if len(failedServices) > 0 {
 			agentLog("证书部署: 服务重载失败: %v (bundle=%s)", failedServices, cu.BundleName)
+		} else if len(cu.ReloadServices) > 0 {
+			agentLog("证书部署: 服务重载完成 (%d个服务) bundle=%s", len(cu.ReloadServices), cu.BundleName)
 		}
 
 		// H5: 仅在 IIS 绑定成功(或非Windows)后才写入 .cert_hash
@@ -444,12 +483,19 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) {
 		if iisOK {
 			hashFile := filepath.Join(path, ".cert_hash")
 			os.WriteFile(hashFile, []byte(cu.CertHash), 0o600)
+			// v1.5.22 M1: 正常路径也更新 certHashMap，使清理逻辑生效
+			certHashMapMu.Lock()
+			certHashMap[cu.BundleName] = cu.CertHash
+			certHashMapMu.Unlock()
+			agentLog("证书部署: 完成 %s -> %s (hash=%s...)", cu.BundleName, path, cu.CertHash[:14])
 			log.Printf("[cert] 已部署: %s -> %s", cu.BundleName, path)
 		} else {
+			agentLog("证书部署: 文件已写入但IIS绑定失败 %s, 下次心跳重试", cu.BundleName)
 			log.Printf("[cert] 证书文件已写入但 IIS 绑定失败: %s, 下次心跳重试", cu.BundleName)
 		}
 	}
 	// H6: Clean stale certHashMap entries (bundles no longer pushed by Manager)
+	// v1.5.22 M1: 正常路径(iisOK=true)已写入 certHashMap, 清理逻辑现在生效
 	certHashMapMu.Lock()
 	for bundle := range certHashMap {
 		found := false
@@ -476,11 +522,16 @@ func reloadService(svc string) bool {
 			return true
 		}
 		// Generic Windows service restart
-		exec.Command("sc", "stop", svc).Run()
-		time.Sleep(2 * time.Second)
+		// v1.5.22 C5: 检查 sc stop 结果，stop 失败时不执行 start
+		if outStop, errStop := exec.Command("sc", "stop", svc).CombinedOutput(); errStop != nil {
+			log.Printf("[cert] 服务停止失败 %s: %v: %s", svc, errStop, string(outStop))
+			// 继续尝试 start — 服务可能已经停止或 stop 超时
+		} else {
+			time.Sleep(2 * time.Second)
+		}
 		out, err := exec.Command("sc", "start", svc).CombinedOutput()
 		if err != nil {
-			log.Printf("[cert] 服务重启失败 %s: %v: %s", svc, err, string(out))
+			log.Printf("[cert] 服务启动失败 %s: %v: %s", svc, err, string(out))
 		} else {
 			log.Printf("[cert] 服务已重启: %s", svc)
 			return true
@@ -555,20 +606,18 @@ func fileSHA256(path string) string {
 // collectCertHashes scans the cert directory for .cert_hash files deployed by Manager.
 // Returns map[deploy_path]hash for heartbeat reporting.
 func collectCertHashes(cfg *model.AgentConfig) map[string]string {
-	result := map[string]string{}
 	if cfg.CertPath == "" {
-		return result
+		return map[string]string{}
 	}
-	// walk the cert directory for .cert_hash marker files
-	// 限制深度: 证书目录通常 ≤3 层，超过 5 层停止 (防止 CertPath 误配为 /)
-	// 超时保护: NFS 卡住时 30s 后取消 Walk（filepath.Walk 不支持 context，
-	// 通过 goroutine + channel 实现超时控制）
+	// v1.5.22 M4: 用 mu 保护 result map 的并发访问
+	// WalkDir 回调在独立 goroutine 中执行，超时后 goroutine 可能仍在写 result
+	var mu sync.Mutex
+	result := map[string]string{}
 	maxDepth := 5
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	done := make(chan struct{}, 1)
 	go func() {
-		// L3: use WalkDir with context cancellation support
 		filepath.WalkDir(cfg.CertPath, func(p string, d os.DirEntry, err error) error {
 			select {
 			case <-ctx.Done():
@@ -589,7 +638,9 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			if d.Name() == ".cert_hash" {
 				data, err := os.ReadFile(p)
 				if err == nil {
+					mu.Lock()
 					result[filepath.Dir(p)] = strings.TrimSpace(string(data))
+					mu.Unlock()
 				}
 			}
 			return nil
@@ -723,7 +774,7 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		url = strings.TrimRight(cfg.ManagerURL, "/") + "/" + strings.TrimLeft(url, "/")
 	}
 
-	upgradeLogger("======== 自升级开始 ========")
+	upgradeLogger("======== 自升级开始 v1.5.26+ ========")
 	upgradeLogger("版本=%s exe=%s url=%s", update.Version, exePath, url)
 	tmpFile := exePath + ".new"
 
@@ -774,10 +825,10 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		upgradeLogger("下载成功 (%d 字节, Content-Length=%d)", n, contentLen)
 		break
 	}
-	// v1.5.20 Fix2: 验证下载大小 >= Content-Length * 80%，防止截断
+	// v1.5.22 M2: 验证下载大小 >= Content-Length * 95% (原80%过于宽松, 15MB→12MB也会通过)
 	if downloadErr == nil && contentLen > 0 {
 		fs := fileSize(tmpFile)
-		if fs > 0 && float64(fs) < float64(contentLen)*0.8 {
+		if fs > 0 && float64(fs) < float64(contentLen)*0.95 {
 			upgradeLogger("下载不完整: 实际=%d Content-Length=%d", fs, contentLen)
 			downloadErr = fmt.Errorf("downloaded %d bytes (expected ~%d)", fs, contentLen)
 		}

@@ -337,6 +337,10 @@ func (m *Manager) ListLogFiles() []map[string]interface{} {
 
 // rotateIfNeeded rotates the log file if it exceeds maxFileMB.
 func (m *Manager) rotateIfNeeded() {
+	// v1.5.22 M3: debounce — 5分钟内已轮转过则跳过，防止连续轮转
+	if time.Since(m.lastRotate) < 5*time.Minute {
+		return
+	}
 	info, err := m.file.Stat()
 	if err != nil {
 		return

@@ -242,12 +242,45 @@ func (lb *LogBuffer) Write(msg string) {
 	lb.pos++
 }
 
-// Clear empties the log buffer (L2: prevent stale log accumulation).
+// Clear empties the log buffer.
 func (lb *LogBuffer) Clear() {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 	lb.buf = make([]string, lb.size)
 	lb.pos = 0
+}
+
+// Len returns the number of entries currently in the buffer.
+func (lb *LogBuffer) Len() int {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	total := lb.pos
+	if total > lb.size {
+		total = lb.size
+	}
+	return total
+}
+
+// Drain returns all buffered entries and clears the buffer atomically.
+// v1.5.22 H2: 心跳成功时一次性取出 + 清空，避免丢日志。
+func (lb *LogBuffer) Drain() []string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	total := lb.pos
+	if total > lb.size {
+		total = lb.size
+	}
+	result := make([]string, 0, total)
+	start := lb.pos - total
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < lb.pos; i++ {
+		result = append(result, lb.buf[i%lb.size])
+	}
+	lb.buf = make([]string, lb.size)
+	lb.pos = 0
+	return result
 }
 
 func (lb *LogBuffer) Recent(n int) []string {

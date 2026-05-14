@@ -122,7 +122,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 						shouldPush = false
 					}
 					if t, err := time.Parse(time.RFC3339, job.Triggered); err == nil {
-						if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 30*time.Minute {
+						if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 10*time.Minute {
+						// v1.5.22 H1: 退避窗口 10 分钟 (≥2 心跳周期)
 							shouldPush = false
 						}
 					}
@@ -219,9 +220,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: binding.DeployPath,
 			ReloadServices: binding.ReloadServices, // v1.5.20 C1: 传播证书部署后需重载的服务列表
-			PFXPassword: bundle.PFXPassword,        // v1.5.20: 传播证书级 PFX 密码
+			PFXPassword: bundle.PFXPassword,        // v1.5.22 H3: 若为空 Agent 回退到默认密码
 		})
-		// H1: 证书下发成功记录审计日志，运维可追踪证书分发到哪些节点
+		// v1.5.22 H3: PFX 密码为空时记录日志
+		if bundle.PFXPassword == "" {
+			s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
+				fmt.Sprintf("bundle=%s (无PFX密码,Agent将用默认ddns) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
+		}
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
 			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], binding.DeployPath), "success")
 	}
@@ -237,7 +242,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, _ := s.store.LoadNodes()
 	// 超时检测: 超过5分钟未心跳的节点标记为不在线
 	// （dashboard用handleStats独立计算，这里统一节点列表口径）
-	now := time.Now()
+	now := s.nowInTZ()  // v1.5.22 H4: 使用配置时区，与心跳时间源一致
 	for _, n := range nodes {
 		if n.Status.DDNSHealth != nil && now.Sub(n.LastSeen) > 5*time.Minute {
 			n.Status.DDNSHealth.Running = false
@@ -316,10 +321,12 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.ConfigYAML = string(data)
-	// M6: nil=保留, empty slice=清空: 同步 ConfigYAML 中的 cert_bindings
-	// 防止 ConfigYAML 已为 [] 但 CertBindings 残留旧值导致持续推送
+	// v1.5.22 H5: nil=保留, empty slice=清空
+	// CertBindings 优先于 ConfigYAML 中的 cert_bindings 用于证书推送判定
 	if req.CertBindings != nil && len(req.CertBindings) == 0 {
 		rec.CertBindings = nil  // 显式清空
+		// 注: ConfigYAML 中可能残留旧 cert_bindings JSON, 但不影响证书推送逻辑
+		// (Manager 使用 rec.CertBindings, 非解析 ConfigYAML)
 	} else if req.CertBindings != nil {
 		rec.CertBindings = req.CertBindings
 	}

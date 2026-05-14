@@ -16,29 +16,22 @@ import (
 
 // replaceRunningBinary replaces the currently running executable on Windows.
 //
-// C3 FIX: The original implementation had a race condition where the Go process
-// called os.Exit(0) before the detached batch script executed sc stop. SCM
-// detected the process exit and immediately restarted the old binary, locking
-// the file and causing move /y to fail silently.
+// v1.5.23 CRITICAL FIX: The original approach of calling stopServiceSync from within
+// the service process caused a deadlock: sc stop → SCM sends stop to handler →
+// handler tries to return → svc.Run exits → main returns → process killed before
+// the batch script could be written or launched.
 //
-// FIXED flow:
-//   1. Synchronously stop the service (sc stop + poll until STOPPED, max 30s)
-//   2. Write and launch a detached batch script that moves the new binary over
-//      the old one, then starts the service
-//   3. Go process exits — SCM won't restart because the service is already stopped
-//
-// M3 FIX: Batch script now verifies the move succeeded and restores the old binary
-// from a backup on failure, preventing permanent node offline.
-//
-// The version parameter is accepted for signature compatibility with Linux but ignored
-// on Windows (the binary filename is managed by the batch script's move command).
+// v1.5.24 FIX: Write and launch the batch script FIRST, then exit. The batch script
+// handles the full stop→replace→start cycle as a detached process:
+//   1. Disable auto-start → stop service → poll STOPPED
+//   2. Replace binary → verify → rollback on failure
+//   3. Re-enable auto-start → start service
+// The Go process exits after launching the batch (SCM restarts automatically).
 func replaceRunningBinary(curExe, newExe, version string) error {
-	// v1.5.20: 详细步骤日志，写入 %TEMP%\ddns_upgrade_agent.log
-	upgradeLogger("Phase1: 停止服务 node-agent")
+	upgradeLogger("Phase1: 写升级批处理并启动")
 	dir := filepath.Dir(curExe)
 
 	// Escape paths for batch file — reject paths with shell metacharacters to prevent command injection.
-	// Valid Windows install paths should only contain safe ASCII characters.
 	for _, p := range []string{curExe, newExe} {
 		if strings.ContainsAny(p, "&|<>^%\"") {
 			upgradeLogger("路径安全检查失败: %s", p)
@@ -46,58 +39,68 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		}
 	}
 
-	// === Phase 1: Synchronously stop the service BEFORE launching detached batch ===
-	// This eliminates the race: when the Go process exits, SCM sees the service
-	// is already stopped and won't try to restart the old binary.
-	upgradeLogger("Phase1: stopServiceSync 完成")
-	stopServiceSync("node-agent", 30*time.Second)
-
-	// === Phase 2: Write detached batch script ===
-	// At this point the service IS stopped, so the old .exe is not locked.
+	// Step 1: Write batch script BEFORE anything else — even if the process dies,
+	// the batch is on disk and can be triggered manually or by the next heartbeat retry.
 	scriptPath := filepath.Join(dir, "agent_upgrade.bat")
 	upgradeLogger("Phase2: 写升级批处理 %s", scriptPath)
+	// v1.5.22 设计说明: 升级日志写入安装目录 (ddns_upgrade.log) 而非 %%TEMP%%
+	// 原因: 1) 软件未通过微软审核, 安装目录已设 AV 排除路径
+	//       2) 实测 %%TEMP%% 在部分系统环境变量异常时定位失败/不可访问
 
-	// M3: Batch script with rollback — backup old binary, move new over old,
-	// verify the move, restore from backup on failure.
 	script := fmt.Sprintf("@echo off\r\n"+
 		"setlocal enabledelayedexpansion\r\n"+ // v1.5.20 C2: 延时变量展开
 		"set OLD=%s\r\n"+
 		"set NEW=%s\r\n"+
 		"set BAK=%s.old.bak\r\n"+
-		"echo [ddns] Upgrading...\r\n"+
-		// Backup old binary for rollback
-		"move /y \"%%OLD%%\" \"%%BAK%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 升级日志可诊断
-		// Move new binary into place
-		"move /y \"%%NEW%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 升级日志可诊断
-		// M3: Verify new binary exists and has expected size
+		"echo [ddns] Upgrading to v%s...\r\n"+
+		// Step 1: Disable auto-start (prevent SCM from restarting old binary)
+		"sc config node-agent start= disabled >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// Step 2: Stop service
+		"sc stop node-agent >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// Step 3: Poll until STOPPED (max 60s)
+		"set COUNT=0\r\n"+
+		":poll\r\n"+
+		"  timeout /t 2 /nobreak >nul\r\n"+
+		"  sc query node-agent | find \"STOPPED\" >nul\r\n"+
+		"  if not errorlevel 1 goto :replace\r\n"+
+		"  set /a COUNT+=1\r\n"+
+		"  if !COUNT! LSS 30 goto :poll\r\n"+
+		// Stop timeout: force kill
+		"  echo [ddns] Force killing...\r\n"+
+		"  taskkill /f /im node-agent.exe 2>nul\r\n"+
+		"  timeout /t 3 /nobreak >nul\r\n"+
+		":replace\r\n"+
+		// Step 4: Backup old binary
+		"move /y \"%%OLD%%\" \"%%BAK%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// Step 5: Move new binary into place
+		"move /y \"%%NEW%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// Step 6: Verify new binary exists and has expected size
 		"if exist \"%%OLD%%\" (\r\n"+
 		"  for %%%%A in (\"%%OLD%%\") do set NEWSIZE=%%%%~zA\r\n"+
 		"  if !NEWSIZE! GTR 1024 (\r\n"+
-		"    echo [ddns] Upgrade OK, starting service...\r\n"+
-		"    sc start node-agent\r\n"+
+		"    echo [ddns] Upgrade OK\r\n"+
 		"    del \"%%BAK%%\" 2>nul\r\n"+
-		"    goto :done\r\n"+
+		"    goto :start_service\r\n"+
 		"  )\r\n"+
 		")\r\n"+
-		// M3: Rollback — new binary failed, restore from backup
+		// Step 7: Rollback — new binary verification failed
 		"echo [ddns] Upgrade FAILED, rolling back...\r\n"+
-		"move /y \"%%BAK%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+ // v1.5.20 C3: 回滚日志可诊断
-		"sc start node-agent\r\n"+
+		"move /y \"%%BAK%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		":start_service\r\n"+
+		// Step 8: Re-enable auto-start and start service
+		"sc config node-agent start= auto >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		"sc start node-agent >>\"ddns_upgrade.log\" 2>&1\r\n"+
 		":done\r\n"+
 		"del \"%%~f0\" & exit\r\n",
-		curExe, newExe, curExe)
+		curExe, newExe, curExe, version)
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
-		// If script write fails, restart the service (we already stopped it)
 		upgradeLogger("批处理写入失败: %v", err)
-		startServiceSafe("node-agent")
 		return fmt.Errorf("write upgrade script: %w", err)
 	}
 
-	// === Phase 3: Launch detached batch process ===
-	// Pass cmd /c as the command line, nil app name.
-	// The batch script will move the binary, verify, and restart the service.
-	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`cmd /c "%s"`, scriptPath)) // v1.5.22: 单层引号, 避免CMD误解析
+	// Step 2: Launch detached batch process
+	cmdLine, _ := windows.UTF16PtrFromString(fmt.Sprintf(`cmd /c "%s"`, scriptPath))
 
 	var si windows.StartupInfo
 	var pi windows.ProcessInformation
@@ -107,17 +110,14 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 
 	upgradeLogger("Phase3: 启动分离进程执行批处理...")
 	err := windows.CreateProcess(
-		nil, // lpApplicationName
-		cmdLine, // lpCommandLine
+		nil, cmdLine,
 		nil, nil, false,
 		windows.CREATE_NO_WINDOW,
 		nil, nil,
 		&si, &pi,
 	)
 	if err != nil {
-		// If CreateProcess fails, restart the service with old binary
-		upgradeLogger("CreateProcess失败: %v", err)
-		startServiceSafe("node-agent")
+		upgradeLogger("CreateProcess失败: %v (批次脚本已写入 %s)", err, scriptPath)
 		return fmt.Errorf("create detached process: %w", err)
 	}
 

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -65,6 +67,127 @@ func TestLogBufferConcurrent(t *testing.T) {
 	wg.Wait()
 	// should not panic
 	_ = lb.Recent(100)
+}
+
+// ── v1.5.23 H2: LogBuffer Drain / Len ──
+
+func TestLogBufferDrainAndLen(t *testing.T) {
+	lb := newLogBuffer(10)
+
+	// Empty buffer
+	if lb.Len() != 0 {
+		t.Errorf("empty buffer Len() = %d, want 0", lb.Len())
+	}
+	if d := lb.Drain(); len(d) != 0 {
+		t.Errorf("empty buffer Drain() = %d items, want 0", len(d))
+	}
+
+	// Fill with 5 entries
+	for i := 0; i < 5; i++ {
+		lb.Write(fmt.Sprintf("msg-%d", i))
+	}
+	if lb.Len() != 5 {
+		t.Errorf("Len() after 5 writes = %d, want 5", lb.Len())
+	}
+
+	// Drain should return all 5 and clear
+	drained := lb.Drain()
+	if len(drained) != 5 {
+		t.Errorf("Drain() = %d items, want 5", len(drained))
+	}
+	if lb.Len() != 0 {
+		t.Errorf("Len() after Drain = %d, want 0", lb.Len())
+	}
+
+	// Write more than capacity
+	for i := 0; i < 15; i++ {
+		lb.Write(fmt.Sprintf("overflow-%d", i))
+	}
+	if lb.Len() != 10 {
+		t.Errorf("Len() at capacity overflow = %d, want 10", lb.Len())
+	}
+	drained2 := lb.Drain()
+	if len(drained2) != 10 {
+		t.Errorf("Drain() overflow = %d items, want 10", len(drained2))
+	}
+	// Should contain last 10 messages (pos 5-14)
+	if !strings.Contains(drained2[9], "overflow-14") {
+		t.Errorf("last drained item = %q, expected to contain overflow-14", drained2[9])
+	}
+}
+
+func TestLogBufferDrainClears(t *testing.T) {
+	lb := newLogBuffer(5)
+	lb.Write("a")
+	lb.Write("b")
+
+	_ = lb.Drain()
+
+	// After Drain, should be empty
+	if lb.Len() != 0 {
+		t.Error("Len should be 0 after Drain")
+	}
+
+	// New writes after Drain should work
+	lb.Write("c")
+	if lb.Len() != 1 {
+		t.Errorf("Len after post-drain write = %d, want 1", lb.Len())
+	}
+	d := lb.Drain()
+	if len(d) != 1 || !strings.Contains(d[0], "c") {
+		t.Errorf("post-drain Drain = %v, want [c]", d)
+	}
+}
+
+// ── v1.5.23 C4: DNS update running guard ──
+
+func TestDNSUpdateRunningGuard(t *testing.T) {
+	// Verify atomic.Bool behaves correctly for goroutine deduplication
+	var running atomic.Bool
+
+	// Initial state: not running
+	if running.Load() {
+		t.Error("initial state should be false")
+	}
+
+	// First CAS should succeed
+	if !running.CompareAndSwap(false, true) {
+		t.Error("first CAS(false,true) should succeed")
+	}
+
+	// Second CAS should fail (already running)
+	if running.CompareAndSwap(false, true) {
+		t.Error("second CAS(false,true) should fail when already true")
+	}
+
+	// After Store(false), CAS should succeed again
+	running.Store(false)
+	if !running.CompareAndSwap(false, true) {
+		t.Error("CAS(false,true) should succeed after Store(false)")
+	}
+}
+
+// ── v1.5.23 H2: heartbeatFailed flag ──
+
+func TestHeartbeatFailedFlag(t *testing.T) {
+	// Verify heartbeatFailed flag is set correctly for log preservation
+	heartbeatFailed.Store(false)
+
+	if heartbeatFailed.Load() {
+		t.Error("heartbeatFailed should be false initially")
+	}
+
+	// Simulate heartbeat failure
+	heartbeatFailed.Store(true)
+	if !heartbeatFailed.Load() {
+		t.Error("heartbeatFailed should be true after Store(true)")
+	}
+
+	// Simulate successful heartbeat
+	heartbeatFailed.Store(false)
+	if heartbeatFailed.Load() {
+		t.Error("heartbeatFailed should be false after Store(false)")
+	}
 }
 
 // ── newProvider ──

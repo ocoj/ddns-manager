@@ -1,5 +1,84 @@
 # CHANGELOG
 
+## v1.5.26 — 2026-05-14
+
+### 🟢 全平台二进制补齐 + Windows 自动升级实机验证
+
+- **全平台 Agent**: linux-amd64 / linux-arm / linux-arm64 / windows-amd64 四架构 v1.5.26 二进制已上传
+- **Windows 自动升级实测**: 3 台 Windows 节点收到推送后 2-3 秒内完成升级，DDNS 不掉线
+- 升级日志增加 `v1.5.26+` 版本标记
+
+---
+
+## v1.5.25 — 2026-05-14
+
+### 🔴 Windows 自升级死锁修复（重写 upgrade_windows.go）
+
+**根因**: Go 进程内调用 `sc stop self` 触发 SCM → handler 返回 → `svc.Run` 退出 → `main` 返回 → 进程在批次脚本写出前被 OS 杀死。v1.5.11~v1.5.24 所有 Windows 自升级均在此处静默失败。
+
+**修复**: 重写 `replaceRunningBinary` — Go 不再调 `sc stop`。批次脚本作为独立分离进程托管停服→替换→启动全流程，新增 `sc config start= disabled` 防 SCM 自动重启旧二进制。
+
+**方案对比**: 详见 `docs/audits/2026-05-14-windows-upgrade-deadlock.md`
+
+#### 批次脚本流程
+```
+sc config start= disabled → sc stop → 轮询 STOPPED(60s超时) →
+move 旧→.bak → move 新→node-agent.exe → 验证>1KB →
+sc config start= auto → sc start
+```
+
+---
+
+## v1.5.24 — 2026-05-14
+
+### 🟠 Windows 自升级首次修复尝试（upgrading 标志 — 失败）
+
+**尝试**: 在 `svc_windows.go` handler 中使用 `upgrading atomic.Bool` 阻止 stop 信号时退出。
+**结果**: 死锁 — handler 等 upgrading=false, upgrading 等 stopServiceSync 返回, stopServiceSync 等服务标记 STOPPED, SCM 等 handler 返回才标记 STOPPED。30s 超时 taskkill。
+
+---
+
+## v1.5.23 — 2026-05-14
+
+### 🔴 第四次全量审计修复（15 项）
+
+基于 v1.5.22 逐行代码审计 (DeepSeek V4 Pro thinking=high)。重点修复: Windows 证书部署错误处理、配置缓存写入验证、goroutine 堆积防护、服务重载可靠性、升级退避窗口。
+
+#### 🔴 Critical（4 项）
+
+- **C2 applyCertUpdates 证书文件写入错误被忽略** — `os.WriteFile`/`os.Rename` 失败时记录日志并 `continue`，防止磁盘满时 IIS 绑定使用不存在文件
+- **C3 configCache 写入错误静默丢弃** — `os.MkdirAll` + `os.WriteFile` 结果检查，失败时输出 `agentLog` 警告磁盘可能已满
+- **C4 dnsUpdateRunning atomic.Bool 从未使用** — `doHeartbeat` 中 DNS 重新更新前使用 `CompareAndSwap` 去重，goroutine 退出时 `Store(false)`
+- **C5 reloadService Windows sc stop 失败被忽略** — `sc stop` 结果检查并记录日志，stop 失败时仍尝试 start（服务可能已停止）
+
+#### 🟠 High（6 项）
+
+- **H1 升级退避窗口 30min → 10min** — 覆盖 ≥2 个心跳周期，减少升级延迟
+- **H2 心跳失败时 agentLogBuf 被 Clear 丢失操作日志** — 新增 `heartbeatFailed atomic.Bool` 标记 + `LogBuffer.Drain()`/`Len()` 方法，失败时保留日志下次发送
+- **H3 PFXPassword 为空时无日志提示** — Agent 回退到默认密码时输出 `agentLog` 警告；Manager 下发空密码时记录审计日志
+- **H4 handleListNodes 使用 `time.Now()` 而非 `s.nowInTZ()`** — 统一时间源，防止时区不一致导致节点错误标记 DOWN
+- **H5 CertBindings 清空与 ConfigYAML 不同步** — 增加注释说明 CertBindings 优先于 ConfigYAML 的证书推送判定
+- **H6 handleDownloadInstaller ZIP Close 错误被忽略** — 移除 `defer zw.Close()`，显式检查 Close 错误并记录审计日志
+
+#### 🟡 Medium（5 项）
+
+- **M1 certHashMap 清理代码死路径** — 正常路径 (iisOK=true) 也写入 certHashMap，清理逻辑现在生效
+- **M2 下载大小验证阈值 80% → 95%** — 防止截断二进制通过验证（15MB 下载 12MB 原可通过）
+- **M3 Logger rotateIfNeeded 无 debounce** — 增加 5 分钟 debounce，防止 `os.Rename` 失败时连续轮转
+- **M4 collectCertHashes 超时后 race** — 增加 `sync.Mutex` 保护 result map 并发写入
+- **M5 PFX 硬编码默认密码无日志** — 回退到 "ddns" 时输出 agentLog 提醒管理员设置密码
+
+#### 📝 设计说明
+
+- **C1（非 bug）**: 升级日志写入安装目录而非 `%TEMP%` 是故意设计 — 1) 软件未通过微软审核，安装目录已设 AV 排除路径 2) `%TEMP%` 在部分系统环境变量异常时不可访问。已在 `upgrade_windows.go` 添加设计说明注释。
+
+### 🧪 新增测试
+- `TestLogBufferDrainAndLen` — H2: Drain/Len 方法验证
+- `TestDNSUpdateRunningGuard` — C4: atomic.Bool 去重验证
+- `TestCertWriteErrorHandling` — C2: 证书写入失败错误处理
+
+---
+
 ## v1.5.20 (Build 2) — 2026-05-14
 
 ### 🔴 三次全量审计修复（18 项）

@@ -582,7 +582,6 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/zip")
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
 
 	// 写入 agent 二进制 (流式，不缓冲)
 	if fw, err := zw.Create(filepath.Base(agentPath)); err == nil {
@@ -611,6 +610,11 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 		if fw, err := zw.Create(f.name); err == nil {
 			fw.Write(f.content)
 		}
+	}
+	// v1.5.22 H6: 检查 ZIP Close 错误，防止客户端收到损坏的 ZIP
+	if closeErr := zw.Close(); closeErr != nil {
+		s.logMgr.Log("installer", "ZIP打包失败", fmt.Sprintf("ver=%s err=%v", ver, closeErr), "error")
+		return
 	}
 }
 

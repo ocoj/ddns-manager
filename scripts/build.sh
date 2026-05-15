@@ -83,6 +83,8 @@ build_windows() {
 
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
     echo "  ✅ $ver_out (versioned)"
+    sha256sum "$ver_out" | while read h f; do echo "$h  $(basename "$f")"; done > "${ver_out}.sha256"
+    echo "  ✅ ${ver_out}.sha256"
 
     # code signing
     if [ -n "$SIGNCERT_FILE" ] && [ -f "$SIGNCERT_FILE" ]; then
@@ -131,6 +133,8 @@ build_linux() {
     chmod +x "$out" "$ver_out"
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
     echo "  ✅ $ver_out (versioned)"
+    sha256sum "$ver_out" | while read h f; do echo "$h  $(basename "$f")"; done > "${ver_out}.sha256"
+    echo "  ✅ ${ver_out}.sha256"
 }
 
 # ── Manager (Linux only) ──
@@ -152,6 +156,8 @@ build_manager() {
     chmod +x "$out" "$ver_out"
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
     echo "  ✅ $ver_out (versioned)"
+    sha256sum "$ver_out" | while read h f; do echo "$h  $(basename "$f")"; done > "${ver_out}.sha256"
+    echo "  ✅ ${ver_out}.sha256"
 }
 
 # ── Installer ──

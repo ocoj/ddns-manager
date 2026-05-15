@@ -57,9 +57,9 @@
   - `selfUpgrade` 增加 `compareSemVer` 版本比较 — 推送版本 ≤ 当前 → 拒绝降级并记录日志
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.5.32 ✅
-- Client A Linux (10.0.0.2): v1.5.32 ✅
-- Client B Windows (10.0.0.3): 新二进制已上传，等待心跳自动升级（含 certutil 修复）
+- Manager (10.0.0.1): v1.5.33 ✅
+- Client A Linux (10.0.0.2): v1.5.33 ✅
+- Client B Windows (10.0.0.3): v1.5.33 已推送 ✅ (修复 Win10 START_PENDING 卡死)
 
 ---
 

@@ -1462,8 +1462,17 @@ func autoBindExisting(thumb, certCN string) {
 			}
 			matchScore, matchReason = fitsBinding(host, certCN)
 		} else if !b.isSNI && !hasSNI {
+			// v1.6.9: IP绑定只在单站(仅1个IP绑定)时自动更新, 多IP绑定时跳过防误覆盖
+			ipCount := 0
+			for _, bb := range bindings {
+				if !bb.isSNI { ipCount++ }
+			}
+			if ipCount > 1 {
+				agentLog("证书部署: 跳过IP绑定 %s (%d个IP绑定, 防止多站点误覆盖, 请手动绑定)", b.key, ipCount)
+				continue
+			}
 			matchScore = 10
-			matchReason = "默认IP绑定(无SNI站点)"
+			matchReason = "默认IP绑定(单站点)"
 		}
 		if matchScore == 0 {
 			continue

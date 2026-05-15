@@ -3,12 +3,18 @@ package notify
 
 import (
 	"crypto/tls"
+	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/smtp"
 	"strings"
 	"time"
 )
+
+//go:embed email-logo.png
+var emailLogoPNG []byte
+var emailLogoBase64 = "data:image/png;base64," + base64.StdEncoding.EncodeToString(emailLogoPNG)
 
 // Config holds SMTP connection settings.
 type Config struct {
@@ -126,7 +132,7 @@ func wrapHTML(subject, body string) string {
 <html><head><meta charset="UTF-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
 <div style="text-align: center; padding: 20px 0; border-bottom: 3px solid #2563eb;">
-  <div style="font-size: 28px; font-weight: 700; color: #2563eb;">🦐 DDNS-Manager</div>
+  <img src="%s" alt="DDNS-Manager" style="height: 48px; margin-bottom: 8px;">
   <div style="font-size: 13px; color: #888; margin-top: 4px;">智能 DNS 管理平台</div>
 </div>
 <div style="padding: 24px 16px; line-height: 1.8; font-size: 15px;">
@@ -136,7 +142,7 @@ func wrapHTML(subject, body string) string {
   此邮件由 DDNS-Manager 系统自动发送，请勿回复。<br>
   Powered by ddns-manager | Lanxun CO.,Ltd.
 </div>
-</body></html>`, htmlBody)
+</body></html>`, emailLogoBase64, htmlBody)
 }
 
 // managerURL returns the configured management URL for email links.

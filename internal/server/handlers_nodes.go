@@ -189,6 +189,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 						job.TargetVer = agentCfg.LatestVersion
 						job.Triggered = now.Format(time.RFC3339)
 						job.RetryCount++
+						job.Completed = "" // v1.5.33: 清除旧版本完成标记, 避免新推送立即被过滤
 						agentCfg.UpgradeState[nodeID] = job
 					} else {
 						// H4: log missing binary for ops troubleshooting

@@ -28,13 +28,22 @@ type HeartbeatReq struct {
 }
 
 type NodeStatus struct {
-	AgentVersion string            `json:"agent_version"`
-	CertPath     string            `json:"cert_path,omitempty"`     // 客户端实际证书目录
-	CertHashes   map[string]string `json:"cert_hashes,omitempty"`
-	IPv4         string            `json:"ipv4"`
-	IPv6         string            `json:"ipv6"`
-	DDNSHealth   *DDNSHealthInfo   `json:"ddns_health,omitempty"`
-	CertErrors   []string          `json:"cert_errors,omitempty"`   // v1.5.29 H5: 证书部署失败详情
+	AgentVersion  string            `json:"agent_version"`
+	CertPath      string            `json:"cert_path,omitempty"`     // 客户端实际证书目录
+	CertHashes    map[string]string `json:"cert_hashes,omitempty"`
+	IPv4          string            `json:"ipv4"`
+	IPv6          string            `json:"ipv6"`
+	DDNSHealth    *DDNSHealthInfo   `json:"ddns_health,omitempty"`
+	CertErrors    []string          `json:"cert_errors,omitempty"`   // v1.5.29 H5: 证书部署失败详情
+	IISBoundSites []IISBoundSite    `json:"iis_bound_sites,omitempty"` // v1.6.0: IIS 绑定快照
+}
+
+// IISBoundSite v1.6.0: Agent 上报的 IIS SSL 绑定快照, 用于多站点证书识别。
+type IISBoundSite struct {
+	Hostname   string `json:"hostname"`             // SNI hostname 或 IP
+	Port       int    `json:"port"`                 // 端口号
+	Thumbprint string `json:"thumbprint"`           // SHA1 指纹 (IIS 证书哈希)
+	BundleName string `json:"bundle_name,omitempty"` // 匹配到的 bundle 名称
 }
 
 type HeartbeatResp struct {

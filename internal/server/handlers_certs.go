@@ -767,3 +767,30 @@ func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request
 	s.logMgr.Log("cert", "PFX密码已更新", name, "success")
 	jsonOK(w, map[string]string{"status": "ok"})
 }
+
+// handleForcePushCert v1.6.0: 强制推送证书到指定节点(无视hash匹配), 用于测试验证。
+func (s *Server) handleForcePushCert(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	nodeID := mux.Vars(r)["id"]
+
+	// 加载节点
+	node, err := s.store.GetNode(nodeID)
+	if err != nil {
+		jsonErr(w, http.StatusNotFound, "节点未找到")
+		return
+	}
+
+	// 清空节点 cert_hashes, 下次心跳强制推送
+	node.Status.CertHashes = nil
+	s.store.PutNode(nodeID, node)
+
+	s.logMgr.Log("cert", "强制推送",
+		fmt.Sprintf("bundle=%s node=%s ip=%s (已清除cert_hashes, 下次心跳强制推送)", name, nodeID, clientIP(r)), "info")
+
+	jsonOK(w, map[string]interface{}{
+		"status": "force_pushed",
+		"bundle": name,
+		"node":   nodeID,
+		"next":   "等待节点下次心跳自动拉取证书",
+	})
+}

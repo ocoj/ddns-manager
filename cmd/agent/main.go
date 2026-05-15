@@ -22,6 +22,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -291,6 +293,11 @@ func loadConfig(path string) (*model.AgentConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	// v1.5.37: 确保 CertPath 有默认值, 否则心跳不携带此字段 → Manager 无法获取
+	// → 证书绑定 deploy_path 无法从 Agent 获取 → WebUI 配置困难
+	if cfg.CertPath == "" {
+		cfg.CertPath = filepath.Join(agentBaseDir, "certs")
+	}
 	return &cfg, nil
 }
 
@@ -394,6 +401,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			IPv6:         status.IPv6,
 			CertHashes:   certHashes,
 			CertErrors:   reportCertErrors, // v1.5.30 H2: 证书部署错误上报
+			IISBoundSites: scanIISBindings(cfg), // v1.6.0: IIS 绑定快照
 			DDNSHealth: &model.DDNSHealthInfo{
 				Running:         status.Running,
 				LastOK:          status.LastOK,
@@ -559,9 +567,11 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 	key := crypto.DeriveKey(cfg.Password, cfg.Fingerprint, "cert-transport")
 	for _, cu := range updates {
 		agentLog("证书部署: 开始处理 bundle=%s hash=%s...", cu.BundleName, cu.CertHash[:14])
+		// v1.5.41: 每个证书部署到 CertPath/{BundleName}/ 子目录, 避免多站点证书覆盖
+		// 对齐 win-acme: 不同证书存不同位置, IIS 绑定按 CN/SAN 自动匹配
 		path := cu.TargetPath
 		if path == "" {
-			path = cfg.CertPath
+			path = filepath.Join(cfg.CertPath, cu.BundleName)
 		}
 		if path == "" {
 			// M7: mark bundle as processed to prevent repeated push
@@ -618,16 +628,21 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		iisOK := true
 		if runtime.GOOS == "windows" {
 			// v1.5.20: 证书级 PFX 密码 → 配置级 → 默认 "ddns"
-			pfxPwd := cu.PFXPassword
-			if pfxPwd == "" {
-				pfxPwd = cfg.PFXPassword
-			}
-			if pfxPwd == "" {
-				pfxPwd = "ddns"
-				// v1.5.22 M5: 回退到硬编码默认密码时记录日志
-				agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
-				log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 ddns", cu.BundleName)
-			}
+		// v1.5.39: 增加密码来源诊断日志, 便于从 Manager 侧定位密码不匹配问题
+		pfxPwd := cu.PFXPassword
+		pwdSource := "证书级(cert)"
+		if pfxPwd == "" {
+			pfxPwd = cfg.PFXPassword
+			pwdSource = "配置级(agent.yaml)"
+		}
+		if pfxPwd == "" {
+			pfxPwd = "ddns"
+			pwdSource = "默认(ddns)"
+			agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
+			log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 ddns", cu.BundleName)
+		}
+		agentLog("证书部署: PFX密码来源=%s bundle=%s", pwdSource, cu.BundleName)
+		log.Printf("[cert] %s: PFX密码来源=%s", cu.BundleName, pwdSource)
 			pfxImported := false
 			// 1. 优先尝试 Modern PFX (Win10 1809+, 更强加密)
 			if hasModernPFX && modernPFXFile != "" {
@@ -661,7 +676,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			}
 			// 3. 两个PFX都失败 → 走 openssl 兼容路径
 			if !pfxImported {
-				iisOK = importToIIS(path, cu.BundleName, cfg.IISCertBindings)
+				iisOK = importToIIS(path, cu.BundleName, cfg.IISCertBindings, pfxPwd)
 				recycleIISAppPools()
 				agentLog("证书部署: openssl路径 IIS绑定 %s (成功=%v)", cu.BundleName, iisOK)
 			}
@@ -810,6 +825,17 @@ func fileSize(path string) int64 {
 	return fi.Size()
 }
 
+// isCertFile 判断文件名是否为证书相关文件 (PEM/PFX/KEY/CRT)。
+// v1.5.41: 用于磁盘证书文件扫描, 排除 .cert_hash / meta.json 等非证书文件。
+func isCertFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".pem") ||
+		strings.HasSuffix(lower, ".crt") ||
+		strings.HasSuffix(lower, ".cer") ||
+		strings.HasSuffix(lower, ".key") ||
+		strings.HasSuffix(lower, ".pfx")
+}
+
 func fileSHA256(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -822,6 +848,9 @@ func fileSHA256(path string) string {
 
 // collectCertHashes scans the cert directory for .cert_hash files deployed by Manager.
 // Returns map[deploy_path]hash for heartbeat reporting.
+//
+// v1.5.41: 对齐 win-acme 设计 — 除 .cert_hash 文件外, 也扫描磁盘上的证书文件
+// 计算 SHA256 hash 上报。用于覆盖管理员手动部署证书(无 .cert_hash 文件)的场景。
 func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 	if cfg.CertPath == "" {
 		return map[string]string{}
@@ -869,6 +898,87 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 	case <-time.After(30 * time.Second):
 		log.Printf("[cert] 证书目录遍历超时 (30s): %s (可能是NFS挂载卡住)", cfg.CertPath)
 	}
+
+	// v1.5.41: 扫描磁盘上的证书文件, 为没有 .cert_hash 的部署计算 hash。
+	// 对齐 win-acme 设计: 管理员手动绑定证书到 IIS 后, Agent 自动识别并上报。
+	entries, _ := os.ReadDir(cfg.CertPath)
+	// 先检查 CertPath 根目录下的证书文件 (适用于 TargetPath=CertPath 的直接部署)
+	hasCertFiles := false
+	for _, e := range entries {
+		if !e.IsDir() && isCertFile(e.Name()) {
+			hasCertFiles = true
+			break
+		}
+	}
+	if hasCertFiles {
+		// CertPath 根目录下存在证书文件 → 计算 SHA256 作为 cert_hash
+		var rootFiles []string
+		for _, e := range entries {
+			if e.IsDir() || !isCertFile(e.Name()) {
+				continue
+			}
+			rootFiles = append(rootFiles, e.Name())
+		}
+		sort.Strings(rootFiles)
+		h := sha256.New()
+		for _, fn := range rootFiles {
+			data, err := os.ReadFile(filepath.Join(cfg.CertPath, fn))
+			if err != nil {
+				continue
+			}
+			h.Write(data)
+		}
+		rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
+		mu.Lock()
+		if _, exists := result[cfg.CertPath]; !exists {
+			result[cfg.CertPath] = rootHash
+		}
+		mu.Unlock()
+		log.Printf("[cert] 从磁盘(CertPath根)计算证书hash: %s...", rootHash[:16])
+	}
+	// 再扫描子目录 (用于 TargetPath 指向子目录的部署)
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		subDir := filepath.Join(cfg.CertPath, e.Name())
+		// 跳过已有 .cert_hash 的目录 (已在 WalkDir 中处理)
+		if _, err := os.Stat(filepath.Join(subDir, ".cert_hash")); err == nil {
+			continue
+		}
+		// 检查是否包含证书文件 (fullchain.pem / cert.pem)
+		certFiles, _ := os.ReadDir(subDir)
+		var files []string
+		for _, cf := range certFiles {
+			if cf.IsDir() || cf.Name() == "meta.json" {
+				continue
+			}
+			files = append(files, cf.Name())
+		}
+		if len(files) == 0 {
+			continue
+		}
+		// 按文件名排序后计算 SHA256 (对齐 Manager 侧 SaveCertBundle 的哈希算法)
+		sort.Strings(files)
+		h := sha256.New()
+		for _, fn := range files {
+			data, err := os.ReadFile(filepath.Join(subDir, fn))
+			if err != nil {
+				continue
+			}
+			h.Write(data)
+		}
+		diskHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
+		mu.Lock()
+		// v1.5.41: 用子目录名(BundleName)作为 key, 对齐 Manager 端 hashKey 匹配逻辑
+		dirName := e.Name()
+		if _, exists := result[dirName]; !exists {
+			result[dirName] = diskHash
+		}
+		mu.Unlock()
+		log.Printf("[cert] 从磁盘计算证书hash: %s → %s...", dirName, diskHash[:16])
+	}
+
 	return result
 }
 
@@ -1099,17 +1209,46 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.CertToIISBinding) bool {
 	// 1. 用 certutil -importpfx 导入到 LocalMachine 证书存储 (v1.5.32: 替代不可靠的 PowerShell Import)
 	// certutil 是 Windows 内置工具, 无执行策略/.NET 版本依赖, 全版本一致
+	// v1.5.37: 先尝试删除旧证书(防止重复导入报错), 再导入新证书
+	oldThumb, _ := extractPFXInfo(pfxFile, pfxPassword)
+	if oldThumb != "" {
+		exec.Command("certutil", "-delstore", "My", oldThumb).Run()
+	}
 	importArgs := []string{"-importpfx", "-p", pfxPassword, "-enterprise", pfxFile}
 	out, err := exec.Command("certutil", importArgs...).CombinedOutput()
 	if err != nil {
-		log.Printf("[cert] certutil -importpfx 失败 %s: %v\n%s", bundleName, err, string(out))
-		return false
+		// v1.5.40: 如果密码错误(0x80070056), 尝试默认 ddns 密码兜底
+		// 已知问题: 部分 Windows 节点 PFX 传输后 certutil 报告密码不匹配
+		errMsg := string(out)
+		if strings.Contains(errMsg, "0x80070056") || strings.Contains(errMsg, "ERROR_INVALID_PASSWORD") {
+			log.Printf("[cert] certutil 密码错误(0x80070056), 尝试 ddns 兜底: %s", bundleName)
+			retryArgs := []string{"-importpfx", "-p", "ddns", "-enterprise", pfxFile}
+			retryOut, retryErr := exec.Command("certutil", retryArgs...).CombinedOutput()
+			if retryErr == nil {
+				log.Printf("[cert] certutil ddns兜底导入成功: %s", bundleName)
+				agentLog("证书部署: certutil初审密码失败, ddns兜底成功 %s", bundleName)
+				// 继续执行指纹提取(用 ddns 密码)
+				out = retryOut
+				err = nil
+			} else {
+				log.Printf("[cert] certutil ddns兜底也失败 %s: %s", bundleName, strings.TrimSpace(string(retryOut)))
+			}
+		}
+		if err != nil {
+			truncated := errMsg
+			if len(truncated) > 200 {
+				truncated = truncated[:200] + "..."
+			}
+			log.Printf("[cert] certutil -importpfx 失败 %s: %v\n%s", bundleName, err, errMsg)
+			agentLog("证书部署: certutil导入失败(%d字) %s: %s", len(pfxPassword), bundleName, strings.TrimSpace(truncated))
+			return false
+		}
 	}
 	log.Printf("[cert] certutil -importpfx 成功: %s", bundleName)
 
 	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
 	// v1.5.20 L1: 合并一次 certutil -dump 同时提取指纹和 CN
-	thumb, certCN := extractPFXInfo(pfxFile)
+	thumb, certCN := extractPFXInfo(pfxFile, pfxPassword)
 	if thumb == "" {
 		log.Printf("PFX 证书指纹提取失败: %s", bundleName)
 		return false
@@ -1127,7 +1266,8 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 
 // importToIIS converts PEM cert files to PFX, imports, and binds to IIS.
 // Legacy path — used when manager sends PEM files (Linux style).
-func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) bool {
+// v1.5.37: 接受 pfxPassword 参数替代硬编码 "ddns"
+func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding, pfxPassword string) bool {
 	certFile := filepath.Join(certDir, "fullchain.pem")
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
 		certFile = filepath.Join(certDir, "cert.pem")
@@ -1167,17 +1307,25 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 	}
 
 	// 2. import to Windows cert store (LocalMachine\My) via certutil (v1.5.32: 替代 PowerShell)
+	// v1.5.37: 使用 pfxPassword 替代硬编码 "ddns", 支持用户自定义密码
 	pfxFile := filepath.Join(certDir, bundleName+".pfx")
 	cmd := exec.Command(openssl, "pkcs12", "-export",
 		"-in", certFile, "-inkey", keyFile, "-out", pfxFile,
-		"-passout", "pass:ddns")
+		"-passout", "pass:"+pfxPassword)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[cert] openssl PFX导出失败: %v: %s", err, string(out))
+		agentLog("证书部署: openssl PFX导出失败 %s: %s", bundleName, strings.TrimSpace(string(out)))
 		return false
 	}
-	importOut, importErr := exec.Command("certutil", "-importpfx", "-p", "ddns", "-enterprise", pfxFile).CombinedOutput()
+	importOut, importErr := exec.Command("certutil", "-importpfx", "-p", pfxPassword, "-enterprise", pfxFile).CombinedOutput()
 	if importErr != nil {
+		// v1.5.37: certutil 错误也上报 Manager
+		errMsg := string(importOut)
+		if len(errMsg) > 200 {
+			errMsg = errMsg[:200] + "..."
+		}
 		log.Printf("[cert] certutil -importpfx 失败 (openssl路径): %v\n%s", importErr, string(importOut))
+		agentLog("证书部署: certutil导入失败(openssl) %s: %s", bundleName, strings.TrimSpace(errMsg))
 		return false
 	}
 	log.Printf("证书已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)
@@ -1303,21 +1451,23 @@ func autoBindExisting(thumb, certCN string) {
 
 	var updated int
 	for _, b := range bindings {
-		// match: cert CN matches binding hostname
-		// IP-only bindings only matched when no SNI bindings exist (simple server)
-		match := false
+		// v1.6.0: win-acme Fits() 三级匹配: 精确(100) > 泛域名(50) > 默认(10)
+		matchScore := 0
+		matchReason := ""
 		if b.isSNI && certCN != "" {
 			host := strings.ToLower(b.key)
 			if idx := strings.LastIndex(host, ":"); idx != -1 {
 				host = host[:idx]
 			}
-			match = host == certCN || strings.HasSuffix(host, "."+certCN) || strings.HasSuffix(certCN, "."+host)
+			matchScore, matchReason = fitsBinding(host, certCN)
 		} else if !b.isSNI && !hasSNI {
-			match = true
+			matchScore = 10
+			matchReason = "默认IP绑定(无SNI站点)"
 		}
-		if !match {
+		if matchScore == 0 {
 			continue
 		}
+		agentLog("证书部署: IIS绑定 %s CN=%s 匹配度=%d(%s)", b.key, certCN, matchScore, matchReason)
 
 		appID := b.appID
 		if appID == "" {
@@ -1346,12 +1496,92 @@ func autoBindExisting(thumb, certCN string) {
 		}
 	}
 	log.Printf("IIS 自动绑定: %d/%d 绑定已更新 (CN=%s)", updated, len(bindings), certCN)
+	if updated == 0 && len(bindings) > 0 {
+		agentLog("证书部署: IIS未匹配 CN=%s 已有%d个SSL绑定但无一匹配 → 请手动绑定", certCN, len(bindings))
+	}
 }
+
+// fitsBinding 对齐 win-acme Fits() 三级 hostname 匹配 (v1.6.0)。
+// 返回 (分数, 原因描述): 精确匹配=100, 泛域名匹配=50, 无匹配=0。
+func fitsBinding(iisHost, certCN string) (int, string) {
+	// 精确匹配: sp.example.com == sp.example.com
+	if strings.EqualFold(iisHost, certCN) {
+		return 100, "精确匹配"
+	}
+	// IIS泛域名绑定 *.example.com vs 证书 sub.example.com
+	if strings.HasPrefix(iisHost, "*.") && !strings.HasPrefix(certCN, "*.") {
+		suffix := "." + iisHost[2:]
+		if strings.HasSuffix(strings.ToLower(certCN), strings.ToLower(suffix)) {
+			return 50, "IIS泛域名→证书子域名"
+		}
+		return 0, ""
+	}
+	// 证书泛域名 *.example.com vs IIS绑定 sub.example.com
+	if !strings.HasPrefix(iisHost, "*.") && strings.HasPrefix(certCN, "*.") {
+		suffix := "." + certCN[2:]
+		if strings.HasSuffix(strings.ToLower(iisHost), strings.ToLower(suffix)) {
+			iisLevel := len(strings.Split(iisHost, "."))
+			certLevel := len(strings.Split(certCN[2:], ".")) + 1
+			if iisLevel == certLevel {
+				return 90, "证书泛域名→IIS子域名(同层级)"
+			}
+		}
+		return 0, ""
+	}
+	return 0, ""
+}
+
+// scanIISBindings v1.6.0: netsh http show sslcert 扫描 IIS SSL 绑定快照。
+// 对齐 win-acme: 上报现有绑定信息供 Manager 端识别哪些证书已部署。
+func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	out, err := exec.Command("netsh", "http", "show", "sslcert").Output()
+	if err != nil {
+		return nil
+	}
+	var sites []model.IISBoundSite
+	lines := strings.Split(string(out), "\n")
+	var cur model.IISBoundSite
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if after, ok := strings.CutPrefix(trimmed, "Hostname:port"); ok {
+			cur = model.IISBoundSite{}
+			if idx := strings.Index(after, ":"); idx != -1 {
+				val := strings.TrimSpace(after[idx+1:])
+				if lastColon := strings.LastIndex(val, ":"); lastColon != -1 {
+					cur.Hostname = strings.TrimSpace(val[:lastColon])
+					portStr := strings.TrimSpace(val[lastColon+1:])
+					cur.Port, _ = strconv.Atoi(portStr)
+				}
+			}
+			continue
+		}
+		if after, ok := strings.CutPrefix(trimmed, "IP:port"); ok {
+			cur = model.IISBoundSite{}
+			if idx := strings.LastIndex(after, ":"); idx != -1 {
+				cur.Port, _ = strconv.Atoi(strings.TrimSpace(after[idx+1:]))
+			}
+			continue
+		}
+		if after, ok := strings.CutPrefix(trimmed, "Certificate Hash"); ok {
+			cur.Thumbprint = strings.TrimSpace(strings.TrimPrefix(after, ":"))
+			if cur.Thumbprint != "" {
+				sites = append(sites, cur)
+			}
+		}
+	}
+	return sites
+}
+
 // extractPFXInfo 合并一次 certutil -dump 同时提取指纹和 CN。
 // v1.5.20 L1: 原 extractThumbprintCertutil + extractCNFromPFX 各执行一次 certutil,
 // 现合并为一次调用减少进程开销。
-func extractPFXInfo(pfxFile string) (thumb string, cn string) {
-	out, err := exec.Command("certutil", "-dump", pfxFile).CombinedOutput()
+// v1.5.38: 增加 pfxPassword 参数 — certutil -dump 密码保护的 PFX 文件需要 -p 密码。
+// Win2022 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
+func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
+	out, err := exec.Command("certutil", "-dump", "-p", pfxPassword, pfxFile).CombinedOutput()
 	if err != nil {
 		log.Printf("[cert] certutil -dump 失败: %v", err)
 		return "", ""

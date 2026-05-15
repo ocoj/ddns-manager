@@ -69,6 +69,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	rec.Status.AgentVersion = req.Status.AgentVersion
 	rec.Status.CertHashes = req.Status.CertHashes
 	rec.Status.CertErrors = req.Status.CertErrors // v1.5.31 C1: 结构化存储证书部署错误, 供 WebUI 展示
+	rec.Status.CertPath = req.Status.CertPath     // v1.5.37: 持久化证书路径, 供 WebUI 获取 Agent CertPath
+	rec.Status.IISBoundSites = req.Status.IISBoundSites // v1.6.0: IIS 绑定快照
 	if req.Status.DDNSHealth != nil {
 		rec.Status.DDNSHealth = req.Status.DDNSHealth
 	}
@@ -238,12 +240,24 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// C2: hash key 对齐 Agent 侧 collectCertHashes 的键名
+		// v1.5.41: Agent 部署到 CertPath/{BundleName}/ 子目录, key 使用 BundleName
 		hashKey := binding.DeployPath
 		if hashKey == "" {
-			hashKey = req.Status.CertPath
-		}
-		if h, ok := req.Status.CertHashes[hashKey]; ok && h == bundle.Hash {
-			continue
+			// DeployPath 为空时, Agent 部署到 CertPath/BundleName/
+			// 优先尝试 BundleName 作为 key, 也兼容旧版 "." 和 CertPath
+			if h, ok := req.Status.CertHashes[binding.BundleName]; ok && h == bundle.Hash {
+				continue
+			}
+			if h, ok := req.Status.CertHashes["."]; ok && h == bundle.Hash {
+				continue
+			}
+			if h, ok := req.Status.CertHashes[req.Status.CertPath]; ok && h == bundle.Hash {
+				continue
+			}
+		} else {
+			if h, ok := req.Status.CertHashes[hashKey]; ok && h == bundle.Hash {
+				continue
+			}
 		}
 		encFiles := map[string]string{}
 		for name, content := range bundle.Files {

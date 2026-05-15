@@ -22,7 +22,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +61,7 @@ func agentLog(format string, args ...interface{}) {
 // initAgentLog 将 Agent 日志输出到安装目录下的 agent.log。
 // v1.5.31 H2: 增加 10MB 轮转 — 超限时重命名为 agent-YYYY-MM-DD.log, 保留最近 3 个。
 // v1.5.33: Windows Service 避免写 os.Stderr（SCM 启动的进程无有效标准句柄, io.MultiWriter 会阻塞）。
+// v1.5.33: 轮转逻辑移除 os.ReadDir/sort（避免潜在 Windows 兼容问题），改用简单顺序编号。
 func initAgentLog() {
 	perm := os.FileMode(0700)
 	filePerm := os.FileMode(0600)
@@ -72,22 +72,18 @@ func initAgentLog() {
 	os.MkdirAll(agentBaseDir, perm)
 	logPath := filepath.Join(agentBaseDir, "agent.log")
 
-	// 文件超过 10MB 时轮转
+	// 文件超过 10MB 时轮转: 只保留 3 个, 简单编号 (1/2/3)
 	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 10<<20 {
-		rotated := filepath.Join(agentBaseDir, fmt.Sprintf("agent-%s.log", time.Now().Format("2006-01-02")))
-		os.Rename(logPath, rotated)
-		entries, _ := os.ReadDir(agentBaseDir)
-		var oldLogs []string
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), "agent-") && strings.HasSuffix(e.Name(), ".log") {
-				oldLogs = append(oldLogs, e.Name())
+		for i := 3; i >= 1; i-- {
+			old := filepath.Join(agentBaseDir, fmt.Sprintf("agent.%d.log", i))
+			if i < 3 {
+				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent.%d.log", i+1))
+				os.Rename(old, next)
+			} else {
+				os.Remove(old)
 			}
 		}
-		sort.Strings(oldLogs)
-		for len(oldLogs) > 3 {
-			os.Remove(filepath.Join(agentBaseDir, oldLogs[0]))
-			oldLogs = oldLogs[1:]
-		}
+		os.Rename(logPath, filepath.Join(agentBaseDir, "agent.1.log"))
 	}
 
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
@@ -1317,8 +1313,7 @@ func main() {
 		setBaseDir(*installDir)
 	}
 	detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
-	// v1.5.33: goroutine 中执行, 绝不阻塞 main() — Windows Service 启动时任何阻塞都会导致永久 START_PENDING
-	go initAgentLog()
+	initAgentLog()
 
 	if *showVersion {
 		fmt.Printf("node-agent v%s\nPublisher: Lanxun CO.,Ltd.\n", version)

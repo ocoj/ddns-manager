@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,21 +47,48 @@ var (
 )
 var heartbeatFailed atomic.Bool // v1.5.22 H2: 标记心跳失败, 阻止 agentLogBuf.Clear() 丢弃操作日志
 var agentLogBuf = newLogBuffer(100)
+// v1.5.30 H2: 证书部署错误缓存, 下一心跳通过 Status.CertErrors 上报 Manager
+var (
+	lastCertErrors   []string
+	lastCertErrorsMu sync.Mutex
+)
 func agentLog(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
 	agentLogBuf.Write(msg)
 }
 
-// initAgentLog 将 Agent 日志同时输出到安装目录下的 agent.log 和 stderr
+// initAgentLog 将 Agent 日志同时输出到安装目录下的 agent.log 和 stderr。
+// v1.5.31 H2: 增加 10MB 轮转 — 超限时重命名为 agent-YYYY-MM-DD.log, 保留最近 3 个。
 func initAgentLog() {
 	os.MkdirAll(agentBaseDir, 0700)
-	f, err := os.OpenFile(filepath.Join(agentBaseDir, "agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logPath := filepath.Join(agentBaseDir, "agent.log")
+
+	// 文件超过 10MB 时轮转
+	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 10<<20 {
+		rotated := filepath.Join(agentBaseDir, fmt.Sprintf("agent-%s.log", time.Now().Format("2006-01-02")))
+		os.Rename(logPath, rotated)
+		// 清理旧轮转文件, 保留最近 3 个
+		entries, _ := os.ReadDir(agentBaseDir)
+		var oldLogs []string
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "agent-") && strings.HasSuffix(e.Name(), ".log") {
+				oldLogs = append(oldLogs, e.Name())
+			}
+		}
+		sort.Strings(oldLogs)
+		for len(oldLogs) > 3 {
+			os.Remove(filepath.Join(agentBaseDir, oldLogs[0]))
+			oldLogs = oldLogs[1:]
+		}
+	}
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return // 写不了安装目录就算了，至少 stderr 还能用
 	}
 	log.SetOutput(io.MultiWriter(os.Stderr, f))
-	log.Printf("[agent] 日志文件: %s", filepath.Join(agentBaseDir, "agent.log"))
+	log.Printf("[agent] 日志文件: %s", logPath)
 }
 
 // base paths — defaults, overridable via -dir flag
@@ -227,6 +255,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	certHashes := collectCertHashes(cfg)
 
 	// 3. Build heartbeat request
+	// v1.5.30 H2: 从缓存读取证书部署错误, 填充到 Status.CertErrors 上报 Manager
+	lastCertErrorsMu.Lock()
+	reportCertErrors := lastCertErrors
+	lastCertErrors = nil
+	lastCertErrorsMu.Unlock()
+
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
 		Fingerprint: cfg.Fingerprint,
@@ -236,6 +270,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
 			CertHashes:   certHashes,
+			CertErrors:   reportCertErrors, // v1.5.30 H2: 证书部署错误上报
 			DDNSHealth: &model.DDNSHealthInfo{
 				Running:       status.Running,
 				LastOK:        status.LastOK,
@@ -546,6 +581,16 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		}
 	}
 	certHashMapMu.Unlock()
+	// v1.5.30 H2: 将本轮证书部署错误缓存, 下个心跳通过 Status.CertErrors 上报 Manager
+	if len(certErrors) > 0 {
+		lastCertErrorsMu.Lock()
+		// 限制最多 20 条防止洪泛; 取最新的
+		lastCertErrors = append(lastCertErrors, certErrors...)
+		if len(lastCertErrors) > 20 {
+			lastCertErrors = lastCertErrors[len(lastCertErrors)-20:]
+		}
+		lastCertErrorsMu.Unlock()
+	}
 	return certErrors
 }
 
@@ -782,13 +827,13 @@ func validateAgentBinary(path string) error {
 	}
 	return nil
 }
-// upgradeLogger writes upgrade step logs to %TEMP%\ddns_upgrade_agent.log
-// so logs survive os.Exit(0) when replacing the running binary.
+// upgradeLogger writes upgrade step logs to install_dir/ddns_upgrade.log
+// (v1.5.30 M1: 与批处理脚本统一日志文件, 方便排查)
 func upgradeLogger(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
-	// Also write to install dir for post-upgrade diagnostics
-	f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade_agent.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// 与批处理脚本写入同一日志文件: ddns_upgrade.log
+	f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
 		f.Close()
@@ -910,13 +955,15 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.CertToIISBinding) bool {
 	// 1. import PFX to Windows cert store
 	escapedPath := strings.ReplaceAll(pfxFile, "'", "''")
+	// v1.5.30 M2: PFX 密码单引号转义 — PowerShell 单引号字符串中转义单引号用 ''
+	escapedPassword := strings.ReplaceAll(pfxPassword, "'", "''")
 	ps := fmt.Sprintf(
 		`$pfx = Get-Content '%s' -AsByteStream -Raw;`+
 			`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;`+
 			`$cert.Import($pfx, '%s', 'DefaultKeySet');`+
 			`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');`+
 			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`,
-		escapedPath, pfxPassword)  // v1.5.20 C1 FIX: 参数顺序: path 在前, password 在后
+		escapedPath, escapedPassword)  // v1.5.20 C1 FIX: 参数顺序: path 在前, password 在后
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {
 		log.Printf("PFX导入到证书存储失败: %v: %s", err, string(out))
@@ -1202,7 +1249,7 @@ func extractPFXInfo(pfxFile string) (thumb string, cn string) {
 
 // ── Windows Trust (MotW removal) ──
 func main() {
-	log.SetFlags(log.LstdFlags) // 所有日志带时间戳 (2009/01/23 01:23:45)
+	log.SetFlags(log.LstdFlags | log.Lshortfile) // v1.5.31 M3: 所有日志带时间戳+文件名行号，便于排查
 	heartbeat := flag.Bool("heartbeat", false, "send single heartbeat (for systemd timer)")
 	daemon := flag.Bool("daemon", false, "run as daemon (for Windows Service)")
 	showVersion := flag.Bool("version", false, "show version")

@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +73,11 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 	u.status.LastOK = true
 	u.status.LastError = ""
+	u.status.FailedDomains = nil
+
+	// v1.5.30 H4: allOK + allFailedDomains 移到循环外, 多 DnsConf 段时累积而非覆盖
+	allOK := true
+	var allFailedDomains []string
 
 	for _, dc := range u.cfg.DnsConf {
 		// Create the appropriate DNS provider
@@ -102,14 +109,14 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 		// Check results — any failure marks the whole run as failed
 		// v1.5.29 H1: 收集失败域名详情，后续上报到 Manager
-		allOK := true
-		var failedDomains []string
+		// v1.5.30 H4: 失败域名追加到外层累积列表，不覆盖
+		var segFailed []string
 		for _, d := range domains.Ipv4Domains {
 			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
 				allOK = false
 				domainStr := d.String()
 				u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s", domainStr))
-				failedDomains = append(failedDomains, domainStr)
+				segFailed = append(segFailed, domainStr)
 			}
 		}
 		for _, d := range domains.Ipv6Domains {
@@ -117,20 +124,33 @@ func (u *DNSUpdater) Run() DNSStatus {
 				allOK = false
 				domainStr := d.String()
 				u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s", domainStr))
-				failedDomains = append(failedDomains, domainStr)
+				segFailed = append(segFailed, domainStr)
 			}
 		}
+		allFailedDomains = append(allFailedDomains, segFailed...)
 
-		if !allOK {
+		if len(segFailed) > 0 {
 			u.status.LastOK = false
-			u.status.LastError = fmt.Sprintf("DNS更新失败: %s", strings.Join(failedDomains, ", "))
-			u.status.FailedDomains = failedDomains
+			u.status.LastError = fmt.Sprintf("DNS更新失败: %s", strings.Join(allFailedDomains, ", "))
+			u.status.FailedDomains = allFailedDomains
 			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, u.status.LastError)
-		} else {
-			u.status.FailedDomains = nil
-			if len(domains.Ipv4Domains) > 0 || len(domains.Ipv6Domains) > 0 {
-				u.logBuf.Write("DNS更新完成")
-			}
+		}
+	}
+
+	// v1.5.30 H4: allOK 判断移出循环, 全部 DNS 段成功时才标记 OK
+	if allOK {
+		u.status.FailedDomains = nil
+		if len(u.cfg.DnsConf) > 0 {
+			u.logBuf.Write("DNS更新完成")
+		}
+	}
+
+	// v1.5.31 H3: 失败域名持久化到 ddns_errors.log, 防止 Agent 崩溃丢失内存日志
+	if len(allFailedDomains) > 0 {
+		path := filepath.Join(agentBaseDir, "ddns_errors.log")
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			fmt.Fprintf(f, "%s DNS更新失败: %s\n", time.Now().Format(time.RFC3339), strings.Join(allFailedDomains, ", "))
+			f.Close()
 		}
 	}
 

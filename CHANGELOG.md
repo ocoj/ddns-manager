@@ -1,5 +1,89 @@
 # CHANGELOG
 
+## v1.5.31 (补丁) — 2026-05-15
+
+### 🔴 第七次审计修复（7 项）：CertErrors存储链路 + 多ACM超时 + Agent日志轮转 + DNS持久化 + 续签验证
+
+基于 v1.5.30 全量逐行再审计，重点修复：CertErrors 上报后 Manager 不存储不展示、
+StartAutoRenew 多账号共享超时、Agent agent.log 无轮转、DNS日志缓冲区崩溃丢失、
+续签不验证真实更新、URL逗号分隔未逐段校验、agentLog 无调用位置。
+
+#### 🔴 Critical（1 项）
+
+- **C1 CertErrors 上报后 Manager 不存储不展示** — Agent 通过 `Status.CertErrors` 上报证书部署错误，
+  但 `handleHeartbeat` 只复制了 `CertHashes` 未复制 `CertErrors`，结构化数据静默丢弃。
+  修复：追加 `rec.Status.CertErrors = req.Status.CertErrors`，
+  心跳 detail 附加 `cert_errs=N` 计数
+
+#### 🟠 High（3 项）
+
+- **H1 StartAutoRenew 多 ACME 账号共享超时** — 所有 mgr 串行续签共用 5分钟 context，
+  第1个账号占满时间后后续账号无机会续签。修复：每个 mgr 独立创建 context(5min)
+- **H2 Agent agent.log 无轮转** — `O_APPEND` 追加写入永不轮转，daemon模式数周可达 GB 级。
+  修复：10MB 阈值轮转 `agent-YYYY-MM-DD.log`，保留最近 3 个
+- **H3 DNS 更新日志缓冲区无持久化** — `logBuf` 仅内存环形缓冲，Agent 崩溃时所有 DNS 历史丢失。
+  修复：失败域名同步追加写入 `ddns_errors.log`
+
+#### 🟡 Medium（3 项）
+
+- **M1 handleRenewCert 不验证是否真实续签** — acme.sh 可能报告成功但未实际更新文件。
+  修复：续签前记录 `fullchain.pem` mtime，续签后对比，未变化记WARNING
+- **M2 URL 逗号分隔列表未逐段校验** — 只检查整个字符串前缀，`http://good,evil` 通过校验。
+  修复：`strings.Split(url, ",")` 后逐段 TrimSpace + 前缀检查
+- **M3 agentLog 不含调用位置** — 排查 Agent 端问题时无从定位代码。
+  修复：`log.SetFlags(log.LstdFlags | log.Lshortfile)`
+
+#### 🧪 测试环境部署
+- Manager (10.0.0.1): v1.5.31 ✅
+- Client A Linux (10.0.0.2): v1.5.31 ✅ 心跳正常 DDNS=OK
+- Client B Windows (10.0.0.3): v1.5.30 → 升级推送已下发，等待心跳自动升级
+
+---
+
+## v1.5.30 (补丁) — 2026-05-15
+
+### 🔴 第六次审计修复（7 项）：输入验证 + 证书续签一致性 + 日志链路补全
+
+基于 v1.5.29 全量逐行审计，重点修复：renderDDNSConfig 输入验证缺失、
+ACME 手动续签 CertBundle 未重新加载、certErrors 不上报、CertBindings 路径穿越、
+多 DnsConf 失败域名被覆盖、PFX 密码 PowerShell 转义、Windows 升级回滚验证。
+
+#### 🔴 Critical（3 项）
+
+- **C1 renderDDNSConfig 输入验证缺失** — 域名格式/TTL/URL/GetType/NetInterface 全不校验。
+  修复：新增 `validateNodeConfig()` + `validateDomains()` + `validateIPConfig()` 三层校验，
+  在 `handleSaveNodeConfig` 中 JSON 反序列化后、Marshal 前调用，违规返回 400+具体错误
+- **C2 ACME 手动续签后 CertBundle 未重新加载** — `handleRenewCert` 续签成功后直接返回 JSON，
+  不调 `LoadCertBundle`+`SaveCertBundle` 更新 store 中的 hash。修复：对齐 `StartAutoRenew` 流程，
+  续签成功后重新加载 bundle 并回存
+- **C3 Windows 升级批处理回滚无二次验证** — 回滚 `move BAK→OLD` 失败后仍启动服务。
+  修复：`:start_service` 前增加 `%OLD%` 存在性 + 大小验证，失败时跳过服务启动
+
+#### 🟠 High（4 项）
+
+- **H1 多 ACME 账号续签遍历效率低** — `handleRenewCert` 从 mgr[0] 开始 O(n) 遍历，不作 email 匹配。
+  修复：先读 meta.json 获取 email → 遍历中 skip 不匹配的 mgr
+- **H2 certErrors 不上报 Status.CertErrors** — 证书部署失败只写 AgentLog（category=agent 日志），
+  Manager 无结构化解析。修复：新增 `lastCertErrors` 全局缓存，下个心跳填充 `Status.CertErrors` 字段
+- **H3 CertBindings DeployPath 路径穿越** — `handleSaveNodeConfig` 不验证 `DeployPath`，
+  可含 `..`/绝对路径。修复：新增 `validateCertBinding()`，拒绝路径穿越
+- **H4 DNSUpdater 多 DnsConf 段失败域名被覆盖** — `failedDomains` 在内层 for 循环重新初始化，
+  多段时只保留最后一段的失败列表。修复：`allOK` + `allFailedDomains` 提到循环外层累积
+
+#### 🟡 Medium（2 项）
+
+- **M1 Windows 升级日志双文件不统一** — 批处理写 `ddns_upgrade.log`，Go 写 `ddns_upgrade_agent.log`。
+  修复：`upgradeLogger` 改为写入 `ddns_upgrade.log`，与批处理统一
+- **M2 PFX 密码单引号导致 PowerShell 语法错误** — `importPFXToIIS` 未对 `pfxPassword` 做单引号转义，
+  密码含 `'` 时 PowerShell 命令解析失败。修复：`strings.ReplaceAll(pfxPassword, "'", "''")`
+
+#### 🧪 测试环境部署
+- Manager (10.0.0.1): v1.5.30 ✅
+- Client A Linux (10.0.0.2): v1.5.30 ✅ 心跳正常
+- Client B Windows (10.0.0.3): v1.5.29 → 由心跳自动升级到 v1.5.30
+
+---
+
 ## v1.5.29 (补丁) — 2026-05-15
 
 ### 🟠 持续修复（7 项）

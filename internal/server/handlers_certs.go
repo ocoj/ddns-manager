@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -245,11 +246,47 @@ func (s *Server) handleRenewCert(w http.ResponseWriter, r *http.Request) {
 	certName := name // keep acme- prefix, directory matches
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+
+	// v1.5.30 H1: 读 meta.json 获取签发账号 email，定向匹配 mgr
 	mgrs := s.acmeMgrList()
+	metaPath := filepath.Join(s.cfg.DataDir, "certs", name, "meta.json")
+	var targetEmail string
+	if data, err := os.ReadFile(metaPath); err == nil {
+		var meta map[string]interface{}
+		if json.Unmarshal(data, &meta) == nil {
+			if e, ok := meta["email"]; ok {
+				targetEmail, _ = e.(string)
+			}
+		}
+	}
+
 	var lastErr error
 	for _, mgr := range mgrs {
+		// v1.5.30 H1: 定向匹配 — 跳过 email 不匹配的 mgr
+		if targetEmail != "" && mgr.AccountInfo().Email != targetEmail {
+			continue
+		}
+		// v1.5.31 M1: 续签前记录 fullchain.pem 的 mtime, 续签后对比验证是否真实更新
+		fullchainPath := filepath.Join(s.cfg.DataDir, "certs", name, "fullchain.pem")
+		var mtimeBefore time.Time
+		if fi, err := os.Stat(fullchainPath); err == nil {
+			mtimeBefore = fi.ModTime()
+		}
 		renewed := mgr.RenewByName(ctx, certName)
 		if renewed {
+			// v1.5.31 M1: 验证 fullchain.pem 是否真实更新, 防止 acme.sh 误报成功
+			if fi, err := os.Stat(fullchainPath); err == nil {
+				if !mtimeBefore.IsZero() && !fi.ModTime().After(mtimeBefore) {
+					s.logMgr.Log("acme", "续期警告",
+						fmt.Sprintf("%s: acme.sh 报告成功但 fullchain.pem mtime 未变化 (续签可能未实际执行)", name), "warning")
+				}
+			}
+			// v1.5.30 C2: 重新加载 CertBundle 并回存 store（与 StartAutoRenew 对齐）
+			if b, err := s.store.LoadCertBundle(name); err == nil {
+				if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
+					log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
+				}
+			}
 			s.logMgr.Log("acme", "已续期", certName, "success")
 			jsonOK(w, map[string]string{"status": "renewed", "name": name})
 			return

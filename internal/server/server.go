@@ -136,10 +136,11 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 		for {
 			select {
 			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				mgrs := s.acmeMgrList()
 				totalRenewed := 0
+				// v1.5.31 H1: 每个 mgr 独立 context(5min), 防止多账号共享超时导致后续账号被截断
 				for _, mgr := range mgrs {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 					renewed := mgr.Renew(ctx)
 					for _, name := range renewed {
 						if b, err := s.store.LoadCertBundle(name); err == nil {
@@ -151,8 +152,8 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 							fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
 					}
 					totalRenewed += len(renewed)
+					cancel()
 				}
-				cancel()
 				// v1.5.29 H2: ACME 空续签记录审计日志 (修复 v1.5.19 C4 回归)
 				if totalRenewed == 0 {
 					soonExpiring := s.countExpiringCerts(30)

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +68,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Status.AgentVersion = req.Status.AgentVersion
 	rec.Status.CertHashes = req.Status.CertHashes
+	rec.Status.CertErrors = req.Status.CertErrors // v1.5.31 C1: 结构化存储证书部署错误, 供 WebUI 展示
 	if req.Status.DDNSHealth != nil {
 		rec.Status.DDNSHealth = req.Status.DDNSHealth
 	}
@@ -93,6 +96,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if len(h.FailedDomains) > 0 {
 			detail += fmt.Sprintf(" failed=%s", strings.Join(h.FailedDomains, ","))
 		}
+	}
+	// v1.5.31 C1: 证书部署错误计入心跳详情和结构化状态
+	if len(req.Status.CertErrors) > 0 {
+		detail += fmt.Sprintf(" cert_errs=%d", len(req.Status.CertErrors))
 	}
 	s.logMgr.LogWithNode("heartbeat", "收到心跳", nodeID, detail, "info")
 
@@ -338,6 +345,18 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		keys, _ := s.store.LoadDNSKeys()
 		if _, ok := keys[req.DNSKeyName]; !ok {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("DNS Key %q 不存在，请先在「DNS Key」页面创建", req.DNSKeyName))
+			return
+		}
+	}
+	// v1.5.30 C1: 校验节点配置合法性（域名格式/TTL/URL/GetType 等）
+	if err := validateNodeConfig(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// v1.5.30 H3: 校验证书绑定 DeployPath 防止路径穿越
+	for i, binding := range req.CertBindings {
+		if err := validateCertBinding(binding); err != nil {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("证书绑定[%d]配置无效: %v", i, err))
 			return
 		}
 	}
@@ -598,5 +617,120 @@ func parseAuth(r *http.Request) (nodeID, password string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+// ── v1.5.30 输入验证 ──
+
+// validDomainRE 域名格式校验：标准 FQDN 标签，不支持通配符和 IDN。
+var validDomainRE = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+
+// validateNodeConfig 校验 NodeConfigRequest 的字段合法性，防止非法输入导致
+// ddns-go YAML 渲染异常或 DNS API 调用失败。
+func validateNodeConfig(req *model.NodeConfigRequest) error {
+	// IPv4 域名校验
+	if req.IPv4.Enable {
+		if err := validateDomains(req.IPv4.Domains); err != nil {
+			return fmt.Errorf("IPv4域名: %w", err)
+		}
+		if err := validateIPConfig(req.IPv4.GetType, req.IPv4.URL, req.IPv4.NetInterface, req.IPv4.Cmd); err != nil {
+			return fmt.Errorf("IPv4获取方式: %w", err)
+		}
+	}
+	// IPv6 域名校验
+	if req.IPv6.Enable {
+		if err := validateDomains(req.IPv6.Domains); err != nil {
+			return fmt.Errorf("IPv6域名: %w", err)
+		}
+		if err := validateIPConfig(req.IPv6.GetType, req.IPv6.URL, req.IPv6.NetInterface, req.IPv6.Cmd); err != nil {
+			return fmt.Errorf("IPv6获取方式: %w", err)
+		}
+	}
+	// TTL 校验
+	if req.TTL != "" {
+		ttl, err := strconv.Atoi(req.TTL)
+		if err != nil {
+			return fmt.Errorf("TTL 不是有效整数: %q", req.TTL)
+		}
+		if ttl < 60 || ttl > 86400 {
+			return fmt.Errorf("TTL 必须在 60-86400 之间，当前 %d", ttl)
+		}
+	}
+	return nil
+}
+
+// validateDomains 校验域名列表格式。
+func validateDomains(domains []string) error {
+	if len(domains) == 0 {
+		return fmt.Errorf("至少需要1个域名")
+	}
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			return fmt.Errorf("域名不能为空")
+		}
+		if len(d) > 253 {
+			return fmt.Errorf("域名过长 (>253): %q", d)
+		}
+		if strings.HasPrefix(d, "*.") {
+			return fmt.Errorf("不支持泛域名: %q", d)
+		}
+		if !validDomainRE.MatchString(d) {
+			return fmt.Errorf("域名格式无效: %q", d)
+		}
+	}
+	return nil
+}
+
+// validateIPConfig 校验 IP 获取方式的配置合法性。
+func validateIPConfig(getType, url, netInterface, cmd string) error {
+	switch getType {
+	case "url", "": // 空值默认为 url
+		if url != "" {
+			// v1.5.31 M2: ddns-go 支持逗号分隔的多 URL 列表, 逐段校验每个 URL
+			for _, u := range strings.Split(url, ",") {
+				u = strings.TrimSpace(u)
+				if u == "" {
+					continue
+				}
+				if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+					return fmt.Errorf("URL %q 必须以 http:// 或 https:// 开头", u)
+				}
+				if strings.ContainsAny(u, "\x00\n\r") {
+					return fmt.Errorf("URL %q 包含控制字符", u)
+				}
+			}
+		}
+	case "netinterface":
+		if netInterface != "" && strings.ContainsAny(netInterface, "/\\\x00") {
+			return fmt.Errorf("网卡名称不能包含路径分隔符")
+		}
+	case "cmd":
+		if cmd == "" {
+			return fmt.Errorf("GetType=cmd 时必须提供 Cmd 命令")
+		}
+		if strings.Contains(cmd, "\x00") {
+			return fmt.Errorf("Cmd 命令包含控制字符")
+		}
+	default:
+		return fmt.Errorf("不支持的 GetType: %q (仅支持 url/netinterface/cmd)", getType)
+	}
+	return nil
+}
+
+// validateCertBinding 校验证书绑定的配置合法性，防路径穿越。
+func validateCertBinding(b model.CertBinding) error {
+	if b.BundleName == "" {
+		return fmt.Errorf("证书名称不能为空")
+	}
+	if b.DeployPath != "" {
+		if filepath.IsAbs(b.DeployPath) {
+			return fmt.Errorf("部署路径不能为绝对路径: %q", b.DeployPath)
+		}
+		cleaned := filepath.Clean(b.DeployPath)
+		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			return fmt.Errorf("部署路径不能包含上级目录引用: %q", b.DeployPath)
+		}
+	}
+	return nil
 }
 

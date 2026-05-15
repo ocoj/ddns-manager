@@ -89,6 +89,14 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		"echo [ddns] Upgrade FAILED, rolling back...\r\n"+
 		"move /y \"%%BAK%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
 		":start_service\r\n"+
+		// v1.5.30 C3: 回滚后二次验证 — 防止回滚失败导致启动损坏/不存在的二进制
+		"if exist \"%%OLD%%\" (\r\n"+
+		"  for %%%%A in (\"%%OLD%%\") do set OLDSIZE=%%%%~zA\r\n"+
+		"  if !OLDSIZE! GTR 1024 goto :enable_service\r\n"+
+		")\r\n"+
+		"echo [ddns] 二进制验证失败, 无法启动服务 >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		"goto :done\r\n"+
+		":enable_service\r\n"+
 		// Step 8: Re-enable auto-start and start service
 		"sc config node-agent start= auto >>\"ddns_upgrade.log\" 2>&1\r\n"+
 		"sc start node-agent >>\"ddns_upgrade.log\" 2>&1\r\n"+

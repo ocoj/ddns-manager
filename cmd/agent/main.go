@@ -1317,7 +1317,8 @@ func main() {
 		setBaseDir(*installDir)
 	}
 	detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
-	initAgentLog()
+	// v1.5.33: goroutine 中执行, 绝不阻塞 main() — Windows Service 启动时任何阻塞都会导致永久 START_PENDING
+	go initAgentLog()
 
 	if *showVersion {
 		fmt.Printf("node-agent v%s\nPublisher: Lanxun CO.,Ltd.\n", version)

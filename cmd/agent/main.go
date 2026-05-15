@@ -91,7 +91,7 @@ func initAgentLog() {
 	log.Printf("[agent] 日志文件: %s", logPath)
 }
 
-// base paths — defaults, overridable via -dir flag
+// base paths — defaults, overridable via -dir flag or auto-detected from binary location.
 var (
 	agentBaseDir    string
 	agentConfigPath string
@@ -104,6 +104,24 @@ func init() {
 		agentBaseDir = "/opt/ddns-agent"
 	}
 	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
+}
+
+// detectInstallDir 自适应寻找安装目录: 默认路径 → 二进制所在目录。
+// v1.5.32: 兼容旧版本 /opt/ddns-manager → /opt/ddns-agent 路径迁移导致的配置不可达。
+func detectInstallDir() {
+	// 若默认路径已存在 agent.yaml, 直接使用
+	if _, err := os.Stat(agentConfigPath); err == nil {
+		return
+	}
+	// 回退: 从二进制所在目录定位 agent.yaml (兼容旧安装路径如 /opt/ddns-manager)
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		if fi, err2 := os.Stat(filepath.Join(dir, "agent.yaml")); err2 == nil && !fi.IsDir() {
+			setBaseDir(dir)
+			log.Printf("[agent] 从二进制路径自适应安装目录: %s", dir)
+			return
+		}
+	}
 }
 
 // setBaseDir overrides the default base directory (called after flag parsing).
@@ -1259,6 +1277,7 @@ func main() {
 	if *installDir != "" {
 		setBaseDir(*installDir)
 	}
+	detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
 	initAgentLog()
 
 	if *showVersion {

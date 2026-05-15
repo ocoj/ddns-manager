@@ -513,6 +513,10 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 		c.TTL = "300"
 	}
 
+	// v1.5.32: normalize getType to lowercase (ddns-go expects lowercase; frontend may send camelCase)
+	c.IPv4.GetType = strings.ToLower(c.IPv4.GetType)
+	c.IPv6.GetType = strings.ToLower(c.IPv6.GetType)
+
 	// sensible defaults for IP detection service URLs
 	if c.IPv4.Enable {
 		if c.IPv4.GetType == "" {
@@ -682,7 +686,9 @@ func validateDomains(domains []string) error {
 }
 
 // validateIPConfig 校验 IP 获取方式的配置合法性。
+// v1.5.32: getType 先转小写, 兼容前端 netInterface→netinterface 大小写差异。
 func validateIPConfig(getType, url, netInterface, cmd string) error {
+	getType = strings.ToLower(getType)
 	switch getType {
 	case "url", "": // 空值默认为 url
 		if url != "" {

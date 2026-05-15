@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.5.32 (补丁) — 2026-05-15
+
+### 🔴 Bug 修复（2 项）：IPv6网卡保存失败 + Agent旧目录升级离线
+
+实机测试反馈修复。
+
+#### 🔴 Bug 1: IPv6 获取方式改"网卡"无法保存
+
+- **根因**: 前端选项值为 `netInterface` (camelCase)，v1.5.30 新增的 `validateIPConfig`
+  只匹配全小写 `netinterface`，落入 default 分支返回"不支持的 GetType" 400 错误
+- **修复**: `validateIPConfig` 开头 `getType = strings.ToLower(getType)` 做 case-insensitive；
+  `renderDDNSConfig` 同步 normalize，确保产出的 ddns-go YAML 也是纯小写
+
+#### 🔴 Bug 2: Linux 节点从 v1.5.29 升级到 v1.5.30 后离线
+
+- **根因**: v1.5.30 将默认安装目录从 `/opt/ddns-manager` 改为 `/opt/ddns-agent`。
+  旧节点 systemd timer 调用旧路径二进制 → 新二进制 `init()` 设 `agentConfigPath` 为新路径 →
+  `loadConfig` 找不到 agent.yaml → Fatal 退出 → 节点离线
+- **修复**: 新增 `detectInstallDir()` — 若默认路径 agent.yaml 不存在，回退到二进制所在目录
+  (`filepath.Dir(os.Executable())`) 定位 agent.yaml，兼容新旧两种安装路径
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.5.32 ✅
+- Client A Linux (10.0.0.2): v1.5.32 ✅ 心跳正常 DDNS=OK
+- Client B Windows (10.0.0.3): 升级推送已下发，等待心跳自动升级
+
+---
+
 ## v1.5.31 (补丁) — 2026-05-15
 
 ### 🔴 第七次审计修复（7 项）：CertErrors存储链路 + 多ACM超时 + Agent日志轮转 + DNS持久化 + 续签验证

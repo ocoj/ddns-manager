@@ -1993,7 +1993,7 @@ function renderVersions(verData, binData, nodes) {
     h += '<table><thead><tr><th data-sort="name">文件名</th><th class="col-bin-size" data-sort="size">大小</th><th class="col-bin-ver" data-sort="version">版本</th><th class="col-bin-time" data-sort="mod_time">时间</th><th class="col-act">操作</th></tr></thead><tbody>';
     bins.forEach(function(b) {
       var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
-      h += '<tr><td class="mono">' + he(b.name || '') + '</td><td class="col-bin-size">' + sizeStr + '</td><td class="col-bin-ver">' + he(b.version || '-') + '</td>';
+      h += '<tr><td class="mono">' + he(b.name || '') + '</td><td class="col-bin-size">' + sizeStr + '</td><td class="col-bin-ver">' + he(b.version || '-') + '</td><td class="col-bin-time">' + he(b.mod_time || '-') + '</td>';
       h += '<td class="col-act"><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
     });
     h += '</tbody></table>';

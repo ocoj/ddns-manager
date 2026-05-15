@@ -971,22 +971,15 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 }
 
 func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.CertToIISBinding) bool {
-	// 1. import PFX to Windows cert store
-	escapedPath := strings.ReplaceAll(pfxFile, "'", "''")
-	// v1.5.30 M2: PFX 密码单引号转义 — PowerShell 单引号字符串中转义单引号用 ''
-	escapedPassword := strings.ReplaceAll(pfxPassword, "'", "''")
-	ps := fmt.Sprintf(
-		`$pfx = Get-Content '%s' -AsByteStream -Raw;`+
-			`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;`+
-			`$cert.Import($pfx, '%s', 'DefaultKeySet');`+
-			`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');`+
-			`$store.Open('ReadWrite'); $store.Add($cert); $store.Close();`,
-		escapedPath, escapedPassword)  // v1.5.20 C1 FIX: 参数顺序: path 在前, password 在后
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
+	// 1. 用 certutil -importpfx 导入到 LocalMachine 证书存储 (v1.5.32: 替代不可靠的 PowerShell Import)
+	// certutil 是 Windows 内置工具, 无执行策略/.NET 版本依赖, 全版本一致
+	importArgs := []string{"-importpfx", "-p", pfxPassword, "-enterprise", pfxFile}
+	out, err := exec.Command("certutil", importArgs...).CombinedOutput()
 	if err != nil {
-		log.Printf("PFX导入到证书存储失败: %v: %s", err, string(out))
+		log.Printf("[cert] certutil -importpfx 失败 %s: %v\n%s", bundleName, err, string(out))
 		return false
 	}
+	log.Printf("[cert] certutil -importpfx 成功: %s", bundleName)
 
 	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
 	// v1.5.20 L1: 合并一次 certutil -dump 同时提取指纹和 CN
@@ -1047,23 +1040,18 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding) 
 		certCN = strings.ToLower(strings.TrimSpace(cn))
 	}
 
-	// 2. import to Windows cert store (LocalMachine\My)
+	// 2. import to Windows cert store (LocalMachine\My) via certutil (v1.5.32: 替代 PowerShell)
 	pfxFile := filepath.Join(certDir, bundleName+".pfx")
 	cmd := exec.Command(openssl, "pkcs12", "-export",
 		"-in", certFile, "-inkey", keyFile, "-out", pfxFile,
 		"-passout", "pass:ddns")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("openssl PFX导出失败: %v: %s", err, string(out))
+		log.Printf("[cert] openssl PFX导出失败: %v: %s", err, string(out))
 		return false
 	}
-	escapedPFX := strings.ReplaceAll(pfxFile, "'", "''")
-	ps := `$pfx = Get-Content '` + escapedPFX + `' -AsByteStream -Raw;` +
-		`$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2;` +
-		`$cert.Import($pfx, '%s', 'DefaultKeySet');` +
-		`$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine');` +
-		`$store.Open('ReadWrite'); $store.Add($cert); $store.Close()`
-	if out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput(); err != nil {
-		log.Printf("证书导入到存储失败: %v: %s", err, string(out))
+	importOut, importErr := exec.Command("certutil", "-importpfx", "-p", "ddns", "-enterprise", pfxFile).CombinedOutput()
+	if importErr != nil {
+		log.Printf("[cert] certutil -importpfx 失败 (openssl路径): %v\n%s", importErr, string(importOut))
 		return false
 	}
 	log.Printf("证书已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)

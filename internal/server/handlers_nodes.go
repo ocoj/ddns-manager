@@ -250,11 +250,16 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s 所有文件加密失败", binding.BundleName), "warning")
 			continue
 		}
+		// v1.5.32: DeployPath 为空时取 Agent 上报的真实 CertPath, 保证 Manager/Agent 路径一致
+		targetPath := binding.DeployPath
+		if targetPath == "" {
+			targetPath = req.Status.CertPath
+		}
 		resp.CertUpdates = append(resp.CertUpdates, &model.CertUpdate{
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
-			Files: encFiles, TargetPath: binding.DeployPath,
-			ReloadServices: binding.ReloadServices, // v1.5.20 C1: 传播证书部署后需重载的服务列表
-			PFXPassword: bundle.PFXPassword,        // v1.5.22 H3: 若为空 Agent 回退到默认密码
+			Files: encFiles, TargetPath: targetPath,
+			ReloadServices: binding.ReloadServices,
+			PFXPassword: bundle.PFXPassword,
 		})
 		// v1.5.22 H3: PFX 密码为空时记录日志
 		if bundle.PFXPassword == "" {

@@ -1556,7 +1556,7 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	// v1.6.3: 用 PowerShell 包装 — Go 直接 exec netsh 在 SYSTEM 下失败(PATH/令牌), 但 powershell 可以
 	// v1.6.6: 用 WebAdministration 模块直接查 IIS SSL 绑定 (与 win-acme 同款 API)
 	// Get-ChildItem IIS:\SSLBindings → 结构化输出 → ConvertTo-Json → Go 直接解析
-	psNetsh := "Import-Module WebAdministration; Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = $_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json"
+	psNetsh := "Import-Module WebAdministration; Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = [string]$_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json"
 	out, err := exec.Command("powershell", "-Command", psNetsh).CombinedOutput()
 	if err != nil || len(out) == 0 {
 		agentLog("IIS扫描: netsh失败 len=%d err=%v", len(out), err)

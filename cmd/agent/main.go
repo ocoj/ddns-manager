@@ -1502,6 +1502,16 @@ func autoBindExisting(thumb, certCN string) {
 	}
 }
 
+// cutAnyPrefix v1.6.5: 尝试多个前缀匹配, 返回第一个匹配的 after 部分。
+func cutAnyPrefix(s string, prefixes ...string) (after string, ok bool) {
+	for _, p := range prefixes {
+		if after, ok = strings.CutPrefix(s, p); ok {
+			return
+		}
+	}
+	return "", false
+}
+
 // fitsBinding 对齐 win-acme Fits() 三级 hostname 匹配 (v1.6.0)。
 // 返回 (分数, 原因描述): 精确匹配=100, 泛域名匹配=50, 无匹配=0。
 func fitsBinding(iisHost, certCN string) (int, string) {
@@ -1543,47 +1553,61 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	siteMap := mapIISSites()
 
 	// 2. netsh http show sslcert → 获取 SSL 绑定列表
-	out, err := exec.Command("netsh", "http", "show", "sslcert").Output()
-	if err != nil {
+	// v1.6.3: 用 PowerShell 包装 — Go 直接 exec netsh 在 SYSTEM 下失败(PATH/令牌), 但 powershell 可以
+	// v1.6.6: 用 WebAdministration 模块直接查 IIS SSL 绑定 (与 win-acme 同款 API)
+	// Get-ChildItem IIS:\SSLBindings → 结构化输出 → ConvertTo-Json → Go 直接解析
+	psNetsh := "Import-Module WebAdministration; Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = $_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json"
+	out, err := exec.Command("powershell", "-Command", psNetsh).CombinedOutput()
+	if err != nil || len(out) == 0 {
+		agentLog("IIS扫描: netsh失败 len=%d err=%v", len(out), err)
 		return nil
 	}
-	var sites []model.IISBoundSite
-	lines := strings.Split(string(out), "\n")
-	var cur model.IISBoundSite
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(trimmed, "Hostname:port"); ok {
-			cur = model.IISBoundSite{}
-			if idx := strings.Index(after, ":"); idx != -1 {
-				val := strings.TrimSpace(after[idx+1:])
-				if lastColon := strings.LastIndex(val, ":"); lastColon != -1 {
-					cur.Hostname = strings.TrimSpace(val[:lastColon])
-					portStr := strings.TrimSpace(val[lastColon+1:])
-					cur.Port, _ = strconv.Atoi(portStr)
-				}
-			}
-			continue
-		}
-		if after, ok := strings.CutPrefix(trimmed, "IP:port"); ok {
-			cur = model.IISBoundSite{}
-			if idx := strings.LastIndex(after, ":"); idx != -1 {
-				cur.Port, _ = strconv.Atoi(strings.TrimSpace(after[idx+1:]))
-			}
-			continue
-		}
-		if after, ok := strings.CutPrefix(trimmed, "Certificate Hash"); ok {
-			cur.Thumbprint = strings.TrimSpace(strings.TrimPrefix(after, ":"))
-			if cur.Thumbprint != "" {
-				// 查找对应的 IIS 站点 ID
-				key := fmt.Sprintf("%s:%d", cur.Hostname, cur.Port)
-				if sid, ok := siteMap[key]; ok {
-					cur.SiteID = sid.id
-					cur.SiteName = sid.name
-				}
-				sites = append(sites, cur)
-			}
-		}
+	// v1.6.3 debug: dump first 200 chars of netsh output
+	if len(out) > 0 {
+		n := len(out)
+		if n > 200 { n = 200 }
+		sample := strings.ReplaceAll(string(out[:n]), "\r\n", "|")
+		agentLog("IIS扫描: netsh raw(%d)=%s", len(out), sample)
 	}
+	// v1.6.6: JSON 解析替代文本解析 — WebAdministration 返回结构化数据
+	type psSSLBinding struct {
+		Site       string `json:"Site"`
+		IP         string `json:"IP"`
+		Port       int    `json:"Port"`
+		Thumbprint string `json:"Thumbprint"`
+	}
+	var psBindings []psSSLBinding
+	jsonText := strings.TrimSpace(string(out))
+	if strings.HasPrefix(jsonText, "[") {
+		if err := json.Unmarshal(out, &psBindings); err != nil {
+			agentLog("IIS扫描: JSON解析失败: %v", err)
+			return nil
+		}
+	} else {
+		var single psSSLBinding
+		if err := json.Unmarshal(out, &single); err != nil {
+			agentLog("IIS扫描: JSON解析失败: %v", err)
+			return nil
+		}
+		psBindings = append(psBindings, single)
+	}
+	var sites []model.IISBoundSite
+	for _, pb := range psBindings {
+		cur := model.IISBoundSite{
+			Hostname:   pb.IP, // IP binding (SNI hostname 将通过 IIS API 扩展)
+			Port:       pb.Port,
+			Thumbprint: strings.ToLower(pb.Thumbprint),
+		}
+		// 通过 Site 名称查找 SiteID
+		if info, ok := siteMap[pb.Site]; ok {
+			cur.SiteID = info.id
+			cur.SiteName = info.name
+		}
+		sites = append(sites, cur)
+	}
+
+	saveIISBindingsFile(cfg, sites)
+	agentLog("IIS扫描: %d个SSL绑定 (siteMap=%d个站点)", len(sites), len(siteMap))
 	return sites
 }
 
@@ -1593,14 +1617,13 @@ type iisSiteInfo struct {
 	name string
 }
 
-// mapIISSites v1.6.0: appcmd list sites → map[hostname:port]→{siteID, siteName}
+// mapIISSites v1.6.0: appcmd list sites → map[name]→{siteID, siteName}
+// v1.6.6: 改为 map[name]info (siteName → info), 因为 PowerShell SSLBindings 返回站点名
 func mapIISSites() map[string]iisSiteInfo {
 	result := map[string]iisSiteInfo{}
-	appcmd := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd")
-	if _, err := os.Stat(appcmd); err != nil {
-		appcmd = "appcmd" // fallback to PATH
-	}
-	out, err := exec.Command(appcmd, "list", "sites").Output()
+	// v1.6.3: 用 PowerShell 包装 — Go 直接 exec appcmd 在 SYSTEM 下失败
+	psAppcmd := fmt.Sprintf("& $env:SystemRoot\\System32\\inetsrv\\appcmd list sites")
+	out, err := exec.Command("powershell", "-Command", psAppcmd).CombinedOutput()
 	if err != nil {
 		return result
 	}
@@ -1609,28 +1632,19 @@ func mapIISSites() map[string]iisSiteInfo {
 	for _, match := range re.FindAllStringSubmatch(string(out), -1) {
 		siteName := match[1]
 		siteID, _ := strconv.Atoi(match[2])
-		bindings := match[3]
-		// 解析每个 binding: proto/IP:port:host
-		for _, b := range strings.Split(bindings, ",") {
-			parts := strings.SplitN(b, "/", 2)
-			if len(parts) < 2 {
-				continue
-			}
-			bindingInfo := parts[1] // IP:port:host
-			fields := strings.SplitN(bindingInfo, ":", 3)
-			if len(fields) < 2 {
-				continue
-			}
-			port, _ := strconv.Atoi(fields[1])
-			host := ""
-			if len(fields) >= 3 {
-				host = fields[2]
-			}
-			key := fmt.Sprintf("%s:%d", host, port)
-			result[key] = iisSiteInfo{id: siteID, name: siteName}
-		}
+		// v1.6.6: 改用 site name 作为 key (PowerShell SSLBindings 返回站点名)
+		result[siteName] = iisSiteInfo{id: siteID, name: siteName}
 	}
 	return result
+}
+
+// saveIISBindingsFile v1.6.1: 写入 iis_bindings.json 供本地/管理端查看绑定状态。
+func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
+	path := filepath.Join(cfg.CertPath, "iis_bindings.json")
+	data, _ := json.MarshalIndent(sites, "", "  ")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		log.Printf("[cert] 写入 iis_bindings.json 失败: %v", err)
+	}
 }
 
 // extractPFXInfo 合并一次 certutil -dump 同时提取指纹和 CN。

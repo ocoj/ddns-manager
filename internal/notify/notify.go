@@ -125,9 +125,12 @@ type CertAlert struct {
 }
 
 // wrapHTML 将纯文本邮件包装为带 Logo + 样式的 HTML 邮件。
+// v1.5.33: 自动将纯文本 URL 转为可点击链接。
 func wrapHTML(subject, body string) string {
 	// 纯文本 → HTML (换行转 <br>)
 	htmlBody := strings.ReplaceAll(body, "\n", "<br>\n")
+	// 自动识别 https?:// 开头的 URL 并转为可点击链接
+	htmlBody = autoLinkURLs(htmlBody)
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
@@ -143,6 +146,34 @@ func wrapHTML(subject, body string) string {
   Powered by ddns-manager | Lanxun CO.,Ltd.
 </div>
 </body></html>`, emailLogoBase64, htmlBody)
+}
+
+// autoLinkURLs 将文本中的 https?:// 开头的 URL 替换为可点击的 <a> 链接。
+func autoLinkURLs(text string) string {
+	// 匹配 https?:// 后跟非空白、非 < 字符
+	var result strings.Builder
+	start := 0
+	for {
+		idx := strings.Index(text[start:], "https://")
+		if idx == -1 {
+			idx = strings.Index(text[start:], "http://")
+		}
+		if idx == -1 {
+			result.WriteString(text[start:])
+			break
+		}
+		absIdx := start + idx
+		result.WriteString(text[start:absIdx])
+		// 找到 URL 结束位置 (空格、<br>、行尾)
+		end := absIdx
+		for end < len(text) && text[end] != ' ' && text[end] != '<' && text[end] != '\n' && text[end] != '\r' {
+			end++
+		}
+		url := text[absIdx:end]
+		result.WriteString(fmt.Sprintf("<a href=\"%s\" style=\"color:#2563eb;\">%s</a>", url, url))
+		start = end
+	}
+	return result.String()
 }
 
 // managerURL returns the configured management URL for email links.

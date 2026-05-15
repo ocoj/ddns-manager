@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.5.37 — 2026-05-15
+
+### 🔴 根治修复：符号链接原子替换 + 自愈 + 版本推进规范
+
+基于 v1.5.36 部署后 .30/.37 两个节点因 symlink 丢失离线 5 小时的根因分析。
+
+#### 🔴 根因修复（3 项）
+
+- **replaceRunningBinary 符号链接原子替换** — `os.Remove(link)` → `os.Symlink(tmpLink)` →
+  `os.Rename(tmpLink, link)` 三步原子化。`os.Rename` 在同一文件系统内是原子的，
+  避免了 Remove→Symlink 窗口期中 symlink 裸奔导致永久离线的链式故障。
+- **restartAgentAfterUpgrade 增加 3 次重试 + 错误日志** — v1.5.34→v1.5.36 升级时
+  systemctl start 静默失败（无日志、无重试），导致新进程未启动、旧进程已退出。
+  修复：3 次重试间隔 2s，每次失败写 `log.Printf`，最终失败依赖 timer 自动恢复。
+- **ensureSymlink 启动时符号链接自愈** — Agent 启动时检测 `node-agent` 符号链接是否存在，
+  丢失则扫描安装目录中版本号最高的 `node-agent-v*-{os}-{arch}` 二进制自动重建。
+
+#### 📄 版本推进开发规范
+
+- **docs/VERSIONING.md** — 建立完整的版本推进开发规范（发版检查清单、操作序列、/bin/ 管理、
+  历史教训），防止版本推进跑偏。
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.5.37 ✅
+- All Agent nodes: v1.5.36 → 心跳自动升级到 v1.5.37 (已推送+含SHA256)
+
+---
+
 ## v1.5.36 — 2026-05-15
 
 ### 🔴 第九次审计修复（6 项）：PFX密码覆盖 + DNS Key假验证 + Checksum死代码 + 日志恢复

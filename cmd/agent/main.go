@@ -178,6 +178,57 @@ func detectInstallDir() {
 	}
 }
 
+// ensureSymlink v1.5.37: 启动时检测 node-agent 符号链接是否丢失, 自动从现有版本化二进制重建。
+// 防止 replaceRunningBinary os.Remove→os.Symlink 窗口期导致的永久离线。
+// 选择安装目录下版本号最高的 node-agent-v*-linux-amd64 文件作为链接目标。
+func ensureSymlink() {
+	if runtime.GOOS == "windows" {
+		return // Windows 不使用符号链接, 由升级批处理管理
+	}
+	link := filepath.Join(agentBaseDir, "node-agent")
+	if _, err := os.Lstat(link); err == nil {
+		return // 符号链接存在, 正常
+	}
+	// 符号链接丢失 — 扫描安装目录寻找版本号最高的二进制
+	entries, err := os.ReadDir(agentBaseDir)
+	if err != nil {
+		return
+	}
+	var bestVer string
+	var bestName string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "node-agent-v") || e.IsDir() {
+			continue
+		}
+		// 提取版本号: node-agent-v1.5.34-linux-amd64 → 1.5.34
+		if !strings.Contains(name, "-"+runtime.GOOS+"-") {
+			continue
+		}
+		parts := strings.SplitN(name, "-v", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		verPart := parts[1]
+		if dash := strings.Index(verPart, "-"); dash != -1 {
+			verPart = verPart[:dash]
+		}
+		if model.CompareSemVer(verPart, bestVer) > 0 {
+			bestVer = verPart
+			bestName = name
+		}
+	}
+	if bestName == "" {
+		log.Printf("[agent] 符号链接丢失且未找到版本化二进制, 请重新安装")
+		return
+	}
+	if err := os.Symlink(bestName, link); err != nil {
+		log.Printf("[agent] 自动重建符号链接失败: %v", err)
+		return
+	}
+	log.Printf("[agent] 符号链接丢失,已自动重建: %s → %s (v%s)", link, bestName, bestVer)
+}
+
 // setBaseDir overrides the default base directory (called after flag parsing).
 func setBaseDir(dir string) {
 	agentBaseDir = dir
@@ -1345,6 +1396,7 @@ func main() {
 	if !(*daemon && runtime.GOOS == "windows") {
 		detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
 		initAgentLog()
+		ensureSymlink()   // v1.5.37: 启动时符号链接自愈, 防止离线
 	}
 
 	if *showVersion {

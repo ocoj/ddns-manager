@@ -5,16 +5,21 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // replaceRunningBinary 用版本化文件名+符号链接替换当前运行的 Agent。
 // 下载 → 写入 node-agent-v{VERSION}-{os}-{arch} → 更新符号链接 → 删旧版。
 // 符号链接确保 systemd timer 无需改配置即可指向新版本。
+//
+// v1.5.37: 符号链接原子替换 — 通过 tmpLink + os.Rename 避免 Remove→Symlink
+// 之间的窗口期导致 symlink 永久丢失(两个节点 v1.5.34→v1.5.36 离线根因)。
 //
 // version 参数用于构建正确的版本化文件名（e.g. "1.5.3"）。
 // 平台后缀从 runtime.GOOS/runtime.GOARCH 直接获取，不解析旧文件名
@@ -33,17 +38,15 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	oldName := filepath.Base(curExe) // e.g. "node-agent-v1.5.2-linux-amd64"
 
 	// 构建版本化文件名: node-agent-v{VERSION}-{os}-{arch}
-	// 平台后缀直接从运行时获取，不依赖旧文件名解析
 	var versionedName string
 	v := version
 	if v == "" || v == "dev" {
 		v = filepath.Base(newExe)
 		v = strings.TrimSuffix(v, ".new")
-		// 从临时文件名提取版本: node-agent-v1.5.3-linux-amd64.new → 1.5.3
 		if idx := strings.Index(v, "-v"); idx != -1 {
-			rest := v[idx+2:] // "1.5.3-linux-amd64"
-			if sep := strings.LastIndex(rest, "-" + runtime.GOOS + "-"); sep != -1 {
-				v = rest[:sep] // "1.5.3"
+			rest := v[idx+2:]
+			if sep := strings.LastIndex(rest, "-"+runtime.GOOS+"-"); sep != -1 {
+				v = rest[:sep]
 			}
 		}
 	}
@@ -74,11 +77,18 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		return err
 	}
 
-	// 更新符号链接: node-agent → node-agent-v1.5.3-linux-amd64
+	// v1.5.37: 符号链接原子替换 — 先建临时链接, 再 os.Rename 原子切到正式名。
+	// os.Rename 在同一文件系统内是原子的: 要么新链接生效, 要么旧链接保持不变。
+	// 避免了 v1.5.34-os.Remove(link)→v1.5.34-os.Symlink 中间窗口导致 symlink 裸奔的根因。
 	link := filepath.Join(dir, "node-agent")
-	os.Remove(link)
-	if err := os.Symlink(versionedName, link); err != nil {
-		return err
+	tmpLink := link + ".linktmp"
+	os.Remove(tmpLink) // 清理上次残留
+	if err := os.Symlink(versionedName, tmpLink); err != nil {
+		return fmt.Errorf("创建临时符号链接失败: %w", err)
+	}
+	if err := os.Rename(tmpLink, link); err != nil {
+		os.Remove(tmpLink)
+		return fmt.Errorf("替换符号链接失败: %w", err)
 	}
 
 	// 清理旧的版本化二进制（当前版本，非新版本）
@@ -96,14 +106,21 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 // restartAgentAfterUpgrade 在自升级完成后立即触发一次心跳，避免 Linux oneshot
 // 模式下的 5 分钟 DNS 更新中断。
 //
+// v1.5.37: 增加 3次重试+错误日志, 避免 v1.5.34→v1.5.36 时 systemctl start 静默失败
+// 导致新进程未启动、旧进程已退出、symlink 丢失的离线链式故障。
+//
 // v1.5.13 修复: 使用 --no-block 防止 systemctl 等待当前进程完成（死锁）。
-// 在 oneshot 模式下调用 systemctl start 自身会因 systemd 等待服务完成而永久阻塞。
-// --no-block 使 systemctl 仅排队启动请求后立即返回。
 func restartAgentAfterUpgrade() {
-	// 触发即时心跳 — 非阻塞（--no-block），失败不影响升级流程
-	cmd := exec.Command("systemctl", "start", "--no-block", "node-agent.service")
-	if err := cmd.Run(); err != nil {
-		// node-agent.service 是 oneshot，可能在退出前已被 timer 触发
-		// 失败记录日志但不应该影响升级结果
+	for i := 0; i < 3; i++ {
+		cmd := exec.Command("systemctl", "start", "--no-block", "node-agent.service")
+		if err := cmd.Run(); err != nil {
+			log.Printf("[upgrade] systemctl start 失败(第%d次): %v", i+1, err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		log.Printf("[upgrade] systemctl start --no-block 成功")
+		return
 	}
+	// 3次重试均失败: 不阻塞升级流程, agent timer 会在下次触发时间自动拉起
+	log.Printf("[upgrade] systemctl start 3次重试均失败, 依赖 node-agent.timer 下次自动触发")
 }

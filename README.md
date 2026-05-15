@@ -10,6 +10,7 @@
 | **[前端设计](docs/前端设计.md)** | Web 前端设计规范 — 布局、色彩、组件、API 对照 |
 | **[变更日志](CHANGELOG.md)** | 版本变更日志（v1.5.1 → v1.5.33） |
 | **[安装接口规范](docs/安装接口规范.md)** | ⚠️ 冻结 — 安装器/Agent/Manager 三方接口契约 |
+| **[版本推进规范](docs/VERSIONING.md)** | 📋 v1.5.37+ — 发版流程、/bin/管理、历史教训 |
 | **[安全审计](docs/audits/)** | 全量代码审计报告 |
 | **[图标资源](docs/图标.md)** | 侧边栏 SVG 图标资源 |
 
@@ -47,7 +48,7 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.5.36** | v1.5.36 第九次审计修复 (6项): PFX密码覆盖+DNS Key假验证+Checksum+日志恢复 |
+| ddns-manager | **v1.5.37** | v1.5.37 根因修复: symlink原子替换+自愈+版本推进规范 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

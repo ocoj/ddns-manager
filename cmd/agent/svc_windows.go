@@ -22,6 +22,10 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 	s.stopCh = make(chan struct{})
 
 	go func() {
+		// v1.5.33: Windows Service 初始化延迟到此处, main() 零 I/O 阻塞
+		detectInstallDir()
+		initAgentLog()
+		log.Printf("[daemon] Windows Service started, version=%s", version)
 		// v1.5.20 H1: 心跳失败后 30s×3 快速重试，防止网络抖动导致 DNS 中断 5 分钟
 		doHeartbeatWithRetry := func() {
 			if err := doHeartbeat(s.cfg); err != nil {

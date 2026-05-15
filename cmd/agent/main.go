@@ -1312,8 +1312,12 @@ func main() {
 	if *installDir != "" {
 		setBaseDir(*installDir)
 	}
-	detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
-	initAgentLog()
+	// v1.5.33: Windows Service 时跳过, 延迟到 SCM handler goroutine 中初始化
+	// 确保 main() 对 SCM 绝对零阻塞
+	if !(*daemon && runtime.GOOS == "windows") {
+		detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
+		initAgentLog()
+	}
 
 	if *showVersion {
 		fmt.Printf("node-agent v%s\nPublisher: Lanxun CO.,Ltd.\n", version)

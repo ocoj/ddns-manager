@@ -2142,7 +2142,7 @@ function toggleDeployButton() {
   }
 }
 
-async async function saveForcedVersion() {
+async function saveForcedVersion() {
   var v = document.getElementById('ver-force').value;
   var r = await apiJSON('/api/admin/agent-version', {method: 'POST', body: {latest_version: v}});
   if (r.ok) { toast('版本已保存'); markPageClean(); }

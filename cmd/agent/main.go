@@ -61,8 +61,15 @@ func agentLog(format string, args ...interface{}) {
 
 // initAgentLog 将 Agent 日志同时输出到安装目录下的 agent.log 和 stderr。
 // v1.5.31 H2: 增加 10MB 轮转 — 超限时重命名为 agent-YYYY-MM-DD.log, 保留最近 3 个。
+// v1.5.33: Windows Service 下 0700 权限映射异常, 改用 0755/0644。
 func initAgentLog() {
-	os.MkdirAll(agentBaseDir, 0700)
+	perm := os.FileMode(0700)
+	filePerm := os.FileMode(0600)
+	if runtime.GOOS == "windows" {
+		perm = 0755
+		filePerm = 0644
+	}
+	os.MkdirAll(agentBaseDir, perm)
 	logPath := filepath.Join(agentBaseDir, "agent.log")
 
 	// 文件超过 10MB 时轮转
@@ -84,7 +91,7 @@ func initAgentLog() {
 		}
 	}
 
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
 	if err != nil {
 		return // 写不了安装目录就算了，至少 stderr 还能用
 	}

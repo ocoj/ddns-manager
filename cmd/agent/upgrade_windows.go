@@ -48,6 +48,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	//       2) 实测 %%TEMP%% 在部分系统环境变量异常时定位失败/不可访问
 
 	script := fmt.Sprintf("@echo off\r\n"+
+		"chcp 65001 >nul\r\n"+ // v1.5.33: 切换控制台为 UTF-8, 避免中文乱码
 		"cd /d \"%%~dp0\"\r\n"+ // v1.5.29: cd 到安装目录
 		"reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths\" /v \"%%~dp0\" /t REG_DWORD /d 0 /f >nul 2>&1\r\n"+ // Defender 排除
 		"setlocal enabledelayedexpansion\r\n"+ // v1.5.20 C2: 延时变量展开
@@ -100,6 +101,21 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		// Step 8: Re-enable auto-start and start service
 		"sc config node-agent start= auto >>\"ddns_upgrade.log\" 2>&1\r\n"+
 		"sc start node-agent >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// v1.5.33: 轮询 RUNNING 最多30s, 超时则回滚旧二进制
+		"set SCOUNT=0\r\n"+
+		":poll_start\r\n"+
+		"  timeout /t 2 /nobreak >nul\r\n"+
+		"  sc query node-agent | find \"RUNNING\" >nul\r\n"+
+		"  if not errorlevel 1 goto :done\r\n"+
+		"  set /a SCOUNT+=1\r\n"+
+		"  if !SCOUNT! LSS 15 goto :poll_start\r\n"+
+		// 启动超时: 回滚
+		"  echo [ddns] Start timeout, rolling back...\r\n"+
+		"  sc stop node-agent >nul 2>&1\r\n"+
+		"  timeout /t 3 /nobreak >nul\r\n"+
+		"  move /y \"%%OLD%%\" \"%%NEW%%\" >nul 2>&1\r\n"+
+		"  move /y \"%%BAK%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		"  sc start node-agent >>\"ddns_upgrade.log\" 2>&1\r\n"+
 		":done\r\n"+
 		"del \"%%~f0\" & exit\r\n",
 		curExe, newExe, curExe, version)

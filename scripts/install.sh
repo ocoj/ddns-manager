@@ -23,7 +23,9 @@ echo "ddns-manager | arch=$ARCH"
 detect_version() {
     local ver="${VERSION:-}"
     if [ -z "$ver" ]; then
-        ver=$(curl -fsSL --connect-timeout 10 "$MANAGER/api/ping" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)
+        local ping_json=$(curl -fsSL --connect-timeout 10 "$MANAGER/api/ping" 2>/dev/null || true)
+        ver=$(echo "$ping_json" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)
+        local agent_ver=$(echo "$ping_json" | sed -n 's/.*"agent_version":"\([^"]*\)".*/\1/p' || true)
     fi
     if [ -z "$ver" ]; then
         echo "[!] 无法从管理端获取版本号 ($MANAGER/api/ping)" >&2
@@ -31,6 +33,9 @@ detect_version() {
         exit 1
     fi
     echo "  管理端版本: v$ver" >&2
+    if [ -n "$agent_ver" ]; then
+        echo "  客户端版本: v$agent_ver" >&2
+    fi
     echo "$ver"
 }
 

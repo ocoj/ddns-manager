@@ -31,7 +31,11 @@ import (
 )
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "ok", "version": s.version})
+	agentVer := ""
+	if cfg, _ := s.store.LoadAgentConfig(); cfg != nil {
+		agentVer = cfg.LatestVersion
+	}
+	jsonOK(w, map[string]interface{}{"status": "ok", "version": s.version, "agent_version": agentVer})
 }
 
 func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,64 @@
 # CHANGELOG
 
+## v1.6.x — 2026-05-15
+
+### 🔴 第十次审计修复：证书部署全链路重构
+
+借鉴 win-acme 成熟设计，重构 Windows 证书部署流程。核心突破：WebAdministration
+PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 locale 问题。
+
+#### v1.6.8 — IPAddress 序列化修复
+- **bug**: PowerShell `ConvertTo-Json` 将 `$_.IPAddress` 序列化为嵌套对象
+  `{"Address":0,"AddressFamily":2,...}` 而非字符串 "0.0.0.0"
+- **fix**: `[string]$_.IPAddress` 强制转换为字符串
+- **结果**: Win2022 IIS 扫描成功 → 1个SSL绑定 0.0.0.0:443 thumb=2f0823ab...
+
+#### v1.6.7 — WebAdministration API 替代 netsh
+- **突破**: 用 `Get-ChildItem IIS:\SSLBindings` 替代 netsh 文本解析
+- JSON 输出直接 `json.Unmarshal` → 中英文通吃, 不依赖 chcp
+- 处理单对象/数组 JSON 兼容 (`{...}` vs `[{...}]`)
+
+#### v1.6.6 — PowerShell 调用 + 中英文标签匹配
+- netsh 在 SYSTEM 下必须通过 `chcp 437 >nul &&` 前缀调用
+- `cutAnyPrefix()` 同时匹配中英文标签 (IP:port / IP:端口)
+
+#### v1.6.5 — 根因定位：SYSTEM locale 中文输出
+- raw dump 发现 SYSTEM 下 netsh 输出中文标签(IP:端口/证书哈希)
+- 解析代码只匹配英文 → 0个SSL绑定
+
+#### v1.6.4 — siteMap 修复（PowerShell appcmd）
+- `appcmd list sites` 也需通过 PowerShell 调用
+- siteMap 从 0 恢复到 2 个站点
+
+#### v1.6.3 — PowerShell 包装 netsh/appcmd
+- Go 直接 `exec.Command("netsh")` 在 SYSTEM 下失败 → 改用 `exec.Command("powershell", "-Command", "netsh ...")`
+
+#### v1.6.1-6.2 — IIS 扫描尝试验证
+- v1.6.1: `scanIISBindings` 初次部署 → 0个SSL绑定
+- v1.6.2: 全路径 `C:\Windows\System32\netsh.exe` → 仍0绑定
+
+#### v1.6.0 — 核心重构
+
+##### 🟢 win-acme 设计借鉴
+- **fitsBinding()**: 三级 hostname 匹配 (精确=100 / 泛域名=50 / 默认=10)
+- **证书按 BundleName 分子目录**: `CertPath/{BundleName}/cert.pfx` 多站点不覆盖
+- **collectCertHashes 磁盘扫描**: 无 .cert_hash 文件也能从磁盘文件计算 hash 上报
+- **IIS 绑定快照**: `iis_bound_sites` 字段上报到 Manager
+- **强制推送 API**: `POST /api/admin/certs/{name}/push/{id}` 用于测试验证
+
+##### 🧪 测试方法
+- `docs/cert-deploy-test.md` — 6 项测试用例 (强制推送/IIS快照/Fits匹配/多站点/重复推送/密码兜底)
+
+##### 📄 版本推进规范
+- `docs/VERSIONING.md` — 发版流程、/bin/管理、历史教训
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.6.0 ✅
+- Win2022 (10.0.0.3): v1.6.8 ✅ IIS扫描1个SSL绑定
+- sp.example.com: v1.5.41 → 待心跳升级
+
+---
+
 ## v1.5.37 — 2026-05-15
 
 ### 🔴 根治修复：符号链接原子替换 + 自愈 + 版本推进规范

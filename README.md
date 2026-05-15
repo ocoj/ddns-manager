@@ -48,7 +48,7 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.5.37** | v1.5.37 根因修复: symlink原子替换+自愈+版本推进规范 |
+| ddns-manager | **v1.6.8** | v1.6.x 证书部署重构: win-acme设计+WebAdministration API+IIS扫描 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

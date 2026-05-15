@@ -179,9 +179,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				safeName := strings.ReplaceAll(strings.ReplaceAll(manifestFile, "..", ""), "/", "")
 				if safeName != "" && safeName == manifestFile {
 					if _, err := os.Stat(filepath.Join(s.store.AgentBinDir(), safeName)); err == nil {
-						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "dl/" + safeName}
+						// v1.5.36 C3: 携带 SHA256 校验和, Agent 下载后验证完整性
+						checksum := s.store.GetAgentBinarySHA256(safeName)
+						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "dl/" + safeName, Checksum: checksum}
 					s.logMgr.LogWithNode("upgrade", "升级已推送", nodeID,
-						fmt.Sprintf("ver=%s url=dl/%s", agentCfg.LatestVersion, safeName), "info")
+						fmt.Sprintf("ver=%s url=dl/%s sum=%s", agentCfg.LatestVersion, safeName, truncate(checksum, 12)), "info")
 						if agentCfg.UpgradeState == nil {
 							agentCfg.UpgradeState = make(map[string]store.UpgJob)
 						}
@@ -619,6 +621,10 @@ func detectPlatform(rec *model.NodeRecord) (goos, goarch string) {
 
 func parseAuth(r *http.Request) (nodeID, password string, ok bool) {
 	auth := r.Header.Get("Authorization")
+	// v1.5.36 L3: 限制 Authorization header 长度，防止恶意 base64 输入导致 CPU 耗尽
+	if len(auth) > 2048 {
+		return "", "", false
+	}
 	if !strings.HasPrefix(auth, "Bearer ") {
 		return "", "", false
 	}

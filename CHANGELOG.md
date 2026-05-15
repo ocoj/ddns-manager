@@ -1,5 +1,95 @@
 # CHANGELOG
 
+## v1.5.36 — 2026-05-15
+
+### 🔴 第九次审计修复（6 项）：PFX密码覆盖 + DNS Key假验证 + Checksum死代码 + 日志恢复
+
+基于 v1.5.35 全量逐行审计 (DeepSeek V4 Pro thinking=high)，重点修复：ACME续签覆盖自定义PFX密码、
+DNS Key在线验证不触发真实API、Agent二进制下载无完整性校验、DNS日志丢失。
+
+#### 🔴 Critical（3 项）
+
+- **C1 ACME 自动续签后 PFX 密码被硬编码 "ddns" 覆盖** — `UpdateCertMeta()` 生成双 PFX 文件时
+  硬编码密码 `"ddns"`，忽略用户通过 Web UI 设置的 `CertBundle.PFXPassword`。
+  修复：`UpdateCertMeta` 从 `meta.json` 读取 `pfx_password` 字段传入 `GeneratePFX`
+- **C2 testDNSKeyOnline 不设域名时可能不做真实 API 调用** — v1.5.34 M7 将 `Domains` 设为 `nil`
+  以避免域名不存在混淆，但 Cloudflare/Porkbun 等 provider 在无域名时不发起任何 API 请求。
+  修复：支持 `?domain=xxx` 查询参数指定测试域名，未指定时用 `"@"` 根域名触发真实 API
+- **C3 AgentUpdate.Checksum 从未填充 — 下载完整性校验死代码** — Manager 推送升级时
+  `Checksum` 字段永远为 `""`，Agent 侧 `if update.Checksum != ""` 分支永不执行。
+  修复：`SaveAgentBinary` 自动计算 SHA256 并保存 `.sha256` 文件；
+  `GetAgentBinarySHA256` 读取校验和；`handleHeartbeat` 填充 `AgentUpdate.Checksum`
+
+#### 🟠 High（2 项）
+
+- **H2 心跳失败时 DNS 更新日志丢失** — `req.Logs` (DNS更新日志) 未像 `req.AgentLogs` 一样
+  在心跳失败时回写缓冲，连续两次心跳失败时第一批 DNS 日志可能被覆盖。
+  修复：心跳失败时将 `req.Logs` 写回 `agentLogBuf`
+- **M2 DNSUpdater.Run() log.SetOutput 无 defer 恢复** — `provider.Init()` 若 panic，
+  `log.SetOutput` 不被恢复，后续所有日志输出被重定向到已销毁的 `bytes.Buffer`。
+  修复：`defer log.SetOutput(origWriter)` 紧随设置之后
+
+#### 🟢 Low（1 项）
+
+- **L3 parseAuth base64 解码无长度限制** — 恶意请求可发送超长 Authorization header。
+  修复：限制 header 长度 ≤ 2048 字节
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.5.36 ✅
+- Client A Linux (10.0.0.2): v1.5.36 ✅ (手动部署)
+- Client B Windows (10.0.0.3): v1.5.35 → 等待心跳自动升级到 v1.5.36
+
+---
+
+## v1.5.35 — 2026-05-15
+
+### 🔴 第八次审计修复（13 项）：数据竞争 + 日志持久化 + 认证核验 + 降级保护
+
+基于 v1.5.34 全量逐行审计，重点修复：ACME 数据竞争、LastErrorDetail
+误报、Agent 操作日志丢失、DNS Key 认证核验漏报、version 比较发散。
+
+#### 🔴 Critical（4 项）
+
+- **C3 RenewByName 多处 lastRenewErr 写操作未加锁** — 5 处写入未持 `m.mu.Lock()`，与
+  `LastError()` 的锁读形成数据竞争。修复：统一 `setLastErr()` 闭包加锁写入
+- **C4 RenewByName 返回 true 但 UpdateCertMeta 失败静默** — PFX 重新生成失败时
+  bundle hash 未更新 → Manager 检测不到变更 → Agent 永收不到新证书。
+  修复：`UpdateCertMeta` 失败时返回 false + 设置 `lastRenewErr`
+- **C1 selfUpgrade 拒绝降级后返回 nil** — Manager 侧 RetryCount 持续递增，
+  运维无法区分"Agent 正确拒绝降级"与"升级下载失败"。
+  修复：返回 `errDowngradeBlocked` sentinel error，`doHeartbeat` 中单独处理
+- **H1 LastErrorDetail 误捕非错误日志行** — 匹配 `"Message"`/`"Code"`/`"400"`
+  等宽泛关键词，ddns-go 成功日志也被捕获。
+  修复：精确匹配 `level=error` + JSON 错误码模式 + 已知错误码
+
+#### 🟠 High（5 项）
+
+- **H2 两个 compareSemVer 实现发散** — agent/main.go 和 store/store.go 各有一套，
+  pre-release 处理不同。修复：提取 `model.CompareSemVer` 公共实现，双向引用
+- **H3 Agent 操作日志仅内存缓冲** — `agentLog` 仅写 `agentLogBuf` 内存，Agent
+  crash 所有未发送日志丢失。修复：增加 `agent_events.log` 文件持久化 (10MB 轮转)
+- **H5 testDNSKeyOnline 错误关键词覆盖不全** — 仅 9 个关键词，Cloudflare/Porkbun
+  等提供商错误漏报。修复：扩展到 20+ 关键词 + 输出完整捕获日志
+- **H6 sendHeartbeat 不区分失败原因** — 返回 nil 无法区分网络/认证/解析失败。
+  修复：改为 `(*model.HeartbeatResp, error)` 返回，日志含具体错误
+- **M5 心跳失败不记录 Manager 响应体** — 非 JSON 响应时解析失败无法诊断。
+  修复：解析失败时截取前 200 字符 body 写入错误
+
+#### 🟡 Medium（4 项）
+
+- **M1 ddns_errors.log 无轮转** — 长期运行可能写满磁盘。修复：10MB 轮转保留 3 个
+- **M3 scheduleManagerRestart 硬编码 /opt/ddns-manager** — 修复：`os.Executable()` 动态获取
+- **M4 Windows 批处理 taskkill 后无进程验证** — fallthrough 到文件替换可能因锁失败。
+  修复：增加 `tasklist` 验证进程已终止
+- **M7 testDNSKeyOnline 用虚拟域名 test.example.com** — 修复：不设域名，Init 环节已验证凭证
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.5.35 ✅
+- Client A Linux (10.0.0.2): v1.5.35 ✅ (心跳自动升级)
+- Client B Windows (10.0.0.3): v1.5.34 → 等待心跳自动升级到 v1.5.35
+
+---
+
 ## v1.5.33 — 2026-05-15
 
 ### 🟢 功能增强（3 项）：详细错误上报 + DNS Key 核验 + 邮件美化

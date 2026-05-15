@@ -72,6 +72,12 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		"  echo [ddns] Force killing...\r\n"+
 		"  taskkill /f /im node-agent.exe 2>nul\r\n"+
 		"  timeout /t 3 /nobreak >nul\r\n"+
+		// v1.5.34 M4: 验证进程确实已终止, 避免文件锁导致 move 失败
+		"  tasklist /fi \"imagename eq node-agent.exe\" | find \"node-agent.exe\" >nul\r\n"+
+		"  if not errorlevel 1 (\r\n"+
+		"    echo [ddns] Force kill 失败, 进程仍在运行, 升级中止 >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		"    goto :done\r\n"+
+		"  )\r\n"+
 		":replace\r\n"+
 		// Step 4: Backup old binary
 		"move /y \"%%OLD%%\" \"%%BAK%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+

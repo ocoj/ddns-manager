@@ -101,6 +101,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 		var detailBuf bytes.Buffer
 		origWriter := log.Writer()
 		log.SetOutput(io.MultiWriter(origWriter, &detailBuf))
+		defer log.SetOutput(origWriter)   // v1.5.36 M2: panic-safe 恢复, 防止 provider.Init() panic 导致后续日志全部丢失
 
 		provider.Init(&dc, ipv4cache, ipv6cache)
 
@@ -108,6 +109,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 		domains := provider.AddUpdateDomainRecords()
 
 		// 恢复 log 输出, 解析截获的错误消息
+		// v1.5.34 H1: 精确匹配 ddns-go API 错误 — 优先 JSON 错误码/结构化日志，其次已知错误模式
 		log.SetOutput(origWriter)
 		var errLines []string
 		for _, line := range strings.Split(detailBuf.String(), "\n") {
@@ -115,13 +117,15 @@ func (u *DNSUpdater) Run() DNSStatus {
 			if line == "" {
 				continue
 			}
-			// 过滤: ddns-go 的 API 错误通常包含这些关键词
-			if strings.Contains(line, "Failed") || strings.Contains(line, "error") ||
-				strings.Contains(line, "Error") || strings.Contains(line, "Message") ||
-				strings.Contains(line, "Code") || strings.Contains(line, "404") ||
-				strings.Contains(line, "400") || strings.Contains(line, "403") ||
-				strings.Contains(line, "500") || strings.Contains(line, "Invalid") ||
-				strings.Contains(line, "NotFound") || strings.Contains(line, "Unauthorized") {
+			// 精确匹配: ddns-go 结构化错误 (level=error) 或 JSON API 错误响应
+			isError := strings.Contains(line, "level=error") ||
+				(strings.Contains(line, `"Code"`) && !strings.Contains(line, `"Success"`)) ||
+				strings.Contains(line, "InvalidAccessKeyId") ||
+				strings.Contains(line, "AccessDenied") ||
+				strings.Contains(line, "SignatureDoesNotMatch") ||
+				strings.Contains(line, "RequestLimitExceeded") ||
+				strings.Contains(line, "DomainRecordDuplicate")
+			if isError {
 				errLines = append(errLines, line)
 			}
 		}
@@ -183,8 +187,22 @@ func (u *DNSUpdater) Run() DNSStatus {
 	}
 
 	// v1.5.31 H3: 失败域名持久化到 ddns_errors.log, 防止 Agent 崩溃丢失内存日志
+	// v1.5.34 M1: 增加 10MB 轮转, 保留 3 个历史文件
 	if len(allFailedDomains) > 0 {
 		path := filepath.Join(agentBaseDir, "ddns_errors.log")
+		// 轮转: >10MB 时重命名为 ddns_errors.N.log (保留 3 个)
+		if fi, statErr := os.Stat(path); statErr == nil && fi.Size() > 10<<20 {
+			for i := 3; i >= 1; i-- {
+				old := filepath.Join(agentBaseDir, fmt.Sprintf("ddns_errors.%d.log", i))
+				if i < 3 {
+					next := filepath.Join(agentBaseDir, fmt.Sprintf("ddns_errors.%d.log", i+1))
+					os.Rename(old, next)
+				} else {
+					os.Remove(old)
+				}
+			}
+			os.Rename(path, filepath.Join(agentBaseDir, "ddns_errors.1.log"))
+		}
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			fmt.Fprintf(f, "%s DNS更新失败: %s\n", time.Now().Format(time.RFC3339), strings.Join(allFailedDomains, ", "))
 			f.Close()

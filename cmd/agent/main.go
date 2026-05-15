@@ -22,7 +22,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +31,9 @@ import (
 	"github.com/kk/ddns-manager/internal/model"
 	"gopkg.in/yaml.v3"
 )
+
+// v1.5.34 C1: 降级拒绝 sentinel error，与升级成功/失败区分
+var errDowngradeBlocked = fmt.Errorf("downgrade blocked")
 
 // version is set at build time via -ldflags "-X main.version=x.y.z"
 var version = "dev"
@@ -52,10 +54,52 @@ var (
 	lastCertErrors   []string
 	lastCertErrorsMu sync.Mutex
 )
+// v1.5.34 H3: Agent 操作日志文件持久化 (10MB 轮转, 保留 3 个), 防止 crash 丢失
+var (
+	agentEventsFile   *os.File
+	agentEventsFileMu sync.Mutex
+)
 func agentLog(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
 	agentLogBuf.Write(msg)
+	// v1.5.34 H3: 同步追加写入 agent_events.log, 防止 Agent crash 丢失操作日志
+	agentEventsFileMu.Lock()
+	if agentEventsFile != nil {
+		fmt.Fprintf(agentEventsFile, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+	}
+	agentEventsFileMu.Unlock()
+}
+
+// initAgentEventsLog 打开 Agent 操作事件日志文件 (agent_events.log), 10MB 轮转。
+// v1.5.34 H3: 与 agent.log 平行, 独立于 go log 框架, 提供 crash-safe 的操作日志持久化。
+func initAgentEventsLog() {
+	path := filepath.Join(agentBaseDir, "agent_events.log")
+	perm := os.FileMode(0600)
+	if runtime.GOOS == "windows" {
+		perm = 0644
+	}
+	// 轮转: >10MB 时重命名为 agent_events.N.log (保留 3 个)
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 10<<20 {
+		for i := 3; i >= 1; i-- {
+			old := filepath.Join(agentBaseDir, fmt.Sprintf("agent_events.%d.log", i))
+			if i < 3 {
+				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent_events.%d.log", i+1))
+				os.Rename(old, next)
+			} else {
+				os.Remove(old)
+			}
+		}
+		os.Rename(path, filepath.Join(agentBaseDir, "agent_events.1.log"))
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, perm)
+	if err != nil {
+		return
+	}
+	agentEventsFileMu.Lock()
+	agentEventsFile = f
+	agentEventsFileMu.Unlock()
+	log.Printf("[agent] 操作事件日志: %s", path)
 }
 
 // initAgentLog 将 Agent 日志输出到安装目录下的 agent.log。
@@ -97,6 +141,8 @@ func initAgentLog() {
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
 	log.Printf("[agent] 日志文件: %s", logPath)
+	// v1.5.34 H3: 同时打开操作事件日志持久化文件
+	initAgentEventsLog()
 }
 
 // base paths — defaults, overridable via -dir flag or auto-detected from binary location.
@@ -319,14 +365,20 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 
 	// 3. Send heartbeat
 	heartbeatFailed.Store(false)
-	resp := sendHeartbeat(cfg, req)
+	resp, hbErr := sendHeartbeat(cfg, req)
 	if resp == nil {
 		// v1.5.29 C1: 心跳失败时恢复 AgentLogs 到缓冲，防止丢失
 		heartbeatFailed.Store(true)
 		for _, logLine := range req.AgentLogs {
 			agentLogBuf.Write(logLine)
 		}
-		return fmt.Errorf("心跳失败")
+		// v1.5.36 H2: 心跳失败时也将 DNS 更新日志恢复到缓冲，防止连续失败导致日志丢失
+		for _, logLine := range req.Logs {
+			agentLogBuf.Write("[dns] " + logLine)
+		}
+		// v1.5.34 H6: 日志含具体失败原因, 不再笼统说"心跳失败"
+		log.Printf("[heartbeat] 心跳失败: %v", hbErr)
+		return fmt.Errorf("心跳失败: %w", hbErr)
 	}
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
@@ -390,7 +442,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		// v1.5.20 Fix3: 升级前发送当前日志缓冲，升级后 os.Exit 会丢失
 		agentLog("收到升级推送: v%s → v%s", version, resp.AgentUpdate.Version)
 		if err := selfUpgrade(cfg, resp.AgentUpdate); err != nil {
-			log.Printf("自升级失败: %v", err)
+			if err == errDowngradeBlocked {
+				agentLog("升级已跳过: 拒绝降级至 v%s", resp.AgentUpdate.Version)
+			} else {
+				agentLog("自升级失败: %v", err)
+				log.Printf("自升级失败: %v", err)
+			}
 		}
 	}
 
@@ -398,11 +455,11 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 }
 
 // sendHeartbeat sends a heartbeat request and returns the response.
-func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) *model.HeartbeatResp {
+// v1.5.34 H6+M5: 返回 error 区分失败原因 (网络/认证/解析), 非 200 时记录响应体
+func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.HeartbeatResp, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		log.Printf("心跳 序列化失败: %v", err)
-		return nil
+		return nil, fmt.Errorf("序列化失败: %w", err)
 	}
 	token := base64.StdEncoding.EncodeToString([]byte(cfg.NodeID + ":" + cfg.Password))
 
@@ -410,34 +467,34 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) *model.Heartb
 
 	httpReq, err := http.NewRequest("POST", cfg.ManagerURL+"/api/heartbeat", bytes.NewReader(body))
 	if err != nil {
-		log.Printf("心跳 创建请求失败: %v", err)
-		return nil
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		log.Printf("心跳 发送请求失败: %v", err)
-		return nil
+		return nil, fmt.Errorf("网络错误: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50MB (多证书场景)
 	if err != nil {
-		log.Printf("心跳 读取响应失败: %v", err)
-		return nil
+		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 	var hr model.HeartbeatResp
 	if err := json.Unmarshal(respBody, &hr); err != nil {
-		log.Printf("心跳 解析响应失败: %v", err)
-		return nil
+		// v1.5.34 M5: 解析失败时记录原始响应体前缀 (帮助诊断非 JSON 响应)
+		preview := string(respBody)
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		return nil, fmt.Errorf("解析响应失败: %w (body=%s)", err, preview)
 	}
 	if !hr.OK {
-		log.Printf("心跳 被服务端拒绝: %s", hr.Error)
-		return nil
+		return nil, fmt.Errorf("服务端拒绝: %s", hr.Error)
 	}
-	return &hr
+	return &hr, nil
 }
 
 // applyCertUpdates processes certificate updates from heartbeat response.
@@ -888,10 +945,10 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 
 	// v1.5.33: 防止降级 — 推送版本号 ≤ 当前版本时跳过
 	if update.Version != "" && version != "" && version != "dev" {
-		if cmp := compareSemVer(update.Version, version); cmp <= 0 {
+		if cmp := model.CompareSemVer(update.Version, version); cmp <= 0 {
 			upgradeLogger("跳过升级: 推送版本 v%s ≤ 当前版本 v%s (拒绝降级)", update.Version, version)
 			log.Printf("[upgrade] 拒绝降级 v%s→v%s", version, update.Version)
-			return nil
+			return errDowngradeBlocked
 		}
 	}
 	tmpFile := exePath + ".new"
@@ -1269,35 +1326,6 @@ func extractPFXInfo(pfxFile string) (thumb string, cn string) {
 		}
 	}
 	return
-}
-
-// compareSemVer 比较两个语义化版本号 a vs b。返回 -1 (a<b), 0 (a==b), 1 (a>b)。
-func compareSemVer(a, b string) int {
-	a = strings.TrimPrefix(a, "v")
-	b = strings.TrimPrefix(b, "v")
-	parseVer := func(v string) []int {
-		parts := strings.Split(v, ".")
-		nums := make([]int, 0, 3)
-		for _, p := range parts {
-			n, _ := strconv.Atoi(strings.SplitN(p, "-", 2)[0])
-			nums = append(nums, n)
-		}
-		for len(nums) < 3 {
-			nums = append(nums, 0)
-		}
-		return nums[:3]
-	}
-	aa := parseVer(a)
-	bb := parseVer(b)
-	for i := 0; i < 3; i++ {
-		if aa[i] < bb[i] {
-			return -1
-		}
-		if aa[i] > bb[i] {
-			return 1
-		}
-	}
-	return 0
 }
 
 // ── Windows Trust (MotW removal) ──

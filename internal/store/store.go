@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -641,6 +640,10 @@ func (s *ManagerStore) SaveAgentBinary(name string, data []byte) error {
 	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
 		return err
 	}
+	// v1.5.36 C3: 为每个上传的二进制计算并保存 SHA256 校验和, 供 Agent 升级时校验完整性
+	h := sha256.Sum256(data)
+	shaFile := filepath.Join(dir, name+".sha256")
+	os.WriteFile(shaFile, []byte(fmt.Sprintf("%x  %s\n", h[:], name)), 0o644)
 	s.RebuildManifest()
 	return nil
 }
@@ -649,8 +652,25 @@ func (s *ManagerStore) DeleteAgentBinary(name string) error {
 	if err := os.Remove(filepath.Join(s.AgentBinDir(), name)); err != nil {
 		return err
 	}
+	// v1.5.36 C3: 同时删除对应的 SHA256 文件
+	os.Remove(filepath.Join(s.AgentBinDir(), name+".sha256"))
 	s.RebuildManifest()
 	return nil
+}
+
+// GetAgentBinarySHA256 读取已保存的二进制 SHA256 校验和 (v1.5.36 C3)。
+// 返回 hex 字符串, 若文件不存在返回空字符串。
+func (s *ManagerStore) GetAgentBinarySHA256(filename string) string {
+	data, err := os.ReadFile(filepath.Join(s.AgentBinDir(), filename+".sha256"))
+	if err != nil {
+		return ""
+	}
+	// 标准格式: "hex  filename\n"
+	fields := strings.Fields(string(data))
+	if len(fields) >= 1 && len(fields[0]) == 64 {
+		return fields[0]
+	}
+	return ""
 }
 
 // RebuildManifest 扫描 /bin/ 目录，按 os-arch 分组建 agent_manifest.json。
@@ -689,7 +709,7 @@ func (s *ManagerStore) RebuildManifest() {
 		}
 		key := goos + "-" + goarch
 		cur, exists := best[key]
-		if !exists || compareVer(ver, cur.version) > 0 {
+		if !exists || model.CompareSemVer(ver, cur.version) > 0 {
 			best[key] = candidate{ver, e.Name()}
 		}
 	}
@@ -699,44 +719,6 @@ func (s *ManagerStore) RebuildManifest() {
 		manifest[k] = c.filename
 	}
 	s.SaveAgentManifest(manifest)
-}
-
-// compareVer 比较两个语义化版本号 (x.y.z)，返回 >0 / 0 / <0。
-// 自动去除 v 前缀，对非数字段严格报错 (不再静默误判 0)。
-// 当 a 或 b 无法解析时返回 0（视为相等），由调用方处理边界。
-func compareVer(a, b string) int {
-	a = strings.TrimPrefix(a, "v")
-	b = strings.TrimPrefix(b, "v")
-	pa := strings.Split(a, ".")
-	pb := strings.Split(b, ".")
-	maxLen := len(pa)
-	if len(pb) > maxLen {
-		maxLen = len(pb)
-	}
-	for i := 0; i < maxLen; i++ {
-		var na, nb int
-		if i < len(pa) {
-			n, err := strconv.Atoi(pa[i])
-			if err != nil {
-				return 0 // 非数字字段无法比较，返回相等
-			}
-			na = n
-		}
-		if i < len(pb) {
-			n, err := strconv.Atoi(pb[i])
-			if err != nil {
-				return 0
-			}
-			nb = n
-		}
-		if na > nb {
-			return 1
-		}
-		if na < nb {
-			return -1
-		}
-	}
-	return 0
 }
 
 // ── SMTP Config ──

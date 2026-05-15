@@ -47,7 +47,7 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.5.33** | v1.5.33 降级保护+部署路径修复+错误详情+邮件美化+核验 |
+| ddns-manager | **v1.5.36** | v1.5.36 第九次审计修复 (6项): PFX密码覆盖+DNS Key假验证+Checksum+日志恢复 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

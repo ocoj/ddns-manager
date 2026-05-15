@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"strconv"
+	"strings"
+	"time"
+)
 
 type DDNSHealthInfo struct {
 	Running         bool     `json:"running"`
@@ -160,6 +164,38 @@ type AgentConfig struct {
 	PFXPassword     string             `json:"pfx_password" yaml:"pfx_password"` // 默认 PFX 密码（可被证书级覆盖）
 	VerifySSL       bool               `json:"verify_ssl" yaml:"verify_ssl"`
 	IISCertBindings []CertToIISBinding `json:"iis_cert_bindings,omitempty" yaml:"iis_cert_bindings,omitempty"`
+}
+
+// CompareSemVer 比较两个语义化版本号 a vs b。
+// 返回 -1 (a<b), 0 (a==b), 1 (a>b)。
+// 自动去除 v 前缀，支持 pre-release 后缀 (如 1.5.10-beta1 → 1.5.10)。
+// v1.5.34 H2: 提取为公共函数，消除 agent 和 store 中重复实现的行为发散风险。
+func CompareSemVer(a, b string) int {
+	a = strings.TrimPrefix(a, "v")
+	b = strings.TrimPrefix(b, "v")
+	parseVer := func(v string) []int {
+		parts := strings.Split(v, ".")
+		nums := make([]int, 0, 3)
+		for _, p := range parts {
+			n, _ := strconv.Atoi(strings.SplitN(p, "-", 2)[0])
+			nums = append(nums, n)
+		}
+		for len(nums) < 3 {
+			nums = append(nums, 0)
+		}
+		return nums[:3]
+	}
+	aa := parseVer(a)
+	bb := parseVer(b)
+	for i := 0; i < 3; i++ {
+		if aa[i] < bb[i] {
+			return -1
+		}
+		if aa[i] > bb[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 // KnownDNSProviders returns the canonical list of supported DNS provider names.

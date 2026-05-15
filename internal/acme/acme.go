@@ -526,29 +526,35 @@ func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 
 // RenewByName forces renewal of a specific certificate (ignoring expiry threshold).
 func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed bool) {
-	// v1.5.20 M1: lastRenewErr 写入加锁，与 LastError() 读串行化
+	// v1.5.34 C3: 所有 lastRenewErr 写入统一加锁，消除与 LastError() 的数据竞争
+	setLastErr := func(err error) {
+		m.mu.Lock()
+		m.lastRenewErr = err
+		m.mu.Unlock()
+	}
 	m.mu.Lock()
 	m.lastRenewErr = nil
 	m.mu.Unlock()
+
 	certDir := filepath.Join(m.certsDir, certName)
 	data, err := os.ReadFile(filepath.Join(certDir, "meta.json"))
 	if err != nil {
-		m.lastRenewErr = fmt.Errorf("meta read: %w", err)
+		setLastErr(fmt.Errorf("meta read: %w", err))
 		return false
 	}
 	if !strings.Contains(string(data), `"acme":true`) {
-		m.lastRenewErr = fmt.Errorf("not an ACME cert")
+		setLastErr(fmt.Errorf("not an ACME cert"))
 		return false
 	}
 	fcData, _ := os.ReadFile(filepath.Join(certDir, "fullchain.pem"))
 	block, _ := pem.Decode(fcData)
 	if block == nil {
-		m.lastRenewErr = fmt.Errorf("invalid fullchain.pem")
+		setLastErr(fmt.Errorf("invalid fullchain.pem"))
 		return false
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		m.lastRenewErr = fmt.Errorf("parse cert: %w", err)
+		setLastErr(fmt.Errorf("parse cert: %w", err))
 		return false
 	}
 	domains := cert.DNSNames
@@ -572,21 +578,18 @@ func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed boo
 		log.Printf("[acme] 续期输出:\n%s", string(out))
 		m.AppendLog(fmt.Sprintf("acme.sh %s\n%s\n", strings.Join(args, " "), string(out)))
 		if err != nil {
-			// C4: 锁保护 lastRenewErr 写入
-			m.mu.Lock()
-			m.lastRenewErr = fmt.Errorf("renew: %w\n%s", err, string(out))
-			m.mu.Unlock()
+			setLastErr(fmt.Errorf("renew: %w\n%s", err, string(out)))
 			return false
 		}
 	} else {
-		m.mu.Lock()
-		m.lastRenewErr = fmt.Errorf("acme.sh not available")
-		m.mu.Unlock()
+		setLastErr(fmt.Errorf("acme.sh not available"))
 		return false
 	}
-	// C1/H3: 续期成功后更新 cert bundle hash + meta.json，确保下次心跳下发新证书
+	// v1.5.34 C4: UpdateCertMeta 失败时返回 false，防止 bundle hash 未更新导致 Agent 永收不到新证书
 	if err := m.UpdateCertMeta(certDir); err != nil {
 		log.Printf("[acme] 更新证书元数据失败 %s: %v", certName, err)
+		setLastErr(fmt.Errorf("update meta: %w", err))
+		return false
 	}
 	log.Printf("[acme] renewed: %s", strings.Join(domains, ","))
 	return true
@@ -650,8 +653,15 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 	}
 
 	// C2: 先生成双 PFX 文件（Modern + Legacy），后续算 hash 时包含它们
+	// v1.5.36 C1: 从 meta.json 读取已存储的 PFX 密码，防止自动续签覆盖用户自定义密码
 	if certPEM != nil && keyPEM != nil {
-		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, "ddns")
+		pfxPassword := "ddns"
+		if pw, ok := metaMap["pfx_password"]; ok {
+			if pws, ok := pw.(string); ok && pws != "" {
+				pfxPassword = pws
+			}
+		}
+		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword)
 		if pfxErr != nil {
 			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
 		} else {
@@ -659,7 +669,7 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 			fileContents["cert.pfx"] = pfxData
 			log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
 		}
-		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, "ddns"); modernErr == nil {
+		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
 			os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
 			fileContents["cert-modern.pfx"] = modernData
 			log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))

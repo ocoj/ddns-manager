@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1531,12 +1532,17 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 	return 0, ""
 }
 
-// scanIISBindings v1.6.0: netsh http show sslcert 扫描 IIS SSL 绑定快照。
-// 对齐 win-acme: 上报现有绑定信息供 Manager 端识别哪些证书已部署。
+// scanIISBindings v1.6.0: 扫描 IIS SSL 绑定, 含 appcmd Site ID 映射。
+// 对齐 win-acme: netsh http show sslcert 获取绑定 + appcmd list sites 获取站点ID。
 func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
+
+	// 1. appcmd list sites → 建立 hostname:port → site_id 映射
+	siteMap := mapIISSites()
+
+	// 2. netsh http show sslcert → 获取 SSL 绑定列表
 	out, err := exec.Command("netsh", "http", "show", "sslcert").Output()
 	if err != nil {
 		return nil
@@ -1568,11 +1574,63 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 		if after, ok := strings.CutPrefix(trimmed, "Certificate Hash"); ok {
 			cur.Thumbprint = strings.TrimSpace(strings.TrimPrefix(after, ":"))
 			if cur.Thumbprint != "" {
+				// 查找对应的 IIS 站点 ID
+				key := fmt.Sprintf("%s:%d", cur.Hostname, cur.Port)
+				if sid, ok := siteMap[key]; ok {
+					cur.SiteID = sid.id
+					cur.SiteName = sid.name
+				}
 				sites = append(sites, cur)
 			}
 		}
 	}
 	return sites
+}
+
+// iisSiteInfo holds parsed IIS site metadata from appcmd.
+type iisSiteInfo struct {
+	id   int
+	name string
+}
+
+// mapIISSites v1.6.0: appcmd list sites → map[hostname:port]→{siteID, siteName}
+func mapIISSites() map[string]iisSiteInfo {
+	result := map[string]iisSiteInfo{}
+	appcmd := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd")
+	if _, err := os.Stat(appcmd); err != nil {
+		appcmd = "appcmd" // fallback to PATH
+	}
+	out, err := exec.Command(appcmd, "list", "sites").Output()
+	if err != nil {
+		return result
+	}
+	// 格式: SITE "name" (id:N,bindings:proto/IP:port:host,...)
+	re := regexp.MustCompile(`SITE "([^"]+)" \(id:(\d+),bindings:([^)]+)\)`)
+	for _, match := range re.FindAllStringSubmatch(string(out), -1) {
+		siteName := match[1]
+		siteID, _ := strconv.Atoi(match[2])
+		bindings := match[3]
+		// 解析每个 binding: proto/IP:port:host
+		for _, b := range strings.Split(bindings, ",") {
+			parts := strings.SplitN(b, "/", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			bindingInfo := parts[1] // IP:port:host
+			fields := strings.SplitN(bindingInfo, ":", 3)
+			if len(fields) < 2 {
+				continue
+			}
+			port, _ := strconv.Atoi(fields[1])
+			host := ""
+			if len(fields) >= 3 {
+				host = fields[2]
+			}
+			key := fmt.Sprintf("%s:%d", host, port)
+			result[key] = iisSiteInfo{id: siteID, name: siteName}
+		}
+	}
+	return result
 }
 
 // extractPFXInfo 合并一次 certutil -dump 同时提取指纹和 CN。

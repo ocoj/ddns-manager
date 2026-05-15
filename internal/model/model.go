@@ -40,10 +40,12 @@ type NodeStatus struct {
 
 // IISBoundSite v1.6.0: Agent 上报的 IIS SSL 绑定快照, 用于多站点证书识别。
 type IISBoundSite struct {
-	Hostname   string `json:"hostname"`             // SNI hostname 或 IP
-	Port       int    `json:"port"`                 // 端口号
-	Thumbprint string `json:"thumbprint"`           // SHA1 指纹 (IIS 证书哈希)
-	BundleName string `json:"bundle_name,omitempty"` // 匹配到的 bundle 名称
+	Hostname   string `json:"hostname"`               // SNI hostname 或 IP
+	Port       int    `json:"port"`                   // 端口号
+	Thumbprint string `json:"thumbprint"`             // SHA1 指纹 (IIS 证书哈希)
+	SiteID     int    `json:"site_id,omitempty"`      // v1.6.0: IIS 站点 ID
+	SiteName   string `json:"site_name,omitempty"`    // IIS 站点名称
+	BundleName string `json:"bundle_name,omitempty"`   // 匹配到的 bundle 名称
 }
 
 type HeartbeatResp struct {

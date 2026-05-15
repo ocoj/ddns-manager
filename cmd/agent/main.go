@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -877,6 +878,15 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 
 	upgradeLogger("======== 自升级开始 v1.5.26+ ========")
 	upgradeLogger("版本=%s exe=%s url=%s", update.Version, exePath, url)
+
+	// v1.5.33: 防止降级 — 推送版本号 ≤ 当前版本时跳过
+	if update.Version != "" && version != "" && version != "dev" {
+		if cmp := compareSemVer(update.Version, version); cmp <= 0 {
+			upgradeLogger("跳过升级: 推送版本 v%s ≤ 当前版本 v%s (拒绝降级)", update.Version, version)
+			log.Printf("[upgrade] 拒绝降级 v%s→v%s", version, update.Version)
+			return nil
+		}
+	}
 	tmpFile := exePath + ".new"
 
 	// 带重试的下载（3 次，递增退避：2s, 4s, 6s），防止网络抖动导致升级失败后等待 5 分钟。
@@ -1252,6 +1262,35 @@ func extractPFXInfo(pfxFile string) (thumb string, cn string) {
 		}
 	}
 	return
+}
+
+// compareSemVer 比较两个语义化版本号 a vs b。返回 -1 (a<b), 0 (a==b), 1 (a>b)。
+func compareSemVer(a, b string) int {
+	a = strings.TrimPrefix(a, "v")
+	b = strings.TrimPrefix(b, "v")
+	parseVer := func(v string) []int {
+		parts := strings.Split(v, ".")
+		nums := make([]int, 0, 3)
+		for _, p := range parts {
+			n, _ := strconv.Atoi(strings.SplitN(p, "-", 2)[0])
+			nums = append(nums, n)
+		}
+		for len(nums) < 3 {
+			nums = append(nums, 0)
+		}
+		return nums[:3]
+	}
+	aa := parseVer(a)
+	bb := parseVer(b)
+	for i := 0; i < 3; i++ {
+		if aa[i] < bb[i] {
+			return -1
+		}
+		if aa[i] > bb[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 // ── Windows Trust (MotW removal) ──

@@ -48,6 +48,14 @@
 - **修复**: `handleHeartbeat` 中 `TargetPath` 为空时取 `req.Status.CertPath`
   （Agent 上报的 agent.yaml 中 CertPath），保证 Manager/Agent 路径对齐
 
+#### 🔴 Bug 4: Linux 节点在线升级失败（降级+二进制缺失）
+- **根因**: (1) v1.5.33 linux-amd64 二进制未上传到 Manager data/bin/
+  (2) manifest 残留 v1.5.32 条目 → Manager 推送错误版本 URL
+  (3) Agent 无降级保护 → v1.5.33→v1.5.32 照单全收
+- **修复**:
+  - 上传全平台 v1.5.33 二进制到 data/bin/ + 更新 manifest 所有平台条目
+  - `selfUpgrade` 增加 `compareSemVer` 版本比较 — 推送版本 ≤ 当前 → 拒绝降级并记录日志
+
 #### 🧪 部署状态
 - Manager (10.0.0.1): v1.5.32 ✅
 - Client A Linux (10.0.0.2): v1.5.32 ✅

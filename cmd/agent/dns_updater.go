@@ -5,9 +5,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,13 +25,14 @@ import (
 
 // DNSStatus holds the result of the last DNS update run.
 type DNSStatus struct {
-	Running       bool      // DNSUpdater is running
-	LastOK        bool      // last update succeeded
-	LastError     string    // last error message (if any)
-	FailedDomains []string  // v1.5.29 H1: 具体失败域名列表
-	IPv4          string    // current public IPv4
-	IPv6          string    // current public IPv6
-	LastRun       time.Time // timestamp of last run
+	Running         bool      // DNSUpdater is running
+	LastOK          bool      // last update succeeded
+	LastError       string    // last error message (if any)
+	LastErrorDetail string    // v1.5.33: 最近一条详细错误 (ddns-go API 响应原文, 最多500字)
+	FailedDomains   []string  // v1.5.29 H1: 具体失败域名列表
+	IPv4            string    // current public IPv4
+	IPv6            string    // current public IPv6
+	LastRun         time.Time // timestamp of last run
 }
 
 // LastLine returns error line for health reporting.
@@ -93,10 +96,44 @@ func (u *DNSUpdater) Run() DNSStatus {
 		// Init provider — this detects IPs and prepares domains
 		ipv4cache := &util.IpCache{}
 		ipv6cache := &util.IpCache{}
+
+		// v1.5.33: 临时截获 log 输出, 捕获 ddns-go API 详细错误
+		var detailBuf bytes.Buffer
+		origWriter := log.Writer()
+		log.SetOutput(io.MultiWriter(origWriter, &detailBuf))
+
 		provider.Init(&dc, ipv4cache, ipv6cache)
 
 		// Execute DNS updates — provider handles query + create/update
 		domains := provider.AddUpdateDomainRecords()
+
+		// 恢复 log 输出, 解析截获的错误消息
+		log.SetOutput(origWriter)
+		var errLines []string
+		for _, line := range strings.Split(detailBuf.String(), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// 过滤: ddns-go 的 API 错误通常包含这些关键词
+			if strings.Contains(line, "Failed") || strings.Contains(line, "error") ||
+				strings.Contains(line, "Error") || strings.Contains(line, "Message") ||
+				strings.Contains(line, "Code") || strings.Contains(line, "404") ||
+				strings.Contains(line, "400") || strings.Contains(line, "403") ||
+				strings.Contains(line, "500") || strings.Contains(line, "Invalid") ||
+				strings.Contains(line, "NotFound") || strings.Contains(line, "Unauthorized") {
+				errLines = append(errLines, line)
+			}
+		}
+		if len(errLines) > 0 {
+			// 截断到 500 字符, 防止超长错误消息
+			detail := strings.Join(errLines, " | ")
+			if len(detail) > 500 {
+				detail = detail[:500] + "..."
+			}
+			u.status.LastErrorDetail = detail
+			u.logBuf.Write(fmt.Sprintf("API错误详情: %s", detail))
+		}
 
 		// Extract detected IPs for heartbeat reporting
 		// v1.5.29 M1: 多DNS配置段时取第一个非空IP，不覆盖

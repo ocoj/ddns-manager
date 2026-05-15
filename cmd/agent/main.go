@@ -290,11 +290,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			CertHashes:   certHashes,
 			CertErrors:   reportCertErrors, // v1.5.30 H2: 证书部署错误上报
 			DDNSHealth: &model.DDNSHealthInfo{
-				Running:       status.Running,
-				LastOK:        status.LastOK,
-				LastError:     status.LastError,
-				FailedDomains: status.FailedDomains,
-				LogLine:       status.LastLine(),
+				Running:         status.Running,
+				LastOK:          status.LastOK,
+				LastError:       status.LastError,
+				LastErrorDetail: status.LastErrorDetail, // v1.5.33: ddns-go API 详细错误
+				FailedDomains:   status.FailedDomains,
+				LogLine:         status.LastLine(),
 			},
 		},
 		ConfigHash: lastConfigHash,  // use Manager-pushed hash, not self-computed

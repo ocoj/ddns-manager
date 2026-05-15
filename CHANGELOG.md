@@ -1,6 +1,26 @@
 # CHANGELOG
 
-## v1.5.32 (补丁) — 2026-05-15
+## v1.5.33 — 2026-05-15
+
+### 🟢 功能增强（3 项）：详细错误上报 + DNS Key 核验 + 邮件美化
+
+#### 改进1: ddns-go API 详细错误上报
+- **问题**: DNS 更新失败时 Manager 只看到"DNS更新失败: client-a.example.com"，无法诊断原因
+- **修复**: `DNSUpdater.Run()` 中 log 截获 ddns-go 的 API 错误输出 → 填充 `LastErrorDetail` 字段 →
+  心跳上报 `DDNSHealth.LastErrorDetail` → Manager 日志含完整 API 响应原文
+  （如 `Code=InvalidAccessKeyId.NotFound Message=Specified access key is not found.`）
+- **影响**: 管理端可直接看到错误原因，无需登录 Agent 查 agent.log
+
+#### 改进2: DNS Key 在线核验 + 定时检测
+- **实时核验**: `POST /api/admin/dns-keys/{name}/test` — 调用 DNS 提供商真实 API 验证 Key 有效性，
+  30s 超时，返回 `{valid: true/false, detail: "..."}`。仅提示不阻止保存
+- **定时检测**: `StartDNSKeyChecker` 每 6 小时自动检测所有 DNS Key → 无效时记录审计日志 → 发送邮件通知
+- **支持**: 28 个 DNS 提供商全覆盖 (与 ddns-go v6.17.0 对齐)
+
+#### 改进3: 邮件美化
+- **发件人**: `DDNS-Manager <user@domain.com>` (替代裸邮箱名)
+- **HTML 邮件**: 带 Logo (🦐 DDNS-Manager)、蓝色顶栏、灰色页脚、自适应宽度
+- **内容格式**: 纯文本自动转 HTML (`\n` → `<br>`)
 
 ### 🔴 Bug 修复（3 项）：IPv6网卡保存 + Agent旧目录 + PFX certutil导入 + 部署路径
 

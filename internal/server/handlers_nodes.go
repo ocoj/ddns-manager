@@ -96,6 +96,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if len(h.FailedDomains) > 0 {
 			detail += fmt.Sprintf(" failed=%s", strings.Join(h.FailedDomains, ","))
 		}
+		// v1.5.33: 记录 ddns-go API 详细错误原文
+		if h.LastErrorDetail != "" {
+			detail += fmt.Sprintf(" detail=%s", h.LastErrorDetail)
+		}
 	}
 	// v1.5.31 C1: 证书部署错误计入心跳详情和结构化状态
 	if len(req.Status.CertErrors) > 0 {

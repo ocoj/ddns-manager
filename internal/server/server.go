@@ -416,6 +416,7 @@ func (s *Server) Router() *mux.Router {
 	// dns keys
 	a.HandleFunc("/dns-keys", s.handleListDNSKeys).Methods("GET")
 	a.HandleFunc("/dns-keys", s.handleSaveDNSKey).Methods("POST")
+	a.HandleFunc("/dns-keys/{name}/test", s.handleTestDNSKey).Methods("POST") // v1.5.33: 在线核验
 	a.HandleFunc("/dns-keys/{name}", s.handleDeleteDNSKey).Methods("DELETE")
 	// certs
 	a.HandleFunc("/certs", s.handleListCerts).Methods("GET")

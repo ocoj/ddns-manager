@@ -2,6 +2,8 @@ package server
 
 import (
 	"archive/zip"
+	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -17,6 +19,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	ddnsconfig "github.com/jeessy2/ddns-go/v6/config"
+	"github.com/jeessy2/ddns-go/v6/dns"
+	"github.com/jeessy2/ddns-go/v6/util"
 	"github.com/kk/ddns-manager/internal/model"
 	"github.com/kk/ddns-manager/internal/store"
 	"github.com/kk/ddns-manager/internal/logger"
@@ -882,6 +887,179 @@ func (s *Server) tryNotifyCertExpiry(alerts []notify.CertAlert) {
 		}
 		if err := cfg.SendCertAlert(alerts); err != nil {
 			log.Printf("[smtp] 证书过期通知失败: %v", err)
+		}
+	}()
+}
+
+// ── v1.5.33: DNS Key 实时连线核验 ──
+
+// handleTestDNSKey 在线测试 DNS Key 是否有效 (调用真实 API)。
+// 返回验证结果，仅提示不阻止保存。
+func (s *Server) handleTestDNSKey(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	keys, err := s.store.LoadDNSKeys()
+	if err != nil || keys == nil {
+		jsonErr(w, http.StatusNotFound, "DNS Key 不存在")
+		return
+	}
+	dk, ok := keys[name]
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "DNS Key 不存在")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	result, detail := testDNSKeyOnline(ctx, dk)
+	jsonOK(w, map[string]interface{}{
+		"name": name, "valid": result,
+		"detail": detail, "provider": dk.Provider,
+	})
+}
+
+// testDNSKeyOnline 通过 ddns-go 真实 API 调用验证 DNS Key 有效性。
+func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord) (valid bool, detail string) {
+	fn, ok := ddnsProviderRegistry[dk.Provider]
+	if !ok {
+		return false, fmt.Sprintf("不支持的DNS提供商: %s", dk.Provider)
+	}
+	provider := fn()
+
+	dc := ddnsconfig.DnsConfig{
+		DNS: ddnsconfig.DNS{Name: dk.Provider, ID: dk.AccessKeyID, Secret: dk.AccessKeySecret},
+	}
+	dc.Ipv4.Enable = true
+	dc.Ipv4.GetType = "url"
+	dc.Ipv4.URL = "http://ipv4.icanhazip.com"
+	dc.Ipv4.Domains = []string{"test.example.com"}
+	dc.Ipv6.Enable = false
+
+	// 捕获 ddns-go 的 log 输出以检测 API 错误
+	var logBuf bytes.Buffer
+	origWriter := log.Writer()
+	log.SetOutput(io.MultiWriter(origWriter, &logBuf))
+	defer log.SetOutput(origWriter)
+
+	done := make(chan bool, 1)
+	go func() {
+		defer func() { recover() }()
+		ipv4cache := &util.IpCache{}
+		ipv6cache := &util.IpCache{}
+		provider.Init(&dc, ipv4cache, ipv6cache)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		captured := logBuf.String()
+		// 检查 ddns-go 输出的错误关键词
+		for _, kw := range []string{"InvalidAccessKeyId", "AccessDenied", "Unauthorized",
+			"Specified access key is not found", "authentication failed", "Forbidden",
+			"auth failed", "SignatureDoesNotMatch", "InvalidParameter"} {
+			if strings.Contains(captured, kw) {
+				return false, fmt.Sprintf("API认证失败: 日志中含 %q", kw)
+			}
+		}
+		// 没有明显错误 → 视为有效 (API 连通)
+		return true, "API连接成功，DNS Key 有效"
+	case <-ctx.Done():
+		return false, "验证超时 (30s)，请检查网络连通性"
+	}
+}
+
+// ddnsProviderRegistry 与 Agent 端 providerRegistry 保持同步。
+var ddnsProviderRegistry = map[string]func() dns.DNS{
+	"alidns":       func() dns.DNS { return &dns.Alidns{} },
+	"aliesa":       func() dns.DNS { return &dns.Aliesa{} },
+	"tencentcloud": func() dns.DNS { return &dns.TencentCloud{} },
+	"trafficroute": func() dns.DNS { return &dns.TrafficRoute{} },
+	"dnspod":       func() dns.DNS { return &dns.Dnspod{} },
+	"dnsla":        func() dns.DNS { return &dns.Dnsla{} },
+	"cloudflare":   func() dns.DNS { return &dns.Cloudflare{} },
+	"huaweicloud":  func() dns.DNS { return &dns.Huaweicloud{} },
+	"callback":     func() dns.DNS { return &dns.Callback{} },
+	"baiducloud":   func() dns.DNS { return &dns.BaiduCloud{} },
+	"porkbun":      func() dns.DNS { return &dns.Porkbun{} },
+	"godaddy":      func() dns.DNS { return &dns.GoDaddyDNS{} },
+	"namecheap":    func() dns.DNS { return &dns.NameCheap{} },
+	"namesilo":     func() dns.DNS { return &dns.NameSilo{} },
+	"vercel":       func() dns.DNS { return &dns.Vercel{} },
+	"dynadot":      func() dns.DNS { return &dns.Dynadot{} },
+	"dynv6":        func() dns.DNS { return &dns.Dynv6{} },
+	"spaceship":    func() dns.DNS { return &dns.Spaceship{} },
+	"nowcn":        func() dns.DNS { return &dns.Nowcn{} },
+	"eranet":       func() dns.DNS { return &dns.Eranet{} },
+	"tnethk":       func() dns.DNS { return &dns.Tnethk{} },
+	"gcore":        func() dns.DNS { return &dns.Gcore{} },
+	"edgeone":      func() dns.DNS { return &dns.EdgeOne{} },
+	"nsone":        func() dns.DNS { return &dns.NSOne{} },
+	"name_com":     func() dns.DNS { return &dns.NameCom{} },
+	"rainyun":      func() dns.DNS { return &dns.Rainyun{} },
+	"hipmdnsmgr":   func() dns.DNS { return &dns.HiPMDnsMgr{} },
+	"cloudns":      func() dns.DNS { return &dns.ClouDNS{} },
+}
+
+// StartDNSKeyChecker 定时检测所有 DNS Key 有效性，无效时发邮件通知。
+func (s *Server) StartDNSKeyChecker(shutdown <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+
+		// 启动后 60 秒执行首次检测
+		select {
+		case <-time.After(60 * time.Second):
+		case <-shutdown:
+			return
+		}
+		s.checkAllDNSKeys()
+
+		for {
+			select {
+			case <-ticker.C:
+				s.checkAllDNSKeys()
+			case <-shutdown:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Server) checkAllDNSKeys() {
+	keys, err := s.store.LoadDNSKeys()
+	if err != nil || len(keys) == 0 {
+		return
+	}
+	var invalidKeys []string
+	for name, dk := range keys {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		valid, detail := testDNSKeyOnline(ctx, dk)
+		cancel()
+		if !valid {
+			s.logMgr.Log("dns-key", "有效性检测失败",
+				fmt.Sprintf("%s (%s): %s", name, dk.Provider, detail), "warning")
+			invalidKeys = append(invalidKeys, fmt.Sprintf("%s (%s): %s", name, dk.Provider, detail))
+		} else {
+			s.logMgr.Log("dns-key", "有效性检测通过",
+				fmt.Sprintf("%s (%s)", name, dk.Provider), "info")
+		}
+	}
+	if len(invalidKeys) > 0 {
+		s.tryNotifyDNSKeyInvalid(invalidKeys)
+	}
+}
+
+func (s *Server) tryNotifyDNSKeyInvalid(invalidKeys []string) {
+	cfg, err := s.store.LoadSMTPConfig()
+	if err != nil || cfg == nil || !cfg.IsConfigured() {
+		return
+	}
+	go func() {
+		subject := fmt.Sprintf("[DDNS-Manager] %d 个 DNS Key 验证失败", len(invalidKeys))
+		body := fmt.Sprintf("以下 DNS Key 在线验证失败:\n\n%s\n\n请登录管理端检查并更新。\n\n管理端: %s",
+			strings.Join(invalidKeys, "\n"), cfg.ManagerURL)
+		if err := cfg.SendRaw(subject, body); err != nil {
+			log.Printf("[smtp] DNS Key 无效通知失败: %v", err)
 		}
 	}()
 }

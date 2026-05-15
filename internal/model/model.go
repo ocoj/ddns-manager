@@ -3,13 +3,14 @@ package model
 import "time"
 
 type DDNSHealthInfo struct {
-	Running       bool     `json:"running"`
-	LastOK        bool     `json:"last_ok"`
-	LastError     string   `json:"last_error,omitempty"`
-	FailedDomains []string `json:"failed_domains,omitempty"` // v1.5.29 H1: 具体失败域名列表
-	LogLine       string   `json:"log_line,omitempty"`
-	Status        string   `json:"status,omitempty"`
-	StatusMsg     string   `json:"status_msg,omitempty"`
+	Running         bool     `json:"running"`
+	LastOK          bool     `json:"last_ok"`
+	LastError       string   `json:"last_error,omitempty"`
+	LastErrorDetail string   `json:"last_error_detail,omitempty"` // v1.5.33: ddns-go API 详细错误
+	FailedDomains   []string `json:"failed_domains,omitempty"` // v1.5.29 H1: 具体失败域名列表
+	LogLine         string   `json:"log_line,omitempty"`
+	Status          string   `json:"status,omitempty"`
+	StatusMsg       string   `json:"status_msg,omitempty"`
 }
 
 type HeartbeatReq struct {

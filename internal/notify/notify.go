@@ -57,8 +57,8 @@ func (c *Config) SendTest() error {
 	if !c.IsConfigured() {
 		return fmt.Errorf("SMTP 未完整配置 (服务器/端口/发件人/授权码/收件人 缺一不可)")
 	}
-	subject := "[ddns-manager] SMTP 配置验证"
-	body := fmt.Sprintf("您好，\n\nSMTP 邮件配置验证成功！\n\n发送时间: %s\n服务器: %s:%d\n发件人: %s\n管理端: %s\n\n此邮件由 ddns-manager 系统自动发送，请勿回复。",
+	subject := "[DDNS-Manager] SMTP 配置验证"
+	body := fmt.Sprintf("您好，\n\nSMTP 邮件配置验证成功！\n\n发送时间: %s\n服务器: %s:%d\n发件人: %s\n管理端: %s\n\n此邮件由 DDNS-Manager 系统自动发送，请勿回复。",
 		c.now().Format("2006-01-02 15:04:05"), c.Host, c.Port, c.Username, c.managerURL())
 	return c.send(subject, body)
 }
@@ -118,6 +118,27 @@ type CertAlert struct {
 	ExpiresAt  string `json:"expires_at"`
 }
 
+// wrapHTML 将纯文本邮件包装为带 Logo + 样式的 HTML 邮件。
+func wrapHTML(subject, body string) string {
+	// 纯文本 → HTML (换行转 <br>)
+	htmlBody := strings.ReplaceAll(body, "\n", "<br>\n")
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
+<div style="text-align: center; padding: 20px 0; border-bottom: 3px solid #2563eb;">
+  <div style="font-size: 28px; font-weight: 700; color: #2563eb;">🦐 DDNS-Manager</div>
+  <div style="font-size: 13px; color: #888; margin-top: 4px;">智能 DNS 管理平台</div>
+</div>
+<div style="padding: 24px 16px; line-height: 1.8; font-size: 15px;">
+%s
+</div>
+<div style="margin-top: 24px; padding: 16px; background: #f8f9fa; border-radius: 8px; font-size: 12px; color: #888; text-align: center;">
+  此邮件由 DDNS-Manager 系统自动发送，请勿回复。<br>
+  Powered by ddns-manager | Lanxun CO.,Ltd.
+</div>
+</body></html>`, htmlBody)
+}
+
 // managerURL returns the configured management URL for email links.
 // Falls back to server host:port notation when not configured.
 func (c *Config) managerURL() string {
@@ -127,10 +148,22 @@ func (c *Config) managerURL() string {
 	return fmt.Sprintf("%s:%d (请配置管理端域名)", c.Host, c.Port)
 }
 
+// SendRaw sends a plain-text email with custom subject and body.
+// Used for DNS key invalidity notifications and other simple alerts.
+func (c *Config) SendRaw(subject, body string) error {
+	if !c.IsConfigured() {
+		return nil
+	}
+	return c.send(subject, body)
+}
+
 func (c *Config) send(subject, body string) error {
 	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
-		c.Username, c.To, subject, body)
+	// v1.5.33: 发件人显示名 "DDNS-Manager", HTML 邮件支持
+	displayFrom := fmt.Sprintf("DDNS-Manager <%s>", c.Username)
+	htmlBody := wrapHTML(subject, body)
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
+		displayFrom, c.To, subject, htmlBody)
 
 	if c.Port == 465 {
 		return c.sendTLS(addr, msg)

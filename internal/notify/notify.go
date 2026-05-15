@@ -134,8 +134,8 @@ func wrapHTML(subject, body string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
-<div style="padding: 12px 0; border-bottom: 3px solid #2563eb; display: flex; align-items: center;">
-  <img src="%s" alt="DDNS-Manager" style="height: 12px; margin-right: 8px;">
+<div style="padding: 12px 0; border-bottom: 3px solid #2563eb; display: flex; align-items: flex-end;">
+  <img src="%s" alt="DDNS-Manager" style="width: 36px; height: auto; margin-right: 8px;">
   <span style="font-size: 18px; font-weight: 700; color: #2563eb;">DDNS-Manager</span>
   <span style="font-size: 11px; color: #888; margin-left: auto;">智能 DNS 管理平台</span>
 </div>

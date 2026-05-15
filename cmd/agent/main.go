@@ -116,11 +116,7 @@ func init() {
 
 // detectInstallDir 自适应寻找安装目录: 默认路径 → 二进制所在目录。
 // v1.5.32: 兼容旧版本 /opt/ddns-manager → /opt/ddns-agent 路径迁移导致的配置不可达。
-// v1.5.33: Windows 下跳过 (Windows 安装目录固定, 不需要自适应)
 func detectInstallDir() {
-	if runtime.GOOS == "windows" {
-		return
-	}
 	// 若默认路径已存在 agent.yaml, 直接使用
 	if _, err := os.Stat(agentConfigPath); err == nil {
 		return

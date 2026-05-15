@@ -59,9 +59,9 @@ func agentLog(format string, args ...interface{}) {
 	agentLogBuf.Write(msg)
 }
 
-// initAgentLog 将 Agent 日志同时输出到安装目录下的 agent.log 和 stderr。
+// initAgentLog 将 Agent 日志输出到安装目录下的 agent.log。
 // v1.5.31 H2: 增加 10MB 轮转 — 超限时重命名为 agent-YYYY-MM-DD.log, 保留最近 3 个。
-// v1.5.33: Windows Service 下 0700 权限映射异常, 改用 0755/0644。
+// v1.5.33: Windows Service 避免写 os.Stderr（SCM 启动的进程无有效标准句柄, io.MultiWriter 会阻塞）。
 func initAgentLog() {
 	perm := os.FileMode(0700)
 	filePerm := os.FileMode(0600)
@@ -76,7 +76,6 @@ func initAgentLog() {
 	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 10<<20 {
 		rotated := filepath.Join(agentBaseDir, fmt.Sprintf("agent-%s.log", time.Now().Format("2006-01-02")))
 		os.Rename(logPath, rotated)
-		// 清理旧轮转文件, 保留最近 3 个
 		entries, _ := os.ReadDir(agentBaseDir)
 		var oldLogs []string
 		for _, e := range entries {
@@ -93,9 +92,14 @@ func initAgentLog() {
 
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
 	if err != nil {
-		return // 写不了安装目录就算了，至少 stderr 还能用
+		return
 	}
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	// Windows Service 下 os.Stderr 无效, 写文件即可; Linux 同时写 stderr 便于调试
+	if runtime.GOOS == "windows" {
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	}
 	log.Printf("[agent] 日志文件: %s", logPath)
 }
 

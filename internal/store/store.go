@@ -598,9 +598,10 @@ func (s *ManagerStore) ListAgentBinaries() ([]map[string]interface{}, error) {
 			version = m[1]
 		}
 		result = append(result, map[string]interface{}{
-			"name":    e.Name(),
-			"size":    info.Size(),
-			"version": version,
+			"name":     e.Name(),
+			"size":     info.Size(),
+			"version":  version,
+			"mod_time": info.ModTime().Format("2006-01-02 15:04"), // v1.5.33: 修改时间
 		})
 	}
 	return result, nil

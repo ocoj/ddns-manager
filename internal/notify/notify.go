@@ -137,7 +137,7 @@ func wrapHTML(subject, body string) string {
 <div style="padding: 12px 0; border-bottom: 3px solid #2563eb; display: flex; align-items: flex-end;">
   <img src="%s" alt="DDNS-Manager" style="width: 36px; height: auto; margin-right: 8px;">
   <span style="font-size: 18px; font-weight: 700; color: #2563eb;">DDNS-Manager</span>
-  <span style="font-size: 11px; color: #888; margin-left: auto; padding-bottom: 2px;">DDNS 多节点管理平台</span>
+  <span style="font-size: 11px; color: #888; margin-left: auto; padding-bottom: 2px;">分布式 DDNS 节点管理平台</span>
 </div>
 <div style="padding: 24px 16px; line-height: 1.8; font-size: 15px;">
 %s

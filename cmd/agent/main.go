@@ -385,7 +385,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	status := runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
 
 	// 2. Collect deployed cert hashes for drift detection
-	certHashes := collectCertHashes(cfg)
+	certHashes := collectCertHashesIfNeeded(cfg)
 
 	// 3. Build heartbeat request
 	// v1.5.30 H2: 从缓存读取证书部署错误, 填充到 Status.CertErrors 上报 Manager
@@ -404,7 +404,8 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			IPv6:         status.IPv6,
 			CertHashes:   certHashes,
 			CertErrors:   reportCertErrors, // v1.5.30 H2: 证书部署错误上报
-			IISBoundSites: scanIISBindings(cfg), // v1.6.0: IIS 绑定快照
+			// v1.6.15: IIS扫描仅在配置了证书绑定时执行, 无绑定则跳过
+			IISBoundSites: scanIISBindingsIfNeeded(cfg),
 			DDNSHealth: &model.DDNSHealthInfo{
 				Running:         status.Running,
 				LastOK:          status.LastOK,
@@ -859,6 +860,14 @@ func fileSHA256(path string) string {
 	}
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h[:])
+}
+
+// collectCertHashes v1.6.15: 仅在配置了证书绑定时扫描证书目录
+func collectCertHashesIfNeeded(cfg *model.AgentConfig) map[string]string {
+	if len(cfg.IISCertBindings) == 0 {
+		return nil
+	}
+	return collectCertHashes(cfg)
 }
 
 // collectCertHashes scans the cert directory for .cert_hash files deployed by Manager.
@@ -1567,7 +1576,16 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 	return 0, ""
 }
 
-// scanIISBindings v1.6.13 C7: 完全移除 PowerShell 依赖, 改用 netsh/certutil 直调
+// scanIISBindingsIfNeeded v1.6.15: 仅在配置了IIS证书绑定时执行扫描
+// 无绑定 → 跳过PowerShell调用, 避免无谓的失败日志和性能开销
+func scanIISBindingsIfNeeded(cfg *model.AgentConfig) []model.IISBoundSite {
+	if len(cfg.IISCertBindings) == 0 {
+		return nil
+	}
+	return scanIISBindings(cfg)
+}
+
+// scanIISBindings v1.6.15 C7: WebAdministration API (结构化JSON, 不受locale影响)
 // netsh http show sslcert 在所有Windows版本(含Win10/Server)均可执行, 无版本兼容问题
 func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	if runtime.GOOS != "windows" {

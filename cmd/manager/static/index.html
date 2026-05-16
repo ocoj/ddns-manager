@@ -131,7 +131,7 @@ th{text-align:left}
 /* 证书名称列 / ACME email列 */
 .col-cert-name{width:188px;overflow:hidden;text-overflow:ellipsis}
 /* 日志列表列宽 */
-.col-log-time{width:90px;font-family:Consolas,Monaco,monospace;font-size:12px}
+.col-log-time{width:150px;font-family:Consolas,Monaco,monospace;font-size:12px;white-space:nowrap}
 .col-log-node{width:90px;overflow:hidden;text-overflow:ellipsis}
 .col-log-cat{width:120px;text-align:center}
 /* 已上传二进制列宽 */
@@ -530,7 +530,10 @@ function normalizeEvents(events) {
   if (!events || !events.length) return [];
   return events.map(function(e) {
     var t = e.time || '';
-    if (t.indexOf('T') > -1) t = t.split('T')[1].substring(0, 8);
+    // v1.6.24: 保留完整日期+时间 (YYYY-MM-DD HH:MM:SS)
+    if (t.indexOf('T') > -1) {
+      t = t.split('T')[0] + ' ' + t.split('T')[1].substring(0, 8);
+    }
     return {
       time: t,
       node: e.node || e.user || '-',
@@ -2267,7 +2270,7 @@ let _lastLogTime = '';
 // 增量加载: 取新日志, prepend到表格顶部, 旧数据自然下移
 async function loadLogsIncremental() {
   try {
-    var url = '/api/admin/logs?limit=30';
+    var url = '/api/admin/logs?limit=50';
     var r = await apiJSON(url);
     if (!r.ok || !r.data || !r.data.events) return;
     var events = normalizeEvents(r.data.events || []);
@@ -2302,7 +2305,7 @@ async function loadLogsIncremental() {
 async function loadLogs(silent, filter) {
   if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载中...</div>';
   try {
-    var url = '/api/admin/logs?limit=100';
+    var url = '/api/admin/logs?limit=500';
     if (filter) {
       if (filter.node) url += '&node=' + encodeURIComponent(filter.node);
       if (filter.category) url += '&category=' + encodeURIComponent(filter.category);

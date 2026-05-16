@@ -192,6 +192,7 @@ th{text-align:left}
 .event-time{color:var(--c-text2);white-space:nowrap;min-width:60px;font-family:Consolas,Monaco,monospace}
 .event-node{color:var(--c-primary);min-width:80px;font-weight:500}
 .event-msg{flex:1;word-break:break-all}
+.event-cat{flex-shrink:0}
 
 .chart-wrap{width:100%;height:260px;position:relative}
 .chart-wrap canvas{width:100%!important}
@@ -279,6 +280,7 @@ th{text-align:left}
   .event-time{min-width:0;font-size:11px}
   .event-node{min-width:0;font-size:11px}
   .event-msg{flex-basis:100%!important;font-size:11px}
+  .event-cat{font-size:11px}
 
   /* ===== 弹窗 ===== */
   .modal-box{max-width:94vw!important;padding:14px;border-radius:8px;max-height:90vh}
@@ -1196,7 +1198,7 @@ function renderDashboard(stats, nodes, events, access) {
       h += '<td class="col-badge">' + statusBadge(n.online) + '</td></tr>';
     });
   }
-  h += '</tbody></table></div>';
+  h += '</tbody></table></div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>最近事件</h3></div><div class="event-list">';
   if (events.length === 0) {
@@ -1206,7 +1208,8 @@ function renderDashboard(stats, nodes, events, access) {
       var badgeCls = e.status === 'error' ? 'badge-red' : (e.status === 'success' ? 'badge-green' : 'badge-blue');
       h += '<div class="event-item"><span class="event-time">' + fmtTime(e.time) + '</span>';
       h += '<span class="event-node">' + he(e.node) + '</span>';
-      h += '<span class="event-msg"><span class="badge ' + badgeCls + '" style="margin-right:4px">' + he(e.category) + '</span>' + he(e.action) + ' ' + he(e.detail) + '</span></div>';
+      h += '<span class="event-cat"><span class="badge ' + badgeCls + '">' + he(e.category) + '</span></span>';
+      h += '<span class="event-msg">' + he(e.action) + ' ' + he(e.detail) + '</span></div>';
     });
   }
   h += '</div></div>';

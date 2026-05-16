@@ -275,8 +275,10 @@ th{text-align:left}
 
   /* ===== 标签/徽章 — 触控目标 ===== */
   .badge{padding:3px 10px;font-size:11px;min-height:22px}
-  .event-item{gap:6px;padding:8px 0;align-items:center}
-  .event-node{min-width:60px;font-size:11px}
+  .event-item{gap:4px 8px;padding:6px 0;align-items:center;flex-wrap:wrap}
+  .event-time{min-width:0;font-size:11px}
+  .event-node{min-width:0;font-size:11px}
+  .event-msg{flex-basis:100%!important;font-size:11px}
 
   /* ===== 弹窗 ===== */
   .modal-box{max-width:94vw!important;padding:14px;border-radius:8px;max-height:90vh}
@@ -389,9 +391,9 @@ th{text-align:left}
   .dash-node-table .col-dash-node{font-size:13px!important;font-weight:600;flex-basis:100%!important}
   .dash-node-table .col-dash-node .meta-row{display:none!important}
   /* IP: 长IPv6省略 */
-  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  /* 域名 */
-  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2);overflow:visible;white-space:nowrap}
+  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 域名+后续全部右对齐 */
+  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2);overflow:visible;white-space:nowrap;margin-left:auto}
   /* 健康右对齐 */
   .dash-node-table .col-badge:first-of-type{margin-left:auto}
   .dash-node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}

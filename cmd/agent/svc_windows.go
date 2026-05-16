@@ -11,8 +11,9 @@ import (
 )
 
 type agentService struct {
-	cfg    *model.AgentConfig
-	stopCh chan struct{}
+	cfg             *model.AgentConfig
+	stopCh          chan struct{}
+	upgradeShutdown chan struct{} // v1.6.12 C6: 升级触发SCM标准退出通道
 }
 
 func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
@@ -20,6 +21,9 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 	status <- svc.Status{State: svc.StartPending}
 
 	s.stopCh = make(chan struct{})
+	// v1.6.12 C6: 升级退出通道 — replaceRunningBinary 关闭此通道触发干净退出
+	s.upgradeShutdown = make(chan struct{})
+	upgradeShutdownCh = s.upgradeShutdown
 
 	go func() {
 		// v1.5.33: Windows Service 初始化延迟到此处, main() 零 I/O 阻塞
@@ -68,16 +72,30 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 	status <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 	log.Printf("[daemon] Windows Service started, version=%s", version)
 
+	// v1.6.12 C6: select 同时监听 SCM 控制请求 和 升级退出信号
 	for {
-		c := <-r
-		switch c.Cmd {
-		case svc.Interrogate:
-			status <- c.CurrentStatus
-		case svc.Stop, svc.Shutdown:
-			log.Printf("[daemon] 收到停止信号")
+		select {
+		case c := <-r:
+			switch c.Cmd {
+			case svc.Interrogate:
+				status <- c.CurrentStatus
+			case svc.Stop, svc.Shutdown:
+				log.Printf("[daemon] 收到停止信号")
+				status <- svc.Status{State: svc.StopPending}
+				close(s.stopCh)
+				// v1.5.20 H2: 可中断等待，SCM 重复 stop 时不再阻塞
+				select {
+				case <-time.After(3 * time.Second):
+				case <-s.stopCh:
+				}
+				return false, 0
+			}
+		case <-s.upgradeShutdown:
+			// v1.6.12 C6: 升级触发 — 通过SCM标准协议退出进程
+			// 助手上已调度: ping等待3s→move新二进制→sc config auto→sc start
+			log.Printf("[daemon] 升级触发服务停止 (SCM标准退出)")
 			status <- svc.Status{State: svc.StopPending}
 			close(s.stopCh)
-			// v1.5.20 H2: 可中断等待，SCM 重复 stop 时不再阻塞
 			select {
 			case <-time.After(3 * time.Second):
 			case <-s.stopCh:

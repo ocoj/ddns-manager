@@ -1209,11 +1209,10 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		return fmt.Errorf("replace: %w", err)
 	}
 
-	// v1.6.10 C5: 修复 Windows 升级死循环根因 — os.Exit(0) 绕过SCM协议导致后续sc start永久卡START_PENDING
+	// v1.6.12 C6: Windows 升级不再使用批处理
+	// replaceRunningBinary 内部: sc config disabled → 启动助手 → 触发SCM标准退出
 	if runtime.GOOS == "windows" {
-		// Windows: 不退出! 批处理已接管, 它会发 sc stop → SCM标准停止 → 文件解锁 → 替换 → 重启
-		// 当前进程继续运行, 等待批处理的 sc stop 触发 Execute() 的 clean shutdown
-		upgradeLogger("批处理已启动, 等待SCM标准停止信号...")
+		upgradeLogger("升级助手已调度, 触发SCM标准退出...")
 		return nil
 	}
 

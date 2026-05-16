@@ -72,7 +72,7 @@ func agentLog(format string, args ...interface{}) {
 	f := agentEventsFile
 	agentEventsFileMu.Unlock()
 	if f != nil {
-		fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+		fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), msg)
 	}
 }
 
@@ -1106,7 +1106,7 @@ func upgradeLogger(format string, args ...interface{}) {
 	// 与批处理脚本写入同一日志文件: ddns_upgrade.log
 	f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
-		fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
+		fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format("15:04:05Z"), msg)
 		f.Close()
 	}
 }

@@ -279,15 +279,15 @@ th{text-align:left}
   .event-item{gap:4px 8px;padding:6px 0;align-items:center;flex-wrap:wrap}
   .event-time{min-width:0;font-size:11px}
   .event-node{min-width:0;font-size:11px}
-  .event-msg{flex-basis:100%!important;font-size:11px}
-  .event-cat{font-size:11px}
+  .event-msg{flex-basis:100%!important;font-size:11px;order:1}
+  .event-cat{font-size:10px;order:2}
 
   /* ===== 弹窗 ===== */
   .modal-box{max-width:94vw!important;padding:14px;border-radius:8px;max-height:90vh}
   .modal-box h3{font-size:14px;margin-bottom:12px}
 
   /* ===== 事件列表 ===== */
-  .event-list{max-height:180px;font-size:11px}
+  .event-list{max-height:none;font-size:11px}
 
   /* ===== 触控优化 (仅触摸设备) ===== */
   @media(pointer:coarse){
@@ -309,16 +309,18 @@ th{text-align:left}
   .log-filter-bar.open .form-group[style*="0 0 auto"]{flex:0 0 auto!important;min-width:0!important}
   .log-filter-bar.open .form-group[style*="0 0 auto"] label{display:none}
   /* 表格→卡片 */
+  /* 日志卡片: 时间+节点 行1, 类型+内容 行2 */
   .log-table thead{display:none}
-  .log-table,.log-table tbody,.log-table tr,.log-table td{display:block;width:100%}
-  .log-table tr{padding:6px 0;border-bottom:1px solid var(--c-border)}
-  .col-log-time{display:inline!important;width:auto!important;font-size:12px!important;color:var(--c-text);margin-right:6px}
+  .log-table,.log-table tbody{display:block;width:100%}
+  .log-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
+  .log-table td{padding:1px 0;width:auto!important}
+  .col-log-time{font-size:12px!important;color:var(--c-text)}
   .log-time-full{display:inline!important}
   .log-time-short{display:none!important}
-  .col-log-node{display:inline!important;width:auto!important;font-size:12px!important;color:var(--c-primary);margin-right:6px}
-  .col-log-cat{display:inline!important;width:auto!important;margin-right:4px}
-  .col-log-cat .badge{font-size:10px!important;padding:1px 5px}
-  .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all;overflow-wrap:anywhere;display:block!important;margin-top:2px;width:100%!important;padding-top:2px}
+  .col-log-node{font-size:12px!important;color:var(--c-primary)}
+  .col-log-cat{font-size:10px!important;order:2}
+  .col-log-cat .badge{padding:1px 5px!important}
+  .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all;flex-basis:100%!important;order:1}
   /* 卡片内间距 */
   .log-table tr{padding:8px 0!important;border-bottom:1px solid var(--c-border)}
   /* iOS安全区底距 */

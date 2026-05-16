@@ -80,7 +80,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		h = &model.DDNSHealthInfo{Status: "DOWN", StatusMsg: "no health data"}
 		rec.Status.DDNSHealth = h
 	case h.Running && h.LastOK:
-		h.Status, h.StatusMsg = "OK", ""
+		// v1.6.11 B3: IP全空但DDNS=OK → 标记WARN (配置可能有问题)
+		if req.Status.IPv4 == "" && req.Status.IPv6 == "" && (h.IPv4Msg == "获取失败" || h.IPv6Msg == "获取失败") {
+			h.Status, h.StatusMsg = "WARN", "IP获取失败(检查接口名/获取方式)"
+		} else {
+			h.Status, h.StatusMsg = "OK", ""
+		}
 	case h.Running && !h.LastOK:
 		h.Status, h.StatusMsg = "ERR", h.LastError
 	default:
@@ -89,8 +94,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if req.Hardware != nil {
 		rec.Hardware = req.Hardware
 	}
-	// v1.5.29 M3: 记录心跳含 DDNS 错误详情和失败域名
-	detail := fmt.Sprintf("ddns=%s ipv4=%s ipv6=%s", h.Status, req.Status.IPv4, req.Status.IPv6)
+	// v1.6.11 B3: 心跳日志含 IP 获取状态, 便于诊断"无IP但DDNS=OK"问题
+	detail := fmt.Sprintf("ddns=%s ipv4=%s(%s) ipv6=%s(%s)",
+		h.Status, req.Status.IPv4, h.IPv4Msg, req.Status.IPv6, h.IPv6Msg)
 	if h.Status != "OK" {
 		if h.LastError != "" {
 			detail += fmt.Sprintf(" err=%s", h.LastError)
@@ -556,9 +562,16 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 		c.TTL = "300"
 	}
 
-	// v1.5.32: normalize getType to lowercase (ddns-go expects lowercase; frontend may send camelCase)
-	c.IPv4.GetType = strings.ToLower(c.IPv4.GetType)
-	c.IPv6.GetType = strings.ToLower(c.IPv6.GetType)
+	// v1.6.11 B2: normalize getType to ddns-go expected exact case
+	// ddns-go switch 用精确匹配: case "url" / case "netInterface" / case "cmd"
+	// 先转小写作归一化, 再对 "netinterface" 恢复 ddns-go 期望的 camelCase
+	normalizeGetType := func(gt string) string {
+		gt = strings.ToLower(gt)
+		if gt == "netinterface" { return "netInterface" }
+		return gt
+	}
+	c.IPv4.GetType = normalizeGetType(c.IPv4.GetType)
+	c.IPv6.GetType = normalizeGetType(c.IPv6.GetType)
 
 	// sensible defaults for IP detection service URLs
 	if c.IPv4.Enable {

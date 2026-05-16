@@ -15,6 +15,11 @@ type DDNSHealthInfo struct {
 	LogLine         string   `json:"log_line,omitempty"`
 	Status          string   `json:"status,omitempty"`
 	StatusMsg       string   `json:"status_msg,omitempty"`
+	// v1.6.11 B2: IP获取状态
+	IPv4OK          bool     `json:"ipv4_ok,omitempty"`
+	IPv6OK          bool     `json:"ipv6_ok,omitempty"`
+	IPv4Msg         string   `json:"ipv4_msg,omitempty"`
+	IPv6Msg         string   `json:"ipv6_msg,omitempty"`
 }
 
 type HeartbeatReq struct {

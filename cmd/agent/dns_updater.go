@@ -32,6 +32,12 @@ type DNSStatus struct {
 	FailedDomains   []string  // v1.5.29 H1: 具体失败域名列表
 	IPv4            string    // current public IPv4
 	IPv6            string    // current public IPv6
+	IPv4Enabled     bool      // v1.6.11 B2: DNS配置中IPv4是否启用
+	IPv6Enabled     bool      // v1.6.11 B2: DNS配置中IPv6是否启用
+	IPv4OK          bool      // v1.6.11 B2: IPv4 IP获取是否成功
+	IPv6OK          bool      // v1.6.11 B2: IPv6 IP获取是否成功
+	IPv4Msg         string    // v1.6.11 B2: IPv4状态说明
+	IPv6Msg         string    // v1.6.11 B2: IPv6状态说明
 	LastRun         time.Time // timestamp of last run
 }
 
@@ -77,6 +83,16 @@ func (u *DNSUpdater) Run() DNSStatus {
 	u.status.LastOK = true
 	u.status.LastError = ""
 	u.status.FailedDomains = nil
+	u.status.IPv4OK = false
+	u.status.IPv6OK = false
+	u.status.IPv4Msg = ""
+	u.status.IPv6Msg = ""
+
+	// v1.6.11 B2: 在循环前检测配置中是否启用了IPv4/IPv6
+	for _, dc := range u.cfg.DnsConf {
+		if dc.Ipv4.Enable { u.status.IPv4Enabled = true }
+		if dc.Ipv6.Enable { u.status.IPv6Enabled = true }
+	}
 
 	// v1.5.30 H4 + v1.6.10 C1: allOK + allFailedDomains 在循环内累积, 循环外统一赋值 status。
 	// segErrors 记录每段DnsConf的独立错误 (供 LastErrorDetail 使用)
@@ -215,9 +231,15 @@ func (u *DNSUpdater) Run() DNSStatus {
 		}
 	}
 
-	// v1.6.10 M1: DNS 更新结果持久化到 agent_events.log (crash-safe)
+	// v1.6.10 M1 + v1.6.11 B2: DNS 更新结果持久化, 区分IP状态
 	if allOK {
-		agentLog("[dns] 更新成功 ipv4=%s ipv6=%s", u.status.IPv4, u.status.IPv6)
+		// 检查IP获取情况并构建描述性消息
+		u.status.IPv4Msg = buildIPMsg(u.status.IPv4, u.status.IPv4Enabled)
+		u.status.IPv6Msg = buildIPMsg(u.status.IPv6, u.status.IPv6Enabled)
+		if u.status.IPv4 != "" { u.status.IPv4OK = true }
+		if u.status.IPv6 != "" { u.status.IPv6OK = true }
+		agentLog("[dns] 更新完成: ipv4=%s(%s) ipv6=%s(%s)",
+			u.status.IPv4, u.status.IPv4Msg, u.status.IPv6, u.status.IPv6Msg)
 	} else {
 		agentLog("[dns] 更新失败: %s", u.status.LastError)
 	}
@@ -248,6 +270,17 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 	u.status.LastRun = time.Now()
 	return u.status
+}
+
+// buildIPMsg v1.6.11 B2: 构建IP获取状态描述信息
+func buildIPMsg(ip string, enabled bool) string {
+	if !enabled {
+		return "未开启"
+	}
+	if ip == "" {
+		return "获取失败"
+	}
+	return "已获取"
 }
 
 // providerRegistry maps ddns-go DNS provider names to factory functions.

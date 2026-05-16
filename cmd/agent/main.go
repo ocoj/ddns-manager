@@ -412,6 +412,11 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				LastErrorDetail: status.LastErrorDetail, // v1.5.33: ddns-go API 详细错误
 				FailedDomains:   status.FailedDomains,
 				LogLine:         status.LastLine(),
+				// v1.6.11 B2: IP获取状态
+				IPv4OK:          status.IPv4OK,
+				IPv6OK:          status.IPv6OK,
+				IPv4Msg:         status.IPv4Msg,
+				IPv6Msg:         status.IPv6Msg,
 			},
 		},
 		ConfigHash: lastConfigHash,  // use Manager-pushed hash, not self-computed
@@ -1580,16 +1585,10 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	psNetsh := "Import-Module WebAdministration; Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = [string]$_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json"
 	out, err := exec.Command("powershell", "-Command", psNetsh).CombinedOutput()
 	if err != nil || len(out) == 0 {
-		agentLog("IIS扫描: netsh失败 len=%d err=%v", len(out), err)
+		agentLog("IIS扫描: PowerShell失败 len=%d err=%v", len(out), err)
 		return nil
 	}
-	// v1.6.3 debug: dump first 200 chars of netsh output
-	if len(out) > 0 {
-		n := len(out)
-		if n > 200 { n = 200 }
-		sample := strings.ReplaceAll(string(out[:n]), "\r\n", "|")
-		agentLog("IIS扫描: netsh raw(%d)=%s", len(out), sample)
-	}
+	// v1.6.11 B1: 结构化输出SSL绑定, 替代原始netsh文本 (过长不可读)
 	// v1.6.6: JSON 解析替代文本解析 — WebAdministration 返回结构化数据
 	type psSSLBinding struct {
 		Site       string `json:"Site"`

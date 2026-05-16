@@ -1567,62 +1567,98 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 	return 0, ""
 }
 
-// scanIISBindings v1.6.0: 扫描 IIS SSL 绑定, 含 appcmd Site ID 映射。
-// 对齐 win-acme: netsh http show sslcert 获取绑定 + appcmd list sites 获取站点ID。
+// scanIISBindings v1.6.13 C7: 完全移除 PowerShell 依赖, 改用 netsh/certutil 直调
+// netsh http show sslcert 在所有Windows版本(含Win10/Server)均可执行, 无版本兼容问题
 func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
 
-	// 1. appcmd list sites → 建立 hostname:port → site_id 映射
+	// 1. appcmd list sites → 建立 hostname:port → site_id 映射 (仅IIS服务器有此命令)
 	siteMap := mapIISSites()
 
 	// 2. netsh http show sslcert → 获取 SSL 绑定列表
-	// v1.6.3: 用 PowerShell 包装 — Go 直接 exec netsh 在 SYSTEM 下失败(PATH/令牌), 但 powershell 可以
-	// v1.6.6: 用 WebAdministration 模块直接查 IIS SSL 绑定 (与 win-acme 同款 API)
-	// Get-ChildItem IIS:\SSLBindings → 结构化输出 → ConvertTo-Json → Go 直接解析
-	psNetsh := "Import-Module WebAdministration; Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = [string]$_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json"
-	out, err := exec.Command("powershell", "-Command", psNetsh).CombinedOutput()
+	// Go 直调 netsh (全路径避免 PATH 问题), 无需 PowerShell 包装
+	netshPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "netsh.exe")
+	out, err := exec.Command(netshPath, "http", "show", "sslcert").CombinedOutput()
 	if err != nil || len(out) == 0 {
-		agentLog("IIS扫描: PowerShell失败 len=%d err=%v", len(out), err)
+		agentLog("IIS扫描: netsh失败 len=%d err=%v", len(out), err)
 		return nil
 	}
-	// v1.6.11 B1: 结构化输出SSL绑定, 替代原始netsh文本 (过长不可读)
-	// v1.6.6: JSON 解析替代文本解析 — WebAdministration 返回结构化数据
-	type psSSLBinding struct {
-		Site       string `json:"Site"`
-		IP         string `json:"IP"`
-		Port       int    `json:"Port"`
-		Thumbprint string `json:"Thumbprint"`
+
+	// netsh 输出格式 (固定, 不受语言影响):
+	//     IP:port                      : 0.0.0.0:443
+	//     Certificate Hash             : abc123def...
+	//     Application ID               : {guid}
+	//     ...空行分隔...
+	// 按 "IP:port" 行拆分绑定块, 从每块提取 Certificate Hash
+	text := string(out)
+	hashRe := regexp.MustCompile(`Certificate Hash\s*:\s*([0-9a-fA-F]{40})`)
+	hostRe := regexp.MustCompile(`Hostname:port\s*:\s*(\S+)`)
+	siteRe := regexp.MustCompile(`Site ID\s*:\s*(\d+)`)
+	hostnameRe := regexp.MustCompile(`Hostname\s*:\s*([^\s]+)`)
+
+	// 按 IP:port 行拆分
+	blocks := strings.Split(text, "\n    IP:port")
+	// 第一块可能以 "IP:port" 开头, 也可能有表头
+	if len(blocks) > 0 && !strings.Contains(blocks[0], "Certificate Hash") {
+		blocks = blocks[1:]
 	}
-	var psBindings []psSSLBinding
-	jsonText := strings.TrimSpace(string(out))
-	if strings.HasPrefix(jsonText, "[") {
-		if err := json.Unmarshal(out, &psBindings); err != nil {
-			agentLog("IIS扫描: JSON解析失败: %v", err)
-			return nil
-		}
-	} else {
-		var single psSSLBinding
-		if err := json.Unmarshal(out, &single); err != nil {
-			agentLog("IIS扫描: JSON解析失败: %v", err)
-			return nil
-		}
-		psBindings = append(psBindings, single)
-	}
+
 	var sites []model.IISBoundSite
-	for _, pb := range psBindings {
-		cur := model.IISBoundSite{
-			Hostname:   pb.IP, // IP binding (SNI hostname 将通过 IIS API 扩展)
-			Port:       pb.Port,
-			Thumbprint: strings.ToLower(pb.Thumbprint),
+	for _, block := range blocks {
+		hh := hashRe.FindStringSubmatch(block)
+		if hh == nil {
+			continue
 		}
-		// 通过 Site 名称查找 SiteID
-		if info, ok := siteMap[pb.Site]; ok {
-			cur.SiteID = info.id
-			cur.SiteName = info.name
+		bs := model.IISBoundSite{Thumbprint: strings.ToLower(hh[1])}
+
+		// 从 IP:port 行解析地址
+		lines := strings.SplitN(block, "\n", 2)
+		addrPart := ""
+		if len(lines) > 0 {
+			// 格式: "                      : 0.0.0.0:443"
+			parts := strings.SplitN(lines[0], ":", 2)
+			if len(parts) > 1 {
+				addrPart = strings.TrimSpace(parts[1])
+			}
 		}
-		sites = append(sites, cur)
+		if addrPart != "" {
+			lastColon := strings.LastIndex(addrPart, ":")
+			if lastColon > 0 {
+				bs.Hostname = addrPart[:lastColon]
+				bs.Port, _ = strconv.Atoi(addrPart[lastColon+1:])
+			}
+		}
+
+		// 提取 Hostname:port 格式 (SNI binding)
+		if hm := hostRe.FindStringSubmatch(block); hm != nil {
+			lastColon := strings.LastIndex(hm[1], ":")
+			if lastColon > 0 {
+				bs.Hostname = hm[1][:lastColon]
+				bs.Port, _ = strconv.Atoi(hm[1][lastColon+1:])
+			}
+		}
+		if hn := hostnameRe.FindStringSubmatch(block); hn != nil && bs.Hostname == "0.0.0.0" {
+			bs.Hostname = strings.ToLower(hn[1])
+		}
+		if si := siteRe.FindStringSubmatch(block); si != nil {
+			bs.SiteID, _ = strconv.Atoi(si[1])
+		}
+
+		sites = append(sites, bs)
+	}
+
+	// 用 appcmd siteMap 补充站点名称
+	for i := range sites {
+		if sites[i].SiteID > 0 {
+			for _, info := range siteMap {
+				if info.id == sites[i].SiteID {
+					sites[i].SiteName = info.name
+					break
+				}
+			}
+		}
 	}
 
 	saveIISBindingsFile(cfg, sites)
@@ -1636,13 +1672,15 @@ type iisSiteInfo struct {
 	name string
 }
 
-// mapIISSites v1.6.0: appcmd list sites → map[name]→{siteID, siteName}
-// v1.6.6: 改为 map[name]info (siteName → info), 因为 PowerShell SSLBindings 返回站点名
+// mapIISSites v1.6.13 C7: appcmd 直调, 移除 PowerShell 包装
+// appcmd.exe 全路径避免 PATH 问题; 非IIS服务器时此命令不存在, 返回空 map
 func mapIISSites() map[string]iisSiteInfo {
 	result := map[string]iisSiteInfo{}
-	// v1.6.3: 用 PowerShell 包装 — Go 直接 exec appcmd 在 SYSTEM 下失败
-	psAppcmd := fmt.Sprintf("& $env:SystemRoot\\System32\\inetsrv\\appcmd list sites")
-	out, err := exec.Command("powershell", "-Command", psAppcmd).CombinedOutput()
+	appcmdPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd.exe")
+	if _, err := os.Stat(appcmdPath); err != nil {
+		return result // 非IIS服务器, 正常
+	}
+	out, err := exec.Command(appcmdPath, "list", "sites").CombinedOutput()
 	if err != nil {
 		return result
 	}
@@ -1651,7 +1689,6 @@ func mapIISSites() map[string]iisSiteInfo {
 	for _, match := range re.FindAllStringSubmatch(string(out), -1) {
 		siteName := match[1]
 		siteID, _ := strconv.Atoi(match[2])
-		// v1.6.6: 改用 site name 作为 key (PowerShell SSLBindings 返回站点名)
 		result[siteName] = iisSiteInfo{id: siteID, name: siteName}
 	}
 	return result

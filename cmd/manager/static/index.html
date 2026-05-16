@@ -349,13 +349,12 @@ th{text-align:left}
   .dns-table,.cert-table,.acme-table,.dns-table tbody,.cert-table tbody,.acme-table tbody,.dns-table tr,.cert-table tr,.acme-table tr{display:block;width:100%}
   .dns-table tr,.cert-table tr,.acme-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
   .dns-table td,.cert-table td,.acme-table td{padding:2px 0}
-  /* DNS: 名称+提供商 行1, 节点+操作 行2 */
-  .dns-table .col-dns-name,.dns-table .col-prov{display:inline-block!important;margin-right:6px;font-size:13px;width:auto!important}
+  /* DNS: 名称+提供商+AK 行1, 使用节点 行2, 操作 行3 */
+  .dns-table .col-dns-name,.dns-table .col-prov,.col-ak{display:inline-block!important;margin-right:6px;font-size:12px;width:auto!important}
   .dns-table .col-dns-name{font-weight:600}
-  .dns-table .col-prov{color:var(--c-primary);font-size:12px!important}
-  .col-ak{display:none!important}
-  .dns-table .col-dom{display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
-  .dns-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  .dns-table .col-prov{color:var(--c-primary)}
+  .dns-table .col-dom{display:block!important;font-size:11px;color:var(--c-text2);margin:2px 0;width:100%!important}
+  .dns-table .col-act{display:block!important;width:auto!important}
   /* 证书: 名称+剩余 行1, SAN+到期+操作 行2 */
   .cert-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
   .cert-table .col-badge-sm{display:inline-block!important;width:auto!important}
@@ -1755,7 +1754,7 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td class="col-dom" title="' + he(k.nodes) + '">' + he(k.nodes) + '</td>';
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
   }
   h += '</div>';
 
@@ -1777,7 +1776,7 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td class="col-badge-sm"><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button><span class="more-wrap"><button class="btn btn-sm" onclick="toggleMore(event)">更多 ▾</button><div class="more-menu"><button onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button onclick="downloadPFX(\'' + jsStr(name) + '\')">PFX</button>' + (c.acme ? '<button onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '</div></span></div></td></tr>';
     });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
   }
   h += '</div>';
 

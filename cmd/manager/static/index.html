@@ -592,16 +592,27 @@ function initApp() {
   document.getElementById('main-area').style.display = '';
   document.getElementById('login-wrap').style.display = 'none';
 
-  // 全局脏标记监听: 任何 input/select/textarea 值变化或 checkbox 点击 → markPageDirty
-  // 使用事件代理 (document level) 避免每新增一个输入元素都要手工绑定
+  // v1.6.19: 用户编辑输入框时暂停自动刷新, 避免编辑内容被覆盖
   document.addEventListener('input', function(e) {
     if (e.target.closest && (e.target.closest('#content') || e.target.closest('.modal-overlay.show'))) {
       markPageDirty();
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+        pauseAutoRefresh('user-input');
+      }
     }
   });
   document.addEventListener('change', function(e) {
     if (e.target.closest && (e.target.closest('#content') || e.target.closest('.modal-overlay.show'))) {
       markPageDirty();
+      if (e.target.tagName === 'SELECT') pauseAutoRefresh('user-input');
+    }
+  });
+  // v1.6.19: 日志页点击筛选器时也暂停
+  document.addEventListener('focusin', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+      if (e.target.closest && (e.target.closest('#page-logs') || e.target.closest('.modal-overlay.show'))) {
+        pauseAutoRefresh('user-focus');
+      }
     }
   });
 
@@ -723,15 +734,44 @@ function navigate(page) {
   var pages = document.querySelectorAll('#content>div');
   for (var i = 0; i < pages.length; i++) pages[i].classList.remove('active');
   document.getElementById('page-' + page).classList.add('active');
+  // v1.6.19: 进入日志页时初始化滚动监听 + 清空增量状态
+  if (page === 'logs') {
+    _lastLogTime = '';
+    _logScrolledUp = false;
+    _newLogCount = 0;
+    setTimeout(setupLogScrollListener, 100);
+  }
   refreshPage();
 }
 
 // ========== AUTO REFRESH ==========
 let refreshInterval = 5; // seconds between full refreshes
+let refreshPaused = false;
+let refreshPauseTimer = null;
+const REFRESH_PAUSE_MS = 30000; // auto-resume after 30s of no user interaction
+
+// v1.6.19: 用户交互时暂停自动刷新, 避免阅读日志时页面跳动
+function pauseAutoRefresh(reason) {
+  if (!refreshPaused) {
+    refreshPaused = true;
+    updateTimerDisplay('已暂停');
+  }
+  clearTimeout(refreshPauseTimer);
+  refreshPauseTimer = setTimeout(function() {
+    refreshPaused = false;
+    updateTimerDisplay(resetTimer());
+  }, REFRESH_PAUSE_MS);
+}
+function resetTimer() {
+  refreshSec = refreshInterval;
+  return '00:' + String(refreshSec).padStart(2, '0');
+}
+
 function startAutoRefresh() {
   clearInterval(refreshTimer);
   refreshSec = refreshInterval; updateTimer();
   refreshTimer = setInterval(function() {
+    if (refreshPaused) return;
     refreshSec--;
     updateTimer();
     if (refreshSec <= 0) {
@@ -739,6 +779,9 @@ function startAutoRefresh() {
       refreshSec = refreshInterval;
     }
   }, 1000);
+}
+function updateTimerDisplay(text) {
+  document.getElementById('refresh-timer').textContent = text;
 }
 function updateTimer() {
   var s = String(refreshSec).padStart(2, '0');
@@ -779,11 +822,16 @@ function confirmAction(title, msg, cb) {
  * ⚠️ 不要依赖 silent 做逻辑判断。状态保留完全由 _pageStore 和 _page 标记控制。
  */
 async function refreshPage(silent) {
-  // 静默刷新时若弹窗打开则跳过, 防止 re-render 干扰模态框内容 (证书详情/节点配置等)
+  // 静默刷新时若弹窗打开则跳过, 防止 re-render 干扰模态框内容
   if (silent && document.querySelector('.modal-overlay.show')) return;
   // 仅静默刷新时从 DOM 捕获当前页编辑状态到 _pageStore
   if (silent) {
     _pageStore[currentPage] = capturePageState(currentPage);
+  }
+  // v1.6.19: 日志页静默刷新用增量模式, 避免全表重建导致滚动丢失
+  if (silent && currentPage === 'logs' && !window._logFilter) {
+    await loadLogsIncremental();
+    return;
   }
   var fns = {dashboard:loadDashboard, nodes:loadNodes, dns:loadDNS, versions:loadVersions, logs:loadLogs, settings:loadSettings};
   var fn = fns[currentPage];
@@ -2188,7 +2236,98 @@ async function batchUpgrade() {
   else toast('未选择目标版本', 'warning');
 }
 
-// ==================== LOGS ====================
+// ==================== LOGS (v1.6.19: 增量追加 + 滚动保持) ====================
+let _lastLogTime = '';
+let _logScrolledUp = false;
+let _newLogCount = 0;
+
+// 用户滚动日志时暂停自动刷新, 避免阅读中断
+function setupLogScrollListener() {
+  var el = document.getElementById('page-logs');
+  if (!el || el._scrollBound) return;
+  el._scrollBound = true;
+  el.addEventListener('scroll', function() {
+    var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    _logScrolledUp = !atBottom;
+    if (_logScrolledUp) {
+      pauseAutoRefresh('log-scroll');
+    }
+    // 滚动到底部时清除新日志提示
+    if (atBottom && _newLogCount > 0) {
+      _newLogCount = 0;
+      var nb = document.getElementById('new-log-banner');
+      if (nb) nb.style.display = 'none';
+    }
+  }, {passive: true});
+}
+
+// 增量加载: 仅取新日志, 追加到表格末尾, 保持滚动位置
+async function loadLogsIncremental() {
+  try {
+    var url = '/api/admin/logs?limit=30';
+    var r = await apiJSON(url);
+    if (!r.ok || !r.data || !r.data.events) return;
+    var events = normalizeEvents(r.data.events || []);
+    if (events.length === 0) return;
+    var tbody = document.querySelector('#page-logs tbody');
+    if (!tbody) { await loadLogs(true); return; }
+    // 过滤已显示的行 (按时间戳)
+    var existingTimes = {};
+    var rows = tbody.querySelectorAll('tr');
+    rows.forEach(function(row) {
+      var cells = row.querySelectorAll('td');
+      if (cells.length > 0) existingTimes[cells[0].textContent.trim()] = true;
+    });
+    var newRows = [];
+    events.forEach(function(l) {
+      var ts = fmtTime(l.time);
+      if (!existingTimes[ts] || l.category !== rows[0]?.querySelector('.badge')?.textContent) {
+        var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
+        newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
+        newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
+        newRows.push('<td>' + he(l.action + ' ' + l.detail) + '</td></tr>');
+      }
+    });
+    if (newRows.length === 0) return;
+    // 追加新行
+    tbody.insertAdjacentHTML('beforeend', newRows.join(''));
+    // 限制最多 200 行, 超出删除旧行
+    var allRows = tbody.querySelectorAll('tr');
+    while (allRows.length > 200) { allRows[0].remove(); allRows = tbody.querySelectorAll('tr'); }
+    // 用户未向上滚动时自动滚到底部
+    if (!_logScrolledUp) {
+      var el = document.getElementById('page-logs');
+      el.scrollTop = el.scrollHeight;
+    } else {
+      _newLogCount += newRows.length / 4;
+      showNewLogBanner();
+    }
+  } catch(e) { /* 增量失败不回退, 下次全量刷新会修复 */ }
+}
+
+function showNewLogBanner() {
+  var nb = document.getElementById('new-log-banner');
+  if (!nb) {
+    nb = document.createElement('div');
+    nb.id = 'new-log-banner';
+    nb.style.cssText = 'position:sticky;bottom:8px;text-align:center;z-index:10;cursor:pointer;';
+    nb.innerHTML = '<span class="badge badge-blue" style="padding:8px 16px;font-size:13px;cursor:pointer">↓ ' + _newLogCount + ' 条新日志</span>';
+    nb.onclick = function() {
+      _logScrolledUp = false;
+      _newLogCount = 0;
+      nb.style.display = 'none';
+      var el = document.getElementById('page-logs');
+      el.scrollTop = el.scrollHeight;
+    };
+    var card = document.querySelector('#page-logs .card');
+    if (card) card.appendChild(nb);
+  } else {
+    nb.querySelector('.badge').textContent = '↓ ' + _newLogCount + ' 条新日志';
+    nb.style.display = '';
+  }
+}
+
+// 全量加载 (切页/手动搜索时使用)
 async function loadLogs(silent, filter) {
   if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载中...</div>';
   try {

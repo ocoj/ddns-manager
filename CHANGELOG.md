@@ -7,6 +7,28 @@
 借鉴 win-acme 成熟设计，重构 Windows 证书部署流程。核心突破：WebAdministration
 PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 locale 问题。
 
+#### v1.6.10 — 第十一次审计修复：全量代码审计 (2026-05-16)
+- **C1**: dns_updater.go — 多段DnsConf 时状态赋值移到循环外，防止中间状态覆盖
+- **C2**: handlers_nodes.go — DDNS健康判定增加 `!Running+LastOK` 分支，不误标 DOWN
+- **C4**: upgrade_windows.go — 批处理回退后显式 goto，消除隐式 fallthrough
+- **H1**: dns_updater.go — 多段错误独立记录为 LastErrorDetail，循环外拼接
+- **H2**: main.go — DNS 日志恢复时写入正确缓冲区 (dnsUpdater.logBuf)
+- **H3**: upgrade_linux.go — 旧版二进制删除失败记录日志，防止静默堆积
+- **H4**: dns_updater.go — DNS 更新结果持久化到 agent_events.log (crash-safe)
+- **H5**: handlers_admin.go — testDNSKeyOnline 增加 ctx 监听，防止 goroutine 泄漏
+- **H6**: server.go — 心跳检测器增加 diff/time 日志，便于时区一致性验证
+- **M1**: dns_updater.go — DNS 操作日志补全到 agent_events.log
+- **M2**: handlers_nodes.go — 证书 hash 匹配改为值遍历兜底，不依赖 key 名称
+- **M3**: main.go — 心跳失败时恢复已 drain 日志，避免重试循环丢失
+- **M4**: handlers_nodes.go — Completed 标记增加防误判，推送后等真实升级再标记
+- **M6**: main.go/svc_windows.go — ensureSymlink 行为注释明确 (Windows no-op)
+- **L1**: main.go — agentEventsFile 写文件改为持锁读指针后解锁写，防阻塞
+- **L2**: upgrade_linux.go — 版本号提取失败时用时间戳兜底
+- **L3**: store.go — nodesCache/dnsKeysCache 独立 loaded 标志，消除并发竞态
+- **L4**: VERSION 1.6.9→1.6.10, CHANGELOG 补全
+
+#### v1.6.9 — 漏写版本 (VERSION 与 CHANGELOG 不一致时产生)
+
 #### v1.6.8 — IPAddress 序列化修复
 - **bug**: PowerShell `ConvertTo-Json` 将 `$_.IPAddress` 序列化为嵌套对象
   `{"Address":0,"AddressFamily":2,...}` 而非字符串 "0.0.0.0"

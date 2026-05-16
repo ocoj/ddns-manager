@@ -23,6 +23,8 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 
 	go func() {
 		// v1.5.33: Windows Service 初始化延迟到此处, main() 零 I/O 阻塞
+		// v1.6.10 M6: ensureSymlink 是 Linux-only (Windows 不使用符号链接),
+		// 此处无需调用
 		detectInstallDir()
 		initAgentLog()
 		log.Printf("[daemon] Windows Service started, version=%s", version)

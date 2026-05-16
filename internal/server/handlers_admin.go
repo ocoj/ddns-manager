@@ -972,8 +972,19 @@ func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord, testDomain st
 		done <- true
 	}()
 
+	// v1.6.10 H5: goroutine 内增加 ctx 监听, 防止 Init() 永久阻塞导致 goroutine 泄漏
+	// 注: provider.Init() 本身不接受 context, 这里用 select 提供超时保护
+	// Init goroutine 在超时后可能继续运行(无法 kill), 但调用方不会被永久阻塞
 	select {
 	case <-done:
+		// 正常完成
+	case <-ctx.Done():
+		log.Printf("[dns-key-test] 验证超时 (30s), Provider Init goroutine 可能仍在运行")
+		return false, "验证超时 (30s)，请检查网络连通性"
+	}
+
+	// Init 返回后处理结果
+	{
 		captured := logBuf.String()
 		// v1.5.34 H5: 扩展错误关键词列表, 覆盖 28 个提供商的常见认证错误模式
 		authErrors := []string{
@@ -1003,8 +1014,6 @@ func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord, testDomain st
 		}
 		// 没有明显错误 → 视为有效 (API 连通)
 		return true, fmt.Sprintf("API连接成功，DNS Key 有效 | 提供商标识: %s", dk.Provider)
-	case <-ctx.Done():
-		return false, "验证超时 (30s)，请检查网络连通性"
 	}
 }
 

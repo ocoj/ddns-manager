@@ -38,6 +38,7 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	oldName := filepath.Base(curExe) // e.g. "node-agent-v1.5.2-linux-amd64"
 
 	// 构建版本化文件名: node-agent-v{VERSION}-{os}-{arch}
+	// v1.6.10 L2: 增加时间戳兜底, 防止版本号提取失败时生成无效文件名
 	var versionedName string
 	v := version
 	if v == "" || v == "dev" {
@@ -48,6 +49,11 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 			if sep := strings.LastIndex(rest, "-"+runtime.GOOS+"-"); sep != -1 {
 				v = rest[:sep]
 			}
+		}
+		// 最终兜底: 提取失败时使用下载时间戳, 避免生成 node-agent-v--linux-amd64
+		if v == "" || v == "dev" {
+			v = time.Now().Format("20060102.150405")
+			log.Printf("[upgrade] 无法从文件名提取版本号, 使用时间戳: %s", v)
 		}
 	}
 	versionedName = fmt.Sprintf("node-agent-v%s-%s-%s", v, runtime.GOOS, runtime.GOARCH)
@@ -93,13 +99,18 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 
 	// 清理旧的版本化二进制（当前版本，非新版本）
 	// 只删与新版本名不同的旧版本化文件，避免误删
+	// v1.6.10 H3: 删除失败时记录日志, 防止旧二进制静默堆积
 	if versionedName != oldName {
 		oldVersionedPath := filepath.Join(dir, oldName)
-		os.Remove(oldVersionedPath)
+		if err := os.Remove(oldVersionedPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[upgrade] 删除旧版二进制失败: %s (%v)", oldName, err)
+		}
 	}
 
 	// 删除下载的临时文件
-	os.Remove(newExe)
+	if err := os.Remove(newExe); err != nil && !os.IsNotExist(err) {
+		log.Printf("[upgrade] 删除临时文件失败: %s (%v)", newExe, err)
+	}
 	return nil
 }
 

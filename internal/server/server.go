@@ -187,12 +187,17 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 						continue
 					}
 					if now.Sub(n.LastSeen) > 10*time.Minute {
+						// v1.6.10 H6: 记录详细时间差, 便于验证时区一致性
+						diff := now.Sub(n.LastSeen)
 						if lastNotified, ok := notified[id]; ok && now.Sub(lastNotified) < 1*time.Hour {
 							continue
 						}
 						notified[id] = now
+						s.logMgr.LogWithNode("heartbeat", "节点离线检测", id,
+							fmt.Sprintf("diff=%v lastSeen=%s now=%s",
+								diff, n.LastSeen.Format(time.RFC3339), now.Format(time.RFC3339)), "warning")
 						s.tryNotify("heartbeat_fail", "节点离线",
-							fmt.Sprintf("节点 %s 超过10分钟未心跳 (最后心跳: %s)", id, n.LastSeen.Format("01-02 15:04")))
+							fmt.Sprintf("节点 %s 超过10分钟未心跳 (diff=%v, 最后心跳: %s)", id, diff, n.LastSeen.Format("01-02 15:04")))
 					}
 				}
 			case <-shutdown:

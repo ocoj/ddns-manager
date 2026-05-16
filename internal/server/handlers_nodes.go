@@ -138,19 +138,20 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		binKey := goos + "-" + goarch
 		manifestFile := manifest[binKey]
 		s.store.UpdateAgentConfigAtomic(func(agentCfg *store.AgentConfig) {
-			// 标记已完成的升级 — 必须在版本匹配判断之前
-			// （否则已升级节点走到版本匹配即 return，永远不会标记完成）
-			if agentCfg.UpgradeState != nil {
-				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
-						job.Completed = now.Format(time.RFC3339)
-						agentCfg.UpgradeState[nodeID] = job
-						s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,
-							fmt.Sprintf("ver=%s", req.Status.AgentVersion), "success")
+			// v1.6.10 M4: Completed 检查 移到 shouldPush 确定之后
+			// 仅在本次心跳 不会 推送升级时才标记完成, 防止推送后Agent未升级但已完成标记
+			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
+				// 版本相同 → 标记完成 (如果之前有升级任务)
+				if agentCfg.UpgradeState != nil {
+					if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+						if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+							job.Completed = now.Format(time.RFC3339)
+							agentCfg.UpgradeState[nodeID] = job
+							s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,
+								fmt.Sprintf("ver=%s", req.Status.AgentVersion), "success")
+						}
 					}
 				}
-			}
-			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
 				return
 			}
 			shouldPush := true
@@ -176,6 +177,18 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				s.logMgr.LogWithNode("upgrade", "升级已放弃", nodeID,
 					fmt.Sprintf("ver=%s 5次推送均失败", agentCfg.LatestVersion), "error")
 				return
+			}
+			// v1.6.10 M4: 仅当本次不会推送升级时, 才检查 Agent 版本是否已匹配并标记完成
+			// 若 shouldPush=true (即将推送), 则等 Agent 真正升级后下个心跳再标记
+			if !shouldPush {
+				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
+					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+						job.Completed = now.Format(time.RFC3339)
+						agentCfg.UpgradeState[nodeID] = job
+						s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,
+							fmt.Sprintf("ver=%s", req.Status.AgentVersion), "success")
+					}
+				}
 			}
 			if shouldPush {
 				safeName := strings.ReplaceAll(strings.ReplaceAll(manifestFile, "..", ""), "/", "")
@@ -242,22 +255,26 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		// C2: hash key 对齐 Agent 侧 collectCertHashes 的键名
 		// v1.5.41: Agent 部署到 CertPath/{BundleName}/ 子目录, key 使用 BundleName
 		hashKey := binding.DeployPath
-		if hashKey == "" {
-			// DeployPath 为空时, Agent 部署到 CertPath/BundleName/
-			// 优先尝试 BundleName 作为 key, 也兼容旧版 "." 和 CertPath
-			if h, ok := req.Status.CertHashes[binding.BundleName]; ok && h == bundle.Hash {
-				continue
-			}
-			if h, ok := req.Status.CertHashes["."]; ok && h == bundle.Hash {
-				continue
-			}
-			if h, ok := req.Status.CertHashes[req.Status.CertPath]; ok && h == bundle.Hash {
-				continue
-			}
-		} else {
+		// v1.6.10 M2: 统一遍历所有 CertHashes 中的 hash 值比对, 不依赖 key 名称
+		// 旧方案依赖 BundleName/"."/CertPath 三重硬编码兜底, 新方案直接值比对
+		matched := false
+		if hashKey != "" {
+			// 精确 key 匹配优先 (性能优化)
 			if h, ok := req.Status.CertHashes[hashKey]; ok && h == bundle.Hash {
-				continue
+				matched = true
 			}
+		}
+		if !matched {
+			// 值遍历兜底: 任何 key 下的 hash 值匹配即跳过
+			for _, reportedHash := range req.Status.CertHashes {
+				if reportedHash == bundle.Hash {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			continue
 		}
 		encFiles := map[string]string{}
 		for name, content := range bundle.Files {

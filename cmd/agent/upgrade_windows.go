@@ -95,6 +95,10 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		// Step 7: Rollback — new binary verification failed
 		"echo [ddns] Upgrade FAILED, rolling back...\r\n"+
 		"move /y \"%%BAK%%\" \"%%OLD%%\" >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		"echo [ddns] Rollback completed >>\"ddns_upgrade.log\" 2>&1\r\n"+
+		// v1.6.10 C4: 显式跳转到回滚后验证, 消除隐式 fallthrough
+		"goto :rollback_done\r\n"+
+		":rollback_done\r\n"+
 		":start_service\r\n"+
 		// v1.5.30 C3: 回滚后二次验证 — 防止回滚失败导致启动损坏/不存在的二进制
 		"if exist \"%%OLD%%\" (\r\n"+

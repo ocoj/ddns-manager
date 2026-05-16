@@ -78,18 +78,26 @@ func (u *DNSUpdater) Run() DNSStatus {
 	u.status.LastError = ""
 	u.status.FailedDomains = nil
 
-	// v1.5.30 H4: allOK + allFailedDomains 移到循环外, 多 DnsConf 段时累积而非覆盖
+	// v1.5.30 H4 + v1.6.10 C1: allOK + allFailedDomains 在循环内累积, 循环外统一赋值 status。
+	// segErrors 记录每段DnsConf的独立错误 (供 LastErrorDetail 使用)
 	allOK := true
 	var allFailedDomains []string
+	type segErr struct {
+		provider string
+		domains  []string
+		detail   string
+	}
+	var segErrors []segErr
 
 	for _, dc := range u.cfg.DnsConf {
 		// Create the appropriate DNS provider
 		provider := newProvider(dc.DNS.Name)
 		if provider == nil {
-			u.status.LastOK = false
-			u.status.LastError = fmt.Sprintf("unsupported DNS provider: %s", dc.DNS.Name)
+			allOK = false
+			msg := fmt.Sprintf("unsupported DNS provider: %s", dc.DNS.Name)
 			u.logBuf.Write(fmt.Sprintf("不支持的DNS提供商: %s", dc.DNS.Name))
 			log.Printf("[dns] 不支持的DNS提供商: %s", dc.DNS.Name)
+			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, detail: msg})
 			continue
 		}
 
@@ -135,8 +143,11 @@ func (u *DNSUpdater) Run() DNSStatus {
 			if len(detail) > 500 {
 				detail = detail[:500] + "..."
 			}
-			u.status.LastErrorDetail = detail
-			u.logBuf.Write(fmt.Sprintf("API错误详情: %s", detail))
+			// v1.6.10 H1: 每段错误独立保存, 循环外统一拼接 LastErrorDetail
+			if len(segErrors) < len(u.cfg.DnsConf) {
+				segErrors = append(segErrors, segErr{provider: dc.DNS.Name, detail: detail})
+			}
+			u.logBuf.Write(fmt.Sprintf("API错误详情(%s): %s", dc.DNS.Name, detail))
 		}
 
 		// Extract detected IPs for heartbeat reporting
@@ -171,23 +182,49 @@ func (u *DNSUpdater) Run() DNSStatus {
 		allFailedDomains = append(allFailedDomains, segFailed...)
 
 		if len(segFailed) > 0 {
-			u.status.LastOK = false
-			u.status.LastError = fmt.Sprintf("DNS更新失败: %s", strings.Join(allFailedDomains, ", "))
-			u.status.FailedDomains = allFailedDomains
-			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, u.status.LastError)
+			// v1.6.10 C1: 仅记录日志, 状态在循环外统一赋值
+			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, domains: segFailed})
+			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, strings.Join(segFailed, ", "))
 		}
 	}
 
-	// v1.5.30 H4: allOK 判断移出循环, 全部 DNS 段成功时才标记 OK
+	// v1.6.10 C1+H1: 循环外统一赋值 status, 防止多段配置时中间状态覆盖
+	u.status.LastOK = allOK
 	if allOK {
+		u.status.LastError = ""
+		u.status.LastErrorDetail = ""
 		u.status.FailedDomains = nil
 		if len(u.cfg.DnsConf) > 0 {
 			u.logBuf.Write("DNS更新完成")
 		}
+	} else {
+		u.status.LastError = fmt.Sprintf("DNS更新失败(%d段): %s", len(u.cfg.DnsConf), strings.Join(allFailedDomains, ", "))
+		u.status.FailedDomains = allFailedDomains
+		// 拼接所有段的独立错误详情
+		var detailParts []string
+		for _, se := range segErrors {
+			if se.detail != "" {
+				detailParts = append(detailParts, fmt.Sprintf("[%s] %s", se.provider, se.detail))
+			} else if len(se.domains) > 0 {
+				detailParts = append(detailParts, fmt.Sprintf("[%s] failed=%s", se.provider, strings.Join(se.domains, ",")))
+			}
+		}
+		u.status.LastErrorDetail = strings.Join(detailParts, " | ")
+		if len(u.status.LastErrorDetail) > 500 {
+			u.status.LastErrorDetail = u.status.LastErrorDetail[:500] + "..."
+		}
+	}
+
+	// v1.6.10 M1: DNS 更新结果持久化到 agent_events.log (crash-safe)
+	if allOK {
+		agentLog("[dns] 更新成功 ipv4=%s ipv6=%s", u.status.IPv4, u.status.IPv6)
+	} else {
+		agentLog("[dns] 更新失败: %s", u.status.LastError)
 	}
 
 	// v1.5.31 H3: 失败域名持久化到 ddns_errors.log, 防止 Agent 崩溃丢失内存日志
 	// v1.5.34 M1: 增加 10MB 轮转, 保留 3 个历史文件
+	// v1.6.10 H4: 关键错误详情也写入, 不再依赖心跳上报
 	if len(allFailedDomains) > 0 {
 		path := filepath.Join(agentBaseDir, "ddns_errors.log")
 		// 轮转: >10MB 时重命名为 ddns_errors.N.log (保留 3 个)

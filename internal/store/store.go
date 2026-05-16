@@ -20,15 +20,18 @@ import (
 // ManagerStore is the central data store with in-memory cache.
 // Nodes and DNS keys are cached in memory after first load; writes update both
 // the cache and the backing file. This avoids per-heartbeat JSON file I/O.
+// v1.6.10 L3: 两个独立标志, 防止并发场景下 loadNodesToCache 设置 cacheLoaded=true
+// 导致 dnsKeysCache 被误标记为已加载 (两个 load 函数之前共享一个 cacheLoaded)
 type ManagerStore struct {
 	mu     sync.RWMutex
 	dir    string
 
 	// In-memory caches — populated on first read, kept in sync by write methods.
 	// Protected by mu (reads hold RLock, writes hold Lock).
-	nodesCache   map[string]*model.NodeRecord
-	dnsKeysCache map[string]*model.DNSKeyRecord
-	cacheLoaded  bool // false until first LoadNodes/LoadDNSKeys populates caches
+	nodesCache         map[string]*model.NodeRecord
+	dnsKeysCache       map[string]*model.DNSKeyRecord
+	nodesCacheLoaded   bool
+	dnsKeysCacheLoaded bool
 }
 
 // NewStore opens or initialises the data directory.
@@ -51,7 +54,7 @@ func (s *ManagerStore) loadNodesToCache() error {
 	data, err := os.ReadFile(s.nodesPath())
 	if os.IsNotExist(err) {
 		s.nodesCache = nodes
-		s.cacheLoaded = true
+		s.nodesCacheLoaded = true
 		return nil
 	}
 	if err != nil {
@@ -61,14 +64,14 @@ func (s *ManagerStore) loadNodesToCache() error {
 		return fmt.Errorf("nodes.json: %w", err)
 	}
 	s.nodesCache = nodes
-	s.cacheLoaded = true
+	s.nodesCacheLoaded = true
 	return nil
 }
 
 func (s *ManagerStore) LoadNodes() (map[string]*model.NodeRecord, error) {
 	s.mu.RLock()
 	// Fast path: return shallow copy of cached map (no file I/O per heartbeat)
-	if s.cacheLoaded && s.nodesCache != nil {
+	if s.nodesCacheLoaded && s.nodesCache != nil {
 		out := make(map[string]*model.NodeRecord, len(s.nodesCache))
 		for k, v := range s.nodesCache {
 			out[k] = v
@@ -82,7 +85,7 @@ func (s *ManagerStore) LoadNodes() (map[string]*model.NodeRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Double-check: another goroutine may have loaded while we waited for write lock
-	if s.cacheLoaded && s.nodesCache != nil {
+	if s.nodesCacheLoaded && s.nodesCache != nil {
 		out := make(map[string]*model.NodeRecord, len(s.nodesCache))
 		for k, v := range s.nodesCache {
 			out[k] = v
@@ -111,7 +114,7 @@ func (s *ManagerStore) saveNodesLocked(nodes map[string]*model.NodeRecord) error
 	}
 	// Update in-memory cache (the caller's map becomes the cache)
 	s.nodesCache = nodes
-	s.cacheLoaded = true
+	s.nodesCacheLoaded = true
 	return nil
 }
 
@@ -151,7 +154,7 @@ func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del boo
 	defer s.mu.Unlock()
 
 	// Ensure cache is loaded (first access after restart)
-	if !s.cacheLoaded || s.nodesCache == nil {
+	if !s.nodesCacheLoaded || s.nodesCache == nil {
 		if err := s.loadNodesToCache(); err != nil {
 			return err
 		}
@@ -348,13 +351,14 @@ func (s *ManagerStore) loadDNSKeysToCache() error {
 		if v.Provider == "" { v.Provider = k }
 	}
 	s.dnsKeysCache = keys
+	s.dnsKeysCacheLoaded = true
 	return nil
 }
 
 func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
 	s.mu.RLock()
 	// Fast path: return shallow copy of cached map
-	if s.dnsKeysCache != nil {
+	if s.dnsKeysCacheLoaded && s.dnsKeysCache != nil {
 		out := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
 		for k, v := range s.dnsKeysCache {
 			out[k] = v
@@ -367,7 +371,8 @@ func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
 	// Slow path: populate from disk
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.dnsKeysCache != nil {
+	// Double-check: another goroutine may have loaded while we waited for write lock
+	if s.dnsKeysCacheLoaded && s.dnsKeysCache != nil {
 		out := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
 		for k, v := range s.dnsKeysCache {
 			out[k] = v

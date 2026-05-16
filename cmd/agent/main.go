@@ -58,6 +58,7 @@ var (
 	lastCertErrorsMu sync.Mutex
 )
 // v1.5.34 H3: Agent 操作日志文件持久化 (10MB 轮转, 保留 3 个), 防止 crash 丢失
+// v1.6.10 L1: 读写分离 — os.File.Write 是线程安全的, 锁仅保护文件句柄的获取/替换
 var (
 	agentEventsFile   *os.File
 	agentEventsFileMu sync.Mutex
@@ -66,12 +67,13 @@ func agentLog(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
 	agentLogBuf.Write(msg)
-	// v1.5.34 H3: 同步追加写入 agent_events.log, 防止 Agent crash 丢失操作日志
+	// v1.6.10 L1: 不加锁写文件 (os.File.Write 线程安全), 只持锁读文件句柄
 	agentEventsFileMu.Lock()
-	if agentEventsFile != nil {
-		fmt.Fprintf(agentEventsFile, "%s %s\n", time.Now().Format(time.RFC3339), msg)
-	}
+	f := agentEventsFile
 	agentEventsFileMu.Unlock()
+	if f != nil {
+		fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+	}
 }
 
 // initAgentEventsLog 打开 Agent 操作事件日志文件 (agent_events.log), 10MB 轮转。
@@ -418,9 +420,13 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	}
 
 	// v1.5.29 C1: 在 sendHeartbeat 之前填充 AgentLogs (修复 v1.5.22 H2 回归)
-	// 原代码在 sendHeartbeat 之后 Drain，导致日志写入已废弃的 req 局部变量而丢失
+	// v1.6.10 M3: Drain 前快照 — 心跳失败时恢复, 避免重试循环中日志丢失
+	// 注意: 重试循环中的 Write→Drain→Write→Drain 序列天然安全,
+	// 因为恢复后的日志会在下次 Drain 时重新进入 req.AgentLogs
+	var drainedAgentLogs []string
 	if agentLogBuf.Len() > 0 {
-		req.AgentLogs = agentLogBuf.Drain()
+		drainedAgentLogs = agentLogBuf.Drain()
+		req.AgentLogs = drainedAgentLogs
 	}
 
 	// 3. Send heartbeat
@@ -429,13 +435,16 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 	if resp == nil {
 		// v1.5.29 C1: 心跳失败时恢复 AgentLogs 到缓冲，防止丢失
 		heartbeatFailed.Store(true)
-		for _, logLine := range req.AgentLogs {
+		// v1.6.10 M3: 恢复已 drain 的日志, 确保重试时重新发送
+		for _, logLine := range drainedAgentLogs {
 			agentLogBuf.Write(logLine)
 		}
-		// v1.5.36 H2: 心跳失败时也将 DNS 更新日志恢复到缓冲，防止连续失败导致日志丢失
+		// v1.6.10 H2: DNS 日志恢复到正确缓冲区 (dnsUpdater.logBuf), 避免类别混乱
+		dnsUpdater.mu.Lock()
 		for _, logLine := range req.Logs {
-			agentLogBuf.Write("[dns] " + logLine)
+			dnsUpdater.logBuf.Write("[dns-replay] " + logLine)
 		}
+		dnsUpdater.mu.Unlock()
 		// v1.5.34 H6: 日志含具体失败原因, 不再笼统说"心跳失败"
 		log.Printf("[heartbeat] 心跳失败: %v", hbErr)
 		return fmt.Errorf("心跳失败: %w", hbErr)
@@ -1704,6 +1713,8 @@ func main() {
 	}
 	// v1.5.33: Windows Service 时跳过, 延迟到 SCM handler goroutine 中初始化
 	// 确保 main() 对 SCM 绝对零阻塞
+	// v1.6.10 M6: ensureSymlink 在 Windows 下是 no-op (Windows 不使用符号链接),
+	// Windows daemon 的 detectInstallDir+initAgentLog 在 svc_windows.go 中补执行
 	if !(*daemon && runtime.GOOS == "windows") {
 		detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
 		initAgentLog()

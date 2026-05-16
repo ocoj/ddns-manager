@@ -847,23 +847,19 @@ function confirmAction(title, msg, cb) {
  * ⚠️ 不要依赖 silent 做逻辑判断。状态保留完全由 _pageStore 和 _page 标记控制。
  */
 async function refreshPage(silent) {
-  // 静默刷新时若弹窗打开则跳过
   if (silent && document.querySelector('.modal-overlay.show')) return;
-  // v1.6.23: 静默刷新仅更新数据, 手动刷新才重建DOM
   var fns = {dashboard:loadDashboard, nodes:loadNodes, dns:loadDNS, versions:loadVersions, logs:loadLogs, settings:loadSettings};
   var fn = fns[currentPage];
   if (!fn) return;
+  // v1.6.23: 日志页静默刷新走增量prepend(保持最新在顶), 筛选视图排除
+  if (silent && currentPage === 'logs') {
+    if (window._logFilter) return; // 筛选视图: 跳过自动刷新
+    await loadLogsIncremental();
+    return;
+  }
   if (silent) {
-    // 静默刷新: 只更新数据, 不替换innerHTML
-    if (currentPage === 'logs' && !window._logFilter) {
-      await loadLogsIncremental();
-    } else if (currentPage === 'logs' && window._logFilter) {
-      await fn(true, window._logFilter);
-    } else {
-      await fn(true);
-    }
+    await fn(true);
   } else {
-    // 手动刷新/切页: 完整重建
     _pageStore[currentPage] = capturePageState(currentPage);
     if (currentPage === 'logs' && window._logFilter) {
       await fn(false, window._logFilter);
@@ -2350,6 +2346,7 @@ function renderLogs(data, filter) {
   h += '<div class="form-group" style="flex:0 1 120px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="font-size:11px"></div>';
   h += '<div class="form-group" style="flex:0 1 120px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="font-size:11px"></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary" onclick="applyLogFilter()">搜索</button></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="resetLogFilter()">重置</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="downloadLogs()">下载</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-danger" onclick="cleanupLogs()">清理</button></div>';
   h += '</div>';
@@ -2378,6 +2375,7 @@ function getLogFilter() {
   };
 }
 function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f); }
+function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false); }
 async function cleanupLogs() {
   confirmAction('清理日志', '确定清理旧日志？', function() {
     apiJSON('/api/admin/logs/cleanup', {method: 'POST'}).then(function(r) {

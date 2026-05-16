@@ -207,6 +207,9 @@ th{text-align:left}
 .pagination span{font-size:12px;color:var(--c-text2)}
 .tip{font-size:11px;color:var(--c-text2);margin-top:4px}
 .flex-between{display:flex;justify-content:space-between;align-items:center}
+.log-filter-toggle{display:none}
+.log-time-full{display:inline}
+.log-time-short{display:none}
 
 @media(max-width:768px){
   /* ===== 布局 ===== */
@@ -290,9 +293,22 @@ th{text-align:left}
     .event-item{min-height:44px}
   }
   /* ===== 日志页移动端 ===== */
-  .log-filter-bar{gap:4px!important;margin-bottom:8px!important}
-  .log-filter-bar .btn{font-size:11px!important;padding:4px 8px!important}
-  .log-filter-bar .form-group{flex:0 1 auto!important}
+  .log-filter-toggle{display:inline-block!important;flex-shrink:0}
+  .log-filter-bar{display:none!important}
+  .log-filter-bar.open{display:flex!important;flex-wrap:wrap;gap:4px;row-gap:6px}
+  .log-filter-bar.open .form-group{flex:1 1 45%!important;min-width:100px}
+  .log-filter-bar.open .form-group label{font-size:11px}
+  .log-filter-bar.open .form-group input,.log-filter-bar.open .form-group select{width:100%}
+  /* 表格→卡片 */
+  .log-table thead{display:none}
+  .log-table,.log-table tbody,.log-table tr,.log-table td{display:block;width:100%}
+  .log-table tr{padding:6px 0;border-bottom:1px solid var(--c-border)}
+  .col-log-time{font-size:11px!important;color:var(--c-text2);margin-bottom:2px}
+  .col-log-node{display:none!important}
+  .col-log-cat{display:none!important}
+  .log-time-full{display:none}
+  .log-time-short{display:inline}
+  .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all}
   #page-logs td{max-width:160px;overflow:hidden;text-overflow:ellipsis}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
@@ -2288,11 +2304,12 @@ async function loadLogsIncremental() {
     for (var i = 0; i < events.length; i++) {
       var l = events[i];
       var ts = fmtTime(l.time);
+      var ts2 = ts.length > 10 ? ts.substring(11,16) : ts;
       if (ts === firstTime) break;
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
+      newRows.push('<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + ts + '</span><span class="log-time-short">' + ts2 + '</span></td><td class="col-log-node">' + he(l.node || '-') + '</td>');
       newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
-      newRows.push('<td>' + he(l.action + ' ' + l.detail) + '</td></tr>');
+      newRows.push('<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>');
     }
     if (newRows.length === 0) return;
     // prepend 新行到表顶
@@ -2337,7 +2354,7 @@ function renderLogs(data, filter) {
   var nodeNames = window._logNodeNames || [];
   var f = filter || {};
   var h = '';
-  h += '<div class="card"><div class="card-header"><h3>系统日志 <span style="font-size:11px;color:var(--c-text2);font-weight:400">(' + (window._tzLabel || '') + ')</span></h3></div>';
+  h += '<div class="card"><div class="card-header"><h3>系统日志 <span style="font-size:11px;color:var(--c-text2);font-weight:400">(' + (window._tzLabel || '') + ')</span></h3><button class="btn btn-sm log-filter-toggle" onclick="toggleLogFilter()">筛选 ▾</button></div>';
   h += '<div class="form-inline log-filter-bar" style="margin-bottom:12px;gap:6px;align-items:flex-end">';
   h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node"><option value="">全部</option>';
   nodeNames.forEach(function(n) {
@@ -2356,19 +2373,20 @@ function renderLogs(data, filter) {
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="downloadLogs()">下载</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-danger" onclick="cleanupLogs()">清理</button></div>';
   h += '</div>';
-  h += '<table><thead><tr><th class="col-log-time">时间</th><th class="col-log-node">节点</th><th class="col-log-cat">分类</th><th>内容</th></tr></thead><tbody>';
+  h += '<div class="log-table-wrap"><table class="log-table"><thead><tr><th class="col-log-time">时间</th><th class="col-log-node">节点</th><th class="col-log-cat">分类</th><th>内容</th></tr></thead><tbody>';
   if (events.length === 0) {
     h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';
   } else {
-    // API已返回倒序(最新在顶), 无需前端反转
     events.forEach(function(l) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
+      var timeFull = fmtTime(l.time);
+      var timeShort = timeFull.length > 10 ? timeFull.substring(11,16) : timeFull;
+      h += '<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + timeFull + '</span><span class="log-time-short">' + timeShort + '</span></td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
-      h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
+      h += '<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });
   }
-  h += '</tbody></table></div>';
+  h += '</tbody></table></div></div>';
   document.getElementById('page-logs').innerHTML = h;
 }
 function getLogFilter() {
@@ -2381,6 +2399,7 @@ function getLogFilter() {
 }
 function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f); }
 function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false); }
+function toggleLogFilter() { var b = document.querySelector('.log-filter-bar'); if (b) { b.classList.toggle('open'); var t = document.querySelector('.log-filter-toggle'); if (t) t.textContent = b.classList.contains('open') ? '筛选 ▴' : '筛选 ▾'; } }
 async function cleanupLogs() {
   confirmAction('清理日志', '确定清理旧日志？', function() {
     apiJSON('/api/admin/logs/cleanup', {method: 'POST'}).then(function(r) {

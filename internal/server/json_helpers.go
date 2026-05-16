@@ -16,6 +16,7 @@ func tokenFromPassword(pass string) string {
 
 func jsonOK(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[http] JSON 编码失败: %v", err)
 	}
@@ -23,6 +24,7 @@ func jsonOK(w http.ResponseWriter, v interface{}) {
 
 func jsonErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
 		log.Printf("[http] JSON 错误编码失败: %v", err)

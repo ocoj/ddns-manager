@@ -291,7 +291,7 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 		if err := s.SaveAdminState(st); err != nil {
 			log.Fatalf("保存管理员状态失败: %v", err)
 		}
-		log.Println("[admin] 首次运行 — 已设置默认密码 (Admin12345)")
+		log.Println("[admin] 首次运行 — 已设置默认密码（请立即登录修改）")
 	}
 	if !st.PasswordChanged {
 		svr.adminToken = tokenFromPassword(defaultAdminPassword)

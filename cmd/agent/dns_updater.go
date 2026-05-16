@@ -18,8 +18,8 @@ import (
 	"time"
 
 	ddnsconfig "github.com/jeessy2/ddns-go/v6/config"
-	"github.com/jeessy2/ddns-go/v6/dns"
 	"github.com/jeessy2/ddns-go/v6/util"
+	"github.com/kk/ddns-manager/internal/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -106,8 +106,8 @@ func (u *DNSUpdater) Run() DNSStatus {
 	var segErrors []segErr
 
 	for _, dc := range u.cfg.DnsConf {
-		// Create the appropriate DNS provider
-		provider := newProvider(dc.DNS.Name)
+		// Create the appropriate DNS provider (v1.6.28 M1: 统一注册表)
+		provider := provider.NewProvider(dc.DNS.Name)
 		if provider == nil {
 			allOK = false
 			msg := fmt.Sprintf("unsupported DNS provider: %s", dc.DNS.Name)
@@ -125,16 +125,18 @@ func (u *DNSUpdater) Run() DNSStatus {
 		var detailBuf bytes.Buffer
 		origWriter := log.Writer()
 		log.SetOutput(io.MultiWriter(origWriter, &detailBuf))
-		defer log.SetOutput(origWriter)   // v1.5.36 M2: panic-safe 恢复, 防止 provider.Init() panic 导致后续日志全部丢失
-
-		provider.Init(&dc, ipv4cache, ipv6cache)
+		// v1.6.28 H8: 闭包内 defer 确保 provider.Init() 内部 panic+recover 后 log 输出也能恢复
+		// 外层 defer 只在 Run() 返回时执行, 闭包内 defer 在 Init 调用后立即执行
+		func() {
+			defer log.SetOutput(origWriter)
+			provider.Init(&dc, ipv4cache, ipv6cache)
+		}()
 
 		// Execute DNS updates — provider handles query + create/update
 		domains := provider.AddUpdateDomainRecords()
 
-		// 恢复 log 输出, 解析截获的错误消息
+		// 解析截获的 log 输出 (Init 时 log 已由闭包恢复)
 		// v1.5.34 H1: 精确匹配 ddns-go API 错误 — 优先 JSON 错误码/结构化日志，其次已知错误模式
-		log.SetOutput(origWriter)
 		var errLines []string
 		for _, line := range strings.Split(detailBuf.String(), "\n") {
 			line = strings.TrimSpace(line)
@@ -283,48 +285,6 @@ func buildIPMsg(ip string, enabled bool) string {
 	return "已获取"
 }
 
-// providerRegistry maps ddns-go DNS provider names to factory functions.
-// Must be kept in sync with ddns-go's dns/index.go:RunOnce() switch.
-// TestProviderRegistryCompleteness validates this automatically.
-var providerRegistry = map[string]func() dns.DNS{
-	"alidns":       func() dns.DNS { return &dns.Alidns{} },
-	"aliesa":       func() dns.DNS { return &dns.Aliesa{} },
-	"tencentcloud": func() dns.DNS { return &dns.TencentCloud{} },
-	"trafficroute": func() dns.DNS { return &dns.TrafficRoute{} },
-	"dnspod":       func() dns.DNS { return &dns.Dnspod{} },
-	"dnsla":        func() dns.DNS { return &dns.Dnsla{} },
-	"cloudflare":   func() dns.DNS { return &dns.Cloudflare{} },
-	"huaweicloud":  func() dns.DNS { return &dns.Huaweicloud{} },
-	"callback":     func() dns.DNS { return &dns.Callback{} },
-	"baiducloud":   func() dns.DNS { return &dns.BaiduCloud{} },
-	"porkbun":      func() dns.DNS { return &dns.Porkbun{} },
-	"godaddy":      func() dns.DNS { return &dns.GoDaddyDNS{} },
-	"namecheap":    func() dns.DNS { return &dns.NameCheap{} },
-	"namesilo":     func() dns.DNS { return &dns.NameSilo{} },
-	"vercel":       func() dns.DNS { return &dns.Vercel{} },
-	"dynadot":      func() dns.DNS { return &dns.Dynadot{} },
-	"dynv6":        func() dns.DNS { return &dns.Dynv6{} },
-	"spaceship":    func() dns.DNS { return &dns.Spaceship{} },
-	"nowcn":        func() dns.DNS { return &dns.Nowcn{} },
-	"eranet":       func() dns.DNS { return &dns.Eranet{} },
-	"tnethk":       func() dns.DNS { return &dns.Tnethk{} },
-	"gcore":        func() dns.DNS { return &dns.Gcore{} },
-	"edgeone":      func() dns.DNS { return &dns.EdgeOne{} },
-	"nsone":        func() dns.DNS { return &dns.NSOne{} },
-	"name_com":     func() dns.DNS { return &dns.NameCom{} },
-	"rainyun":      func() dns.DNS { return &dns.Rainyun{} },
-	"hipmdnsmgr":   func() dns.DNS { return &dns.HiPMDnsMgr{} },
-	"cloudns":      func() dns.DNS { return &dns.ClouDNS{} },
-}
-
-// newProvider creates a DNS provider by name.
-func newProvider(name string) dns.DNS {
-	if fn, ok := providerRegistry[name]; ok {
-		return fn()
-	}
-	return nil
-}
-
 // ============== Config management ==============
 
 // ApplyConfig hot-reloads the ddns-go config from Manager-pushed YAML.
@@ -397,6 +357,14 @@ func (lb *LogBuffer) Write(msg string) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("15:04:05 UTC") + " " + msg
+	lb.pos++
+}
+
+// WriteRaw v1.6.28 M5: 追加原始消息 (不含新时间戳), 用于 Drain 后恢复保留原时间戳
+func (lb *LogBuffer) WriteRaw(msg string) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	lb.buf[lb.pos%lb.size] = msg
 	lb.pos++
 }
 

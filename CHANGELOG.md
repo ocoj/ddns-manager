@@ -1,5 +1,38 @@
 # CHANGELOG
 
+
+## v1.6.28 — 2026-05-17
+
+### 🔴 全量安全审计与修复 (24项)
+
+#### Critical (5项)
+- **C1**: Windows升级助手重写为Go native程序 (替代不可靠cmd批处理) — _升级竞态+
+  无验证_
+- **C2**: renderDDNSConfig增加Provider空值校验 — _空Provider→ddns-go YAML静默失败_
+- **C3**: Windows升级后sc start增加重试验证 — _升级失败后节点永久离线_
+- **C5**: detectPlatform default分支增加架构归一化映射 — _ARM64/i686等变体不匹配_
+
+#### High (8项)
+- **H1**: 配置变更后DNS更新改为同步+失败时发送跟进心跳 — _5分钟延迟上报_
+- **H2**: 证书加载失败时清空对应CertHashes防死循环 — _Manager-Agent推送僵局_
+- **H3**: testDNSKeyOnline增加AddUpdateDomainRecords结果检查 — _假Key通过验证_
+- **H5**: 默认密码文案移除明文 — _日志泄露风险_
+- **H6**: Agent端证书部署路径增加二次校验 — _纵深防御_
+- **H7**: scheduleManagerRestart用Go native替代shell脚本 — _竞态+注入风险_
+- **H8**: provider.Init()闭包内defer恢复log输出 — _panic+recover后日志泄漏_
+
+#### Medium (7项)
+- **M1**: 统一Provider注册表到internal/provider/ — _消除3份重复维护_
+- **M4**: handleDownloadInstaller增加io.Copy错误检查
+- **M5**: LogBuffer增加WriteRaw保留原始时间戳
+- **M6**: 自动审批前验证证书绑定存在性
+
+#### Low (3项)
+- **L2**: 删除upgrade_exec_stub.go死代码
+- **L3**: 清理static/下备份html文件
+- **L4**: jsonOK/jsonErr增加X-Content-Type-Options安全头
+
+
 ## v1.6.27 — 2026-05-16 夜间
 
 ### 暗色模式 + DNS Key测试修复

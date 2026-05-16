@@ -256,6 +256,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			// 证书加载失败记录日志，便于排查部署问题
 			s.logMgr.LogWithNode("cert", "证书加载失败", nodeID,
 				fmt.Sprintf("bundle=%s err=%v", binding.BundleName, err), "warning")
+			// v1.6.28 H2: 清空该 bundle 的 hash, 防止"Agent有旧hash-Manager加载失败"死循环
+			// 下次心跳如果 bundle 被恢复, Manager 会重新下发 (hash 不匹配)
+			if rec.Status.CertHashes != nil {
+				delete(rec.Status.CertHashes, binding.DeployPath)
+				delete(rec.Status.CertHashes, binding.BundleName)
+			}
 			continue
 		}
 		// C2: hash key 对齐 Agent 侧 collectCertHashes 的键名
@@ -428,6 +434,16 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 	rec.ConfigHash = ""
 	// 保存配置即审批 — 管理员已配置意味着信任该节点
 	if !rec.Approved {
+		// v1.6.28 M6: 自动审批前验证证书绑定存在性, 防止引用不存在的证书
+		for _, binding := range req.CertBindings {
+			if _, err := s.store.LoadCertBundle(binding.BundleName); err != nil {
+				s.logMgr.LogWithNode("节点", "自动审批失败", id,
+					fmt.Sprintf("证书 %q 不存在: %v", binding.BundleName, err), "warning")
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("证书绑定 %q 不存在, 请先上传或申请该证书", binding.BundleName))
+				return
+			}
+		}
 		rec.Approved = true
 		s.logMgr.LogWithNode("节点", "配置已保存(自动审批)", id, "", "info")
 	}
@@ -557,6 +573,11 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 	if dk == nil {
 		return "", "", fmt.Errorf("DNS密钥未找到 (名称=%q 提供商=%q) — 请检查「DNS Key」页面是否已配置", c.DNSKeyName, c.DnsProvider)
 	}
+	// v1.6.28 C2: 拒绝 Provider 为空的 DNS Key（旧数据迁移后 Provider 字段可能未填充）
+	// 空 Provider → ddns-go YAML 中 dns.name:"" → 所有 DNS 更新静默失败且 Agent 无法诊断
+	if dk.Provider == "" {
+		return "", "", fmt.Errorf("DNS密钥 %q 的提供商(Provider)字段为空 — 请编辑该 DNS Key 并指定提供商", dk.Name)
+	}
 
 	if c.TTL == "" {
 		c.TTL = "300"
@@ -656,8 +677,21 @@ func detectPlatform(rec *model.NodeRecord) (goos, goarch string) {
 	case "arm", "armv6l", "armv7l", "armv8l", "armhf":
 		goarch = "arm"
 	default:
+		// v1.6.28 C5: default 分支归一化未知架构变体（如 "ARM64"→"arm64", "x86_64"→"amd64"）
+		// 否则 manifest key "linux-ARM64" 不匹配 "linux-arm64" → 升级推送静默跳过
 		if rec.Hardware.Arch != "" {
-			goarch = rec.Hardware.Arch
+			goarch = strings.ToLower(rec.Hardware.Arch)
+			// 二次归一化: 非标准别名映射
+			switch goarch {
+			case "x86_64":
+				goarch = "amd64"
+			case "aarch64":
+				goarch = "arm64"
+			case "i686", "i386":
+				goarch = "i386"
+			case "armv6l", "armv7l", "armv8l", "armhf":
+				goarch = "arm"
+			}
 		}
 	}
 	return

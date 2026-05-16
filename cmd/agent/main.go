@@ -442,8 +442,9 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		// v1.5.29 C1: 心跳失败时恢复 AgentLogs 到缓冲，防止丢失
 		heartbeatFailed.Store(true)
 		// v1.6.10 M3: 恢复已 drain 的日志, 确保重试时重新发送
+		// v1.6.28 M5: 使用 WriteRaw 保留 Drain 时的原始时间戳
 		for _, logLine := range drainedAgentLogs {
-			agentLogBuf.Write(logLine)
+			agentLogBuf.WriteRaw(logLine)
 		}
 		// v1.6.10 H2: DNS 日志恢复到正确缓冲区 (dnsUpdater.logBuf), 避免类别混乱
 		dnsUpdater.mu.Lock()
@@ -477,18 +478,19 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 					log.Printf("[config] 缓存写入失败: %v", writeErr)
 					agentLog("配置缓存写入失败: %v (磁盘可能已满)", writeErr)
 				}
-				// v1.5.29 C4: 捕获配置变更触发的DNS更新结果，防止失败静默
+				// v1.6.28 H1: 配置变更后同步执行 DNS 更新, 失败时立即发送跟进心跳上报
+				// 修复 v1.5.29 C4 的 5 分钟延迟 — 异步 goroutine 导致失败静默到下一心跳
 				if dnsUpdateRunning.CompareAndSwap(false, true) {
-					go func() {
-						cfgStatus := runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
-						if !cfgStatus.LastOK {
-							agentLog("配置变更后DNS更新失败: %s", cfgStatus.LastError)
-							log.Printf("[dns] 配置变更后DNS更新失败: %s", cfgStatus.LastError)
-						} else {
-							agentLog("配置变更后DNS更新完成 ipv4=%s ipv6=%s", cfgStatus.IPv4, cfgStatus.IPv6)
-						}
-						dnsUpdateRunning.Store(false)
-					}()
+					cfgStatus := runDNSUpdateWithTimeout(dnsUpdater, 2*time.Minute)
+					dnsUpdateRunning.Store(false)
+					if !cfgStatus.LastOK {
+						agentLog("配置变更后DNS更新失败: %s", cfgStatus.LastError)
+						log.Printf("[dns] 配置变更后DNS更新失败: %s", cfgStatus.LastError)
+						// 发送跟进心跳上报 DNS 失败状态 (仅含 DDNSHealth, 不等 5 分钟)
+						go sendDDNSHealthHeartbeat(cfg, cfgStatus)
+					} else {
+						agentLog("配置变更后DNS更新完成 ipv4=%s ipv6=%s", cfgStatus.IPv4, cfgStatus.IPv6)
+					}
 				} else {
 					log.Printf("[dns] DNS 更新已在运行, 跳过本次配置变更触发")
 				}
@@ -572,6 +574,32 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.Heart
 	return &hr, nil
 }
 
+// sendDDNSHealthHeartbeat v1.6.28 H1: 配置变更后 DNS 更新失败时发送跟进心跳
+// 仅携带 DDNSHealth + IPv4/IPv6, 不请求配置/证书/升级, 不等 5 分钟周期
+func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
+	req := model.HeartbeatReq{
+		NodeID:      cfg.NodeID,
+		Fingerprint: cfg.Fingerprint,
+		Status: model.NodeStatus{
+			AgentVersion: version,
+			IPv4:         status.IPv4,
+			IPv6:         status.IPv6,
+			DDNSHealth: &model.DDNSHealthInfo{
+				Running:   status.Running,
+				LastOK:    status.LastOK,
+				LastError: status.LastError,
+				Status:    "ERR",
+				StatusMsg: fmt.Sprintf("配置变更后DNS更新失败: %s", status.LastError),
+			},
+		},
+	}
+	if _, err := sendHeartbeat(cfg, req); err != nil {
+		log.Printf("[dns] 跟进心跳发送失败: %v", err)
+	} else {
+		log.Printf("[dns] 跟进心跳已发送 (配置变更后DNS失败已上报)")
+	}
+}
+
 // applyCertUpdates processes certificate updates from heartbeat response.
 // Deploys cert files → updates IIS bindings (Windows) → reloads services → recycles app pools.
 // v1.5.29 H5: 返回证书部署错误列表，供心跳上报 Manager 诊断
@@ -594,6 +622,14 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			certHashMapMu.Lock()
 			certHashMap[cu.BundleName] = cu.CertHash
 			certHashMapMu.Unlock()
+			continue
+		}
+		// v1.6.28 H6: Agent 端二次校验部署路径, 拒绝路径穿越 (Manager TLS 被绕过时的纵深防御)
+		if filepath.IsAbs(path) || strings.Contains(path, "..") {
+			errMsg := fmt.Sprintf("%s: 拒绝非法部署路径 %q", cu.BundleName, path)
+			log.Printf("[cert] %s", errMsg)
+			agentLog("证书部署: %s", errMsg)
+			certErrors = append(certErrors, errMsg)
 			continue
 		}
 		os.MkdirAll(path, 0o700)

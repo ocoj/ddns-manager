@@ -32,3 +32,4 @@ ddns-installer
 *.bak
 admin_token.txt
 installer.exe
+upgrade-helper.exe

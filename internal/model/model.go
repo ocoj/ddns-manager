@@ -215,7 +215,9 @@ func CompareSemVer(a, b string) int {
 }
 
 // KnownDNSProviders returns the canonical list of supported DNS provider names.
-// Must be kept in sync with agent/dns_updater.go:providerRegistry.
+// v1.6.28 M1: 权威注册表已迁移到 internal/provider/registry.go。
+// 此处保留独立列表用于模型层校验 (避免循环依赖 provider → ddns-go)。
+// 同步规则: 新增 provider 时需同时更新 provider/registry.go 和本函数。
 func KnownDNSProviders() []string {
 	return []string{
 		"alidns", "aliesa", "tencentcloud", "trafficroute", "dnspod",

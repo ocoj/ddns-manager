@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/kk/ddns-manager/internal/provider"
 )
 
 // ── LogBuffer ──
@@ -225,15 +227,15 @@ var ddnsCanonicalProviders = []string{
 	"cloudns",
 }
 
-// TestProviderRegistryCompleteness validates providerRegistry is in sync with ddns-go.
+// TestProviderRegistryCompleteness validates provider.Registry is in sync with ddns-go.
 // After: go get -u github.com/jeessy2/ddns-go/v6
 // Run:   go test ./cmd/agent/ -run Registry -v
-// Missing → update both ddnsCanonicalProviders and providerRegistry.
+// Missing → update both ddnsCanonicalProviders and provider.Registry.
 func TestProviderRegistryCompleteness(t *testing.T) {
 	// 1. every factory in registry returns non-nil
-	for name, fn := range providerRegistry {
+	for name, fn := range provider.Registry {
 		if fn() == nil {
-			t.Errorf("providerRegistry[%q] factory returns nil", name)
+			t.Errorf("provider.Registry[%q] factory returns nil", name)
 		}
 	}
 
@@ -245,31 +247,31 @@ func TestProviderRegistryCompleteness(t *testing.T) {
 
 	var missing []string
 	for _, n := range ddnsCanonicalProviders {
-		if _, ok := providerRegistry[n]; !ok {
+		if _, ok := provider.Registry[n]; !ok {
 			missing = append(missing, n)
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("MISSING from providerRegistry (add them):\n  %s",
+		t.Errorf("MISSING from provider.Registry (add them):\n  %s",
 			strings.Join(missing, "\n  "))
 	}
 
 	// 3. no extra entries in registry (stale/typo)
 	var extra []string
-	for n := range providerRegistry {
+	for n := range provider.Registry {
 		if !canonical[n] {
 			extra = append(extra, n)
 		}
 	}
 	if len(extra) > 0 {
-		t.Errorf("EXTRA in providerRegistry (remove or add to canonical list):\n  %s",
+		t.Errorf("EXTRA in provider.Registry (remove or add to canonical list):\n  %s",
 			strings.Join(extra, "\n  "))
 	}
 }
 
 func TestNewProviderUnknown(t *testing.T) {
-	if p := newProvider("nonexistent"); p != nil {
-		t.Error("newProvider for unknown provider should return nil")
+	if p := provider.NewProvider("nonexistent"); p != nil {
+		t.Error("NewProvider for unknown provider should return nil")
 	}
 }
 

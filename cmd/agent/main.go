@@ -1574,91 +1574,58 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 		return nil
 	}
 
-	// 1. appcmd list sites → 建立 hostname:port → site_id 映射 (仅IIS服务器有此命令)
+	// 1. appcmd list sites → 建立 site_id 映射
 	siteMap := mapIISSites()
 
-	// 2. netsh http show sslcert → 获取 SSL 绑定列表
-	// Go 直调 netsh (全路径避免 PATH 问题), 无需 PowerShell 包装
-	netshPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "netsh.exe")
-	out, err := exec.Command(netshPath, "http", "show", "sslcert").CombinedOutput()
+	// 2. WebAdministration API (v1.6.15 C7: 恢复, netsh文本解析因SYSTEM locale失败)
+	// 历史教训 (见 CHANGELOG v1.6.1→v1.6.7, docs/windows-dev-notes.md):
+	//   netsh http show sslcert 在SYSTEM账户下输出中文标签(IP:端口/证书哈希),
+	//   英文正则解析彻底失效, chcp 437 前缀也无法可靠工作。
+	//   WebAdministration API 返回结构化JSON, 不受locale/PS版本影响。
+	// 非IIS服务器: 模块不存在 → Write-Host 'NO_MODULE' → 优雅降级, 不报错。
+	psCmd := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = [string]$_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json } else { Write-Host 'NO_MODULE' }"
+	out, err := exec.Command("powershell", "-Command", psCmd).CombinedOutput()
 	if err != nil || len(out) == 0 {
-		agentLog("IIS扫描: netsh失败 len=%d err=%v", len(out), err)
+		agentLog("IIS扫描: 不可用 (非IIS服务器或PowerShell受限)")
 		return nil
 	}
-
-	// netsh 输出格式 (固定, 不受语言影响):
-	//     IP:port                      : 0.0.0.0:443
-	//     Certificate Hash             : abc123def...
-	//     Application ID               : {guid}
-	//     ...空行分隔...
-	// 按 "IP:port" 行拆分绑定块, 从每块提取 Certificate Hash
-	text := string(out)
-	hashRe := regexp.MustCompile(`Certificate Hash\s*:\s*([0-9a-fA-F]{40})`)
-	hostRe := regexp.MustCompile(`Hostname:port\s*:\s*(\S+)`)
-	siteRe := regexp.MustCompile(`Site ID\s*:\s*(\d+)`)
-	hostnameRe := regexp.MustCompile(`Hostname\s*:\s*([^\s]+)`)
-
-	// 按 IP:port 行拆分
-	blocks := strings.Split(text, "\n    IP:port")
-	// 第一块可能以 "IP:port" 开头, 也可能有表头
-	if len(blocks) > 0 && !strings.Contains(blocks[0], "Certificate Hash") {
-		blocks = blocks[1:]
+	if strings.Contains(string(out), "NO_MODULE") {
+		agentLog("IIS扫描: WebAdministration模块未安装 (非IIS服务器, 正常)")
+		return nil
 	}
-
+	type psSSLBinding struct {
+		Site       string `json:"Site"`
+		IP         string `json:"IP"`
+		Port       int    `json:"Port"`
+		Thumbprint string `json:"Thumbprint"`
+	}
+	var psBindings []psSSLBinding
+	jsonText := strings.TrimSpace(string(out))
+	if strings.HasPrefix(jsonText, "[") {
+		if err := json.Unmarshal(out, &psBindings); err != nil {
+			agentLog("IIS扫描: JSON解析失败: %v", err)
+			return nil
+		}
+	} else {
+		var single psSSLBinding
+		if err := json.Unmarshal(out, &single); err != nil {
+			agentLog("IIS扫描: JSON解析失败: %v", err)
+			return nil
+		}
+		psBindings = append(psBindings, single)
+	}
 	var sites []model.IISBoundSite
-	for _, block := range blocks {
-		hh := hashRe.FindStringSubmatch(block)
-		if hh == nil {
-			continue
+	for _, pb := range psBindings {
+		cur := model.IISBoundSite{
+			Hostname:   pb.IP,
+			Port:       pb.Port,
+			Thumbprint: strings.ToLower(pb.Thumbprint),
 		}
-		bs := model.IISBoundSite{Thumbprint: strings.ToLower(hh[1])}
-
-		// 从 IP:port 行解析地址
-		lines := strings.SplitN(block, "\n", 2)
-		addrPart := ""
-		if len(lines) > 0 {
-			// 格式: "                      : 0.0.0.0:443"
-			parts := strings.SplitN(lines[0], ":", 2)
-			if len(parts) > 1 {
-				addrPart = strings.TrimSpace(parts[1])
-			}
+		if info, ok := siteMap[pb.Site]; ok {
+			cur.SiteID = info.id
+			cur.SiteName = info.name
 		}
-		if addrPart != "" {
-			lastColon := strings.LastIndex(addrPart, ":")
-			if lastColon > 0 {
-				bs.Hostname = addrPart[:lastColon]
-				bs.Port, _ = strconv.Atoi(addrPart[lastColon+1:])
-			}
-		}
-
-		// 提取 Hostname:port 格式 (SNI binding)
-		if hm := hostRe.FindStringSubmatch(block); hm != nil {
-			lastColon := strings.LastIndex(hm[1], ":")
-			if lastColon > 0 {
-				bs.Hostname = hm[1][:lastColon]
-				bs.Port, _ = strconv.Atoi(hm[1][lastColon+1:])
-			}
-		}
-		if hn := hostnameRe.FindStringSubmatch(block); hn != nil && bs.Hostname == "0.0.0.0" {
-			bs.Hostname = strings.ToLower(hn[1])
-		}
-		if si := siteRe.FindStringSubmatch(block); si != nil {
-			bs.SiteID, _ = strconv.Atoi(si[1])
-		}
-
-		sites = append(sites, bs)
-	}
-
-	// 用 appcmd siteMap 补充站点名称
-	for i := range sites {
-		if sites[i].SiteID > 0 {
-			for _, info := range siteMap {
-				if info.id == sites[i].SiteID {
-					sites[i].SiteName = info.name
-					break
-				}
-			}
-		}
+		sites = append(sites, cur)
 	}
 
 	saveIISBindingsFile(cfg, sites)
@@ -1672,19 +1639,15 @@ type iisSiteInfo struct {
 	name string
 }
 
-// mapIISSites v1.6.13 C7: appcmd 直调, 移除 PowerShell 包装
-// appcmd.exe 全路径避免 PATH 问题; 非IIS服务器时此命令不存在, 返回空 map
+// mapIISSites v1.6.15 C7: PowerShell 包装 appcmd (SYSTEM账户必须通过PS调用)
+// 非IIS服务器: appcmd.exe 不存在 → PowerShell返回空 → 空map
 func mapIISSites() map[string]iisSiteInfo {
 	result := map[string]iisSiteInfo{}
-	appcmdPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd.exe")
-	if _, err := os.Stat(appcmdPath); err != nil {
-		return result // 非IIS服务器, 正常
-	}
-	out, err := exec.Command(appcmdPath, "list", "sites").CombinedOutput()
+	psCmd := "if (Test-Path $env:SystemRoot\\System32\\inetsrv\\appcmd.exe) { & $env:SystemRoot\\System32\\inetsrv\\appcmd list sites }"
+	out, err := exec.Command("powershell", "-Command", psCmd).CombinedOutput()
 	if err != nil {
 		return result
 	}
-	// 格式: SITE "name" (id:N,bindings:proto/IP:port:host,...)
 	re := regexp.MustCompile(`SITE "([^"]+)" \(id:(\d+),bindings:([^)]+)\)`)
 	for _, match := range re.FindAllStringSubmatch(string(out), -1) {
 		siteName := match[1]

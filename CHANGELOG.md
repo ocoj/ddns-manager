@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v1.6.15 — 2026-05-16
+
+### C7: 回滚 netsh 文本解析, 恢复 WebAdministration API
+- **教训**: v1.6.14 的 netsh 文本解析重蹈 v1.6.1-1.6.5 覆辙
+- SYSTEM locale 输出中文标签 (IP:端口/证书哈希), 英文正则失效
+- 恢复 v1.6.7 的 WebAdministration PowerShell API + 优雅降级
+- 新增 `docs/windows-dev-notes.md` — Windows 静默执行开发规范
+
 ## v1.6.x — 2026-05-15
 
 ### 🔴 第十次审计修复：证书部署全链路重构

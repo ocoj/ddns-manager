@@ -367,18 +367,18 @@ th{text-align:left}
   .acme-table .col-exp{display:none!important}
   .acme-table td:nth-child(2){display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
   .acme-table .col-act{display:inline-block!important;width:auto!important;float:right}
-  /* 节点卡片: 名称+健康+状态 行1, IP+版本+操作 行2 */
+  /* 节点卡片: 名称+版本+健康+状态+操作 行1, IP+域名 行2 */
   .node-table thead{display:none}
   .node-table,.node-table tbody,.node-table tr{display:block;width:100%}
   .node-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
-  .node-table .col-dash-node,.node-table .col-badge{display:inline-block!important;margin-right:6px;width:auto!important}
+  .node-table .col-dash-node,.node-table .col-ver,.node-table .col-badge,.node-table .col-act{display:inline-block!important;margin-right:6px;width:auto!important;vertical-align:middle}
   .node-table .col-dash-node{font-size:13px!important;font-weight:600}
   .node-table .col-dash-node .meta-row{display:none!important}
-  .node-table td:nth-child(3),.node-table td:nth-child(4){display:none!important}
-  /* 行2: IP + 版本 + 操作 */
+  .node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
+  .node-table td:nth-child(3){display:none!important}
+  /* 行2: IP + 域名 */
   .node-table td:nth-child(2){display:inline-block!important;font-size:11px;width:auto!important;padding:2px 0;margin-right:6px}
-  .node-table .col-ver{display:inline-block!important;font-size:11px!important;font-family:Consolas,Monaco,monospace;margin-right:6px;width:auto!important}
-  .node-table .col-act{display:inline-block!important;vertical-align:middle}
+  .node-table td:nth-child(4){display:inline-block!important;font-size:11px;color:var(--c-text2);width:auto!important}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}

@@ -863,8 +863,10 @@ func fileSHA256(path string) string {
 }
 
 // collectCertHashes v1.6.15: 仅在配置了证书绑定时扫描证书目录
+// collectCertHashesIfNeeded v1.6.16: 仅在证书已部署时扫描
 func collectCertHashesIfNeeded(cfg *model.AgentConfig) map[string]string {
-	if len(cfg.IISCertBindings) == 0 {
+	entries, _ := os.ReadDir(cfg.CertPath)
+	if len(entries) == 0 {
 		return nil
 	}
 	return collectCertHashes(cfg)
@@ -1576,10 +1578,11 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 	return 0, ""
 }
 
-// scanIISBindingsIfNeeded v1.6.15: 仅在配置了IIS证书绑定时执行扫描
-// 无绑定 → 跳过PowerShell调用, 避免无谓的失败日志和性能开销
+// scanIISBindingsIfNeeded v1.6.16: 仅在证书已部署时扫描
+// 判断逻辑: 证书目录有内容 → Manager已推送证书 → 需要IIS扫描
 func scanIISBindingsIfNeeded(cfg *model.AgentConfig) []model.IISBoundSite {
-	if len(cfg.IISCertBindings) == 0 {
+	entries, _ := os.ReadDir(cfg.CertPath)
+	if len(entries) == 0 {
 		return nil
 	}
 	return scanIISBindings(cfg)

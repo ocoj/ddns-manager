@@ -2284,7 +2284,7 @@ async function loadLogsIncremental() {
     var newRows = [];
     for (var i = 0; i < events.length; i++) {
       var l = events[i];
-      var ts = fmtTime(l.time);
+      var ts = l.time; // normalizeEvents已格式化, 不再经fmtTime二次转换
       if (ts === firstTime) break;
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
@@ -2360,7 +2360,7 @@ function renderLogs(data, filter) {
     // API已返回倒序(最新在顶), 无需前端反转
     events.forEach(function(l) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
+      h += '<tr><td class="col-log-time">' + he(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });

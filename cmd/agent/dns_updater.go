@@ -263,7 +263,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 			os.Rename(path, filepath.Join(agentBaseDir, "ddns_errors.1.log"))
 		}
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			fmt.Fprintf(f, "%s DNS更新失败: %s\n", time.Now().UTC().Format(time.RFC3339), strings.Join(allFailedDomains, ", "))
+			fmt.Fprintf(f, "%s DNS更新失败: %s\n", time.Now().Format(time.RFC3339), strings.Join(allFailedDomains, ", "))
 			f.Close()
 		}
 	}
@@ -396,7 +396,7 @@ func newLogBuffer(size int) *LogBuffer {
 func (lb *LogBuffer) Write(msg string) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("15:04:05Z") + " " + msg
+	lb.buf[lb.pos%lb.size] = time.Now().Format("15:04:05-07:00") + " " + msg
 	lb.pos++
 }
 

@@ -213,6 +213,7 @@ func (s *Server) handleGetLogs(w http.ResponseWriter, r *http.Request) {
 		events[i].Time = events[i].Time.In(tz)
 	}
 	categories := s.logMgr.Categories()
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	jsonOK(w, map[string]interface{}{"events": events, "total": total, "limit": limit, "offset": offset, "categories": categories})
 }
 

@@ -396,7 +396,7 @@ func newLogBuffer(size int) *LogBuffer {
 func (lb *LogBuffer) Write(msg string) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	lb.buf[lb.pos%lb.size] = time.Now().Format("15:04:05-07:00") + " " + msg
+	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("15:04:05Z") + " " + msg
 	lb.pos++
 }
 

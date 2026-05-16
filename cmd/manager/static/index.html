@@ -1832,7 +1832,7 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td class="col-prov">' + he(prov) + '</td>';
       h += '<td class="col-ak">' + he(akMasked) + '</td>';
       h += '<td class="col-dom" title="' + he(k.nodes) + '">' + he(k.nodes) + '</td>';
-      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="testDNSKey(\'' + jsStr(k.key) + '\')">测试</button><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table></div>';
   }
@@ -1897,6 +1897,16 @@ async function addDNSKey() {
   document.querySelector('#modal-dnskey-add .btn-primary').textContent = '保存';
   openModal('modal-dnskey-add');
 }
+async function testDNSKey(keyName) {
+  toast('正在测试 ' + keyName + '...');
+  var r = await apiJSON('/api/admin/dns-keys/' + encodeURIComponent(keyName) + '/test', {method: 'POST'});
+  if (r.ok) {
+    var d = r.data || {};
+    if (d.valid) { toast(keyName + ': ' + (d.detail || '有效'), 'success'); }
+    else { toast(keyName + ': ' + (d.detail || '无效'), 'error'); }
+  } else { toast('测试失败', 'error'); }
+}
+
 async function editDNSKey(keyName) {
   // load existing key data and open edit modal
   var r = await apiJSON('/api/admin/dns-keys');

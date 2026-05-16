@@ -299,6 +299,11 @@ th{text-align:left}
   .log-filter-bar.open .form-group{flex:1 1 45%!important;min-width:100px}
   .log-filter-bar.open .form-group label{font-size:11px}
   .log-filter-bar.open .form-group input,.log-filter-bar.open .form-group select{width:100%}
+  .log-filter-bar.open .form-group .btn{margin:0;font-size:12px;padding:4px 8px}
+  /* 按钮组保持一排, 隐藏label */
+  .log-filter-bar.open .form-group label[style*="visibility:hidden"]{display:none}
+  .log-filter-bar.open .btn-row{display:flex;gap:4px;width:100%}
+  .log-filter-bar.open .btn-row .btn{flex:1 1 auto}
   /* 表格→卡片 */
   .log-table thead{display:none}
   .log-table,.log-table tbody,.log-table tr,.log-table td{display:block;width:100%}

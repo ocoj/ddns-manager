@@ -359,7 +359,7 @@ th{text-align:left}
 
 <div id="nav-overlay" onclick="toggleSidebar()"></div>
 <div id="main-area" style="display:none">
-  <div id="topbar"><button class="hamburger" onclick="toggleSidebar()" aria-label="菜单">&#9776;</button><div class="title" id="page-title">仪表盘</div><div class="refresh"><span class="dot"></span> 自动刷新 · <span id="refresh-timer">00:00</span></div></div>
+  <div id="topbar"><button class="hamburger" onclick="toggleSidebar()" aria-label="菜单">&#9776;</button><div class="title" id="page-title">仪表盘</div><div class="refresh"><button id="btn-auto-refresh" class="btn btn-sm" onclick="toggleAutoRefresh()" style="font-size:11px;padding:2px 8px;">🔄 自动刷新 ON</button> <button class="btn btn-sm" onclick="manualRefresh()" style="font-size:11px;padding:2px 8px;" title="手动刷新">↻</button> <span id="refresh-ago" style="font-size:11px;color:var(--c-text2);margin-left:4px">更新于 0s前</span></div></div>
   <div id="content">
     <div id="page-dashboard" class="active">
       <div class="card" id="sys-charts-card" style="display:none"><div class="card-header"><h3>管理端服务器资源</h3></div>
@@ -748,57 +748,71 @@ function navigate(page) {
   // v1.6.19: 进入日志页时初始化滚动监听 + 清空增量状态
   if (page === 'logs') {
     _lastLogTime = '';
-    _logScrolledUp = false;
-    _newLogCount = 0;
-    setTimeout(setupLogScrollListener, 100);
   }
   refreshPage();
 }
 
-// ========== AUTO REFRESH ==========
-let refreshInterval = 5; // seconds between full refreshes
+// ========== AUTO REFRESH (v1.6.23: 标准切换+手动+仅数据刷新) ==========
+let refreshInterval = 5;
+let refreshEnabled = true;
 let refreshPaused = false;
 let refreshPauseTimer = null;
-const REFRESH_PAUSE_MS = 30000; // auto-resume after 30s of no user interaction
+let lastRefreshTime = Date.now();
+let refreshAgoTimer = null;
+const REFRESH_PAUSE_MS = 30000;
 
-// v1.6.19: 用户交互时暂停自动刷新, 避免阅读日志时页面跳动
-function pauseAutoRefresh(reason) {
-  if (!refreshPaused) {
-    refreshPaused = true;
-    updateTimerDisplay('已暂停');
+function toggleAutoRefresh() {
+  refreshEnabled = !refreshEnabled;
+  var btn = document.getElementById('btn-auto-refresh');
+  if (refreshEnabled) {
+    btn.textContent = '🔄 自动刷新 ON';
+    btn.className = 'btn btn-sm btn-primary';
+    refreshSec = refreshInterval;
+    lastRefreshTime = Date.now();
+    startRefreshAgo();
+  } else {
+    btn.textContent = '⏸ 自动刷新 OFF';
+    btn.className = 'btn btn-sm';
+    stopRefreshAgo();
+    document.getElementById('refresh-ago').textContent = '已停止';
   }
-  clearTimeout(refreshPauseTimer);
-  refreshPauseTimer = setTimeout(function() {
-    refreshPaused = false;
-    updateTimerDisplay(resetTimer());
-  }, REFRESH_PAUSE_MS);
+  localStorage.setItem('autoRefresh', refreshEnabled ? '1' : '0');
 }
-function resetTimer() {
-  refreshSec = refreshInterval;
-  return '00:' + String(refreshSec).padStart(2, '0');
+function manualRefresh() {
+  refreshSec = 0; refreshPage(false); refreshSec = refreshInterval;
+  lastRefreshTime = Date.now();
+  if (refreshEnabled) startRefreshAgo();
+}
+function startRefreshAgo() {
+  stopRefreshAgo();
+  refreshAgoTimer = setInterval(function() {
+    var ago = Math.round((Date.now() - lastRefreshTime) / 1000);
+    document.getElementById('refresh-ago').textContent = '更新于 ' + ago + 's前';
+  }, 1000);
+}
+function stopRefreshAgo() { clearInterval(refreshAgoTimer); refreshAgoTimer = null; }
+function pauseAutoRefresh(reason) {
+  if (!refreshPaused) { refreshPaused = true; }
+  clearTimeout(refreshPauseTimer);
+  refreshPauseTimer = setTimeout(function() { refreshPaused = false; }, REFRESH_PAUSE_MS);
 }
 
 function startAutoRefresh() {
   clearInterval(refreshTimer);
-  refreshSec = refreshInterval; updateTimer();
+  var saved = localStorage.getItem('autoRefresh');
+  if (saved === '0') { refreshEnabled = false; toggleAutoRefresh(); }
+  refreshSec = refreshInterval;
+  if (refreshEnabled) startRefreshAgo();
   refreshTimer = setInterval(function() {
-    if (refreshPaused) return;
+    if (!refreshEnabled || refreshPaused) return;
     refreshSec--;
-    updateTimer();
     if (refreshSec <= 0) {
       refreshPage(true);
       refreshSec = refreshInterval;
+      lastRefreshTime = Date.now();
     }
   }, 1000);
 }
-function updateTimerDisplay(text) {
-  document.getElementById('refresh-timer').textContent = text;
-}
-function updateTimer() {
-  var s = String(refreshSec).padStart(2, '0');
-  document.getElementById('refresh-timer').textContent = '00:' + s;
-}
-
 // ========== TOAST ==========
 function toast(msg, type) {
   type = type || 'success';
@@ -833,26 +847,29 @@ function confirmAction(title, msg, cb) {
  * ⚠️ 不要依赖 silent 做逻辑判断。状态保留完全由 _pageStore 和 _page 标记控制。
  */
 async function refreshPage(silent) {
-  // 静默刷新时若弹窗打开则跳过, 防止 re-render 干扰模态框内容
+  // 静默刷新时若弹窗打开则跳过
   if (silent && document.querySelector('.modal-overlay.show')) return;
-  // 仅静默刷新时从 DOM 捕获当前页编辑状态到 _pageStore
-  if (silent) {
-    _pageStore[currentPage] = capturePageState(currentPage);
-  }
-  // v1.6.19: 日志页静默刷新用增量模式, 避免全表重建导致滚动丢失
-  if (silent && currentPage === 'logs' && !window._logFilter) {
-    await loadLogsIncremental();
-    return;
-  }
+  // v1.6.23: 静默刷新仅更新数据, 手动刷新才重建DOM
   var fns = {dashboard:loadDashboard, nodes:loadNodes, dns:loadDNS, versions:loadVersions, logs:loadLogs, settings:loadSettings};
   var fn = fns[currentPage];
-  if (currentPage === 'logs' && window._logFilter) {
-    if (fn) await fn(false, window._logFilter);
-  } else {
-    if (fn) await fn(silent);
-  }
-  // 仅静默刷新时恢复: 检查快照存在 且 快照来自同一页面 (防止跨页污染)
+  if (!fn) return;
   if (silent) {
+    // 静默刷新: 只更新数据, 不替换innerHTML
+    if (currentPage === 'logs' && !window._logFilter) {
+      await loadLogsIncremental();
+    } else if (currentPage === 'logs' && window._logFilter) {
+      await fn(true, window._logFilter);
+    } else {
+      await fn(true);
+    }
+  } else {
+    // 手动刷新/切页: 完整重建
+    _pageStore[currentPage] = capturePageState(currentPage);
+    if (currentPage === 'logs' && window._logFilter) {
+      await fn(false, window._logFilter);
+    } else {
+      await fn(false);
+    }
     restorePageState(currentPage);
   }
 }
@@ -2249,30 +2266,9 @@ async function batchUpgrade() {
 
 // ==================== LOGS (v1.6.19: 增量追加 + 滚动保持) ====================
 let _lastLogTime = '';
-let _logScrolledUp = false;
-let _newLogCount = 0;
 
-// 用户滚动日志时暂停自动刷新, 避免阅读中断
-function setupLogScrollListener() {
-  var el = document.getElementById('page-logs');
-  if (!el || el._scrollBound) return;
-  el._scrollBound = true;
-  el.addEventListener('scroll', function() {
-    var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-    _logScrolledUp = !atBottom;
-    if (_logScrolledUp) {
-      pauseAutoRefresh('log-scroll');
-    }
-    // 滚动到底部时清除新日志提示
-    if (atBottom && _newLogCount > 0) {
-      _newLogCount = 0;
-      var nb = document.getElementById('new-log-banner');
-      if (nb) nb.style.display = 'none';
-    }
-  }, {passive: true});
-}
 
-// 增量加载: 仅取新日志, 追加到表格末尾, 保持滚动位置
+// 增量加载: 取新日志, prepend到表格顶部, 旧数据自然下移
 async function loadLogsIncremental() {
   try {
     var url = '/api/admin/logs?limit=30';
@@ -2282,61 +2278,29 @@ async function loadLogsIncremental() {
     if (events.length === 0) return;
     var tbody = document.querySelector('#page-logs tbody');
     if (!tbody) { await loadLogs(true); return; }
-    // 过滤已显示的行 (按时间戳)
-    var existingTimes = {};
-    var rows = tbody.querySelectorAll('tr');
-    rows.forEach(function(row) {
-      var cells = row.querySelectorAll('td');
-      if (cells.length > 0) existingTimes[cells[0].textContent.trim()] = true;
-    });
+    // 获取现有首行时间作为"已显示"标记
+    var firstRow = tbody.querySelector('tr');
+    var firstTime = firstRow ? firstRow.querySelector('td')?.textContent?.trim() : '';
+    // 找出新于 firstTime 的事件
     var newRows = [];
-    events.forEach(function(l) {
+    for (var i = events.length - 1; i >= 0; i--) {
+      var l = events[i];
       var ts = fmtTime(l.time);
-      if (!existingTimes[ts] || l.category !== rows[0]?.querySelector('.badge')?.textContent) {
-        var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-        newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
-        newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
-        newRows.push('<td>' + he(l.action + ' ' + l.detail) + '</td></tr>');
-      }
-    });
-    if (newRows.length === 0) return;
-    // 追加新行
-    tbody.insertAdjacentHTML('beforeend', newRows.join(''));
-    // 限制最多 200 行, 超出删除旧行
-    var allRows = tbody.querySelectorAll('tr');
-    while (allRows.length > 200) { allRows[0].remove(); allRows = tbody.querySelectorAll('tr'); }
-    // 用户未向上滚动时自动滚到底部
-    if (!_logScrolledUp) {
-      var el = document.getElementById('page-logs');
-      el.scrollTop = el.scrollHeight;
-    } else {
-      _newLogCount += newRows.length / 4;
-      showNewLogBanner();
+      if (ts === firstTime) break; // 已显示过
+      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
+      newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
+      newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
+      newRows.push('<td>' + he(l.action + ' ' + l.detail) + '</td></tr>');
     }
-  } catch(e) { /* 增量失败不回退, 下次全量刷新会修复 */ }
+    if (newRows.length === 0) return;
+    // prepend 新行到表顶
+    tbody.insertAdjacentHTML('afterbegin', newRows.join(''));
+    // 限制最多200行
+    var allRows = tbody.querySelectorAll('tr');
+    while (allRows.length > 200) { allRows[allRows.length-1].remove(); allRows = tbody.querySelectorAll('tr'); }
+  } catch(e) { /* ignore */ }
 }
 
-function showNewLogBanner() {
-  var nb = document.getElementById('new-log-banner');
-  if (!nb) {
-    nb = document.createElement('div');
-    nb.id = 'new-log-banner';
-    nb.style.cssText = 'position:sticky;bottom:8px;text-align:center;z-index:10;cursor:pointer;';
-    nb.innerHTML = '<span class="badge badge-blue" style="padding:8px 16px;font-size:13px;cursor:pointer">↓ ' + _newLogCount + ' 条新日志</span>';
-    nb.onclick = function() {
-      _logScrolledUp = false;
-      _newLogCount = 0;
-      nb.style.display = 'none';
-      var el = document.getElementById('page-logs');
-      el.scrollTop = el.scrollHeight;
-    };
-    var card = document.querySelector('#page-logs .card');
-    if (card) card.appendChild(nb);
-  } else {
-    nb.querySelector('.badge').textContent = '↓ ' + _newLogCount + ' 条新日志';
-    nb.style.display = '';
-  }
-}
 
 // 全量加载 (切页/手动搜索时使用)
 async function loadLogs(silent, filter) {
@@ -2393,12 +2357,14 @@ function renderLogs(data, filter) {
   if (events.length === 0) {
     h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';
   } else {
-    events.forEach(function(l) {
+    // v1.6.23: 最新在顶
+    for (var i = events.length - 1; i >= 0; i--) {
+      var l = events[i];
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
-    });
+    }
   }
   h += '</tbody></table></div>';
   document.getElementById('page-logs').innerHTML = h;

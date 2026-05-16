@@ -2277,12 +2277,12 @@ async function loadLogsIncremental() {
     // 获取现有首行时间作为"已显示"标记
     var firstRow = tbody.querySelector('tr');
     var firstTime = firstRow ? firstRow.querySelector('td')?.textContent?.trim() : '';
-    // 找出新于 firstTime 的事件
+    // API已返回倒序(最新在顶), 正向遍历取新条目
     var newRows = [];
-    for (var i = events.length - 1; i >= 0; i--) {
+    for (var i = 0; i < events.length; i++) {
       var l = events[i];
       var ts = fmtTime(l.time);
-      if (ts === firstTime) break; // 已显示过
+      if (ts === firstTime) break;
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
       newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
@@ -2354,14 +2354,13 @@ function renderLogs(data, filter) {
   if (events.length === 0) {
     h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';
   } else {
-    // v1.6.23: 最新在顶
-    for (var i = events.length - 1; i >= 0; i--) {
-      var l = events[i];
+    // API已返回倒序(最新在顶), 无需前端反转
+    events.forEach(function(l) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
-    }
+    });
   }
   h += '</tbody></table></div>';
   document.getElementById('page-logs').innerHTML = h;

@@ -2582,6 +2582,7 @@ async function saveTimezone() {
   var r = await apiJSON('/api/admin/timezone', {method:'POST', body:{timezone:tz}});
   if (r.ok) {
     window._tz = tz;
+    window._tzLabel = tz;  // v1.6.25: 同步更新日志标题
     localStorage.setItem('ddns-tz', tz);
     toast('时区已设为 '+tz, 'success');
     markPageClean();

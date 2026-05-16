@@ -381,15 +381,19 @@ th{text-align:left}
   .node-table td:nth-child(4){font-size:11px;color:var(--c-text2);margin-right:auto}
   .node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
   .node-table .col-badge{width:auto!important}
-  /* 仪表盘节点卡片: 节点+IP 行1, 域名+健康+版本+状态 行2 */
+  /* 仪表盘节点卡片: 行1节点名, 行2IP+域名+健康/版本/状态右对齐 */
   .dash-node-table thead{display:none}
   .dash-node-table,.dash-node-table tbody{display:block;width:100%}
   .dash-node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
   .dash-node-table td{padding:1px 0;width:auto!important}
-  .dash-node-table .col-dash-node{font-size:13px!important;font-weight:600}
+  .dash-node-table .col-dash-node{font-size:13px!important;font-weight:600;flex-basis:100%!important}
   .dash-node-table .col-dash-node .meta-row{display:none!important}
-  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;flex-basis:100%!important}
-  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2)}
+  /* IP: 长IPv6省略 */
+  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 域名 */
+  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2);overflow:visible;white-space:nowrap}
+  /* 健康右对齐 */
+  .dash-node-table .col-badge:first-of-type{margin-left:auto}
   .dash-node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
   .dash-node-table .col-badge{width:auto!important}
 

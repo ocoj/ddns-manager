@@ -343,6 +343,31 @@ th{text-align:left}
   .bin-table .mono{display:block!important;font-size:12px;font-family:Consolas,Monaco,monospace}
   .col-bin-size{display:inline!important;width:auto!important;font-size:11px;color:var(--c-text2);}
   .col-bin-ver,.col-bin-time,.bin-table .col-act{display:inline-block!important;margin-right:8px;font-size:11px;width:auto!important}
+  .bin-table .col-act{float:right;margin-right:0}
+  /* DNS/证书/ACME卡片 */
+  .dns-table thead,.cert-table thead,.acme-table thead{display:none}
+  .dns-table,.cert-table,.acme-table,.dns-table tbody,.cert-table tbody,.acme-table tbody,.dns-table tr,.cert-table tr,.acme-table tr{display:block;width:100%}
+  .dns-table tr,.cert-table tr,.acme-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .dns-table td,.cert-table td,.acme-table td{padding:2px 0}
+  /* DNS: 名称+提供商 行1, 节点+操作 行2 */
+  .dns-table .col-dns-name,.dns-table .col-prov{display:inline-block!important;margin-right:6px;font-size:13px;width:auto!important}
+  .dns-table .col-dns-name{font-weight:600}
+  .dns-table .col-prov{color:var(--c-primary);font-size:12px!important}
+  .col-ak{display:none!important}
+  .dns-table .col-dom{display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
+  .dns-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  /* 证书: 名称+剩余 行1, SAN+到期+操作 行2 */
+  .cert-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
+  .cert-table .col-badge-sm{display:inline-block!important;width:auto!important}
+  .col-cert-san{display:none!important}
+  .cert-table .col-exp{display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
+  .cert-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  /* ACME: Email+状态 行1, CA+操作 行2 */
+  .acme-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
+  .acme-table .col-badge-sm{display:inline-block!important;width:auto!important}
+  .acme-table .col-exp{display:none!important}
+  .acme-table td:nth-child(2){display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
+  .acme-table .col-act{display:inline-block!important;width:auto!important;float:right}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
@@ -1717,7 +1742,7 @@ function renderDNS(keysMap, certData, acData) {
   if (keyArr.length === 0) {
     h += '<div class="empty">暂无 DNS Key</div>';
   } else {
-    h += '<table><thead><tr><th class="col-dns-name" data-sort="name">名称</th><th class="col-prov" data-sort="provider">提供商</th><th class="col-ak">Access Key</th><th class="col-dom" data-sort="nodes">使用节点</th><th class="col-act">操作</th></tr></thead><tbody>';
+    h += '<div class="dns-table-wrap"><table class="dns-table"><thead><tr><th class="col-dns-name" data-sort="name">名称</th><th class="col-prov" data-sort="provider">提供商</th><th class="col-ak">Access Key</th><th class="col-dom" data-sort="nodes">使用节点</th><th class="col-act">操作</th></tr></thead><tbody>';
     keyArr.forEach(function(item) {
       var k = item;
       var name = k.name;
@@ -1738,7 +1763,7 @@ function renderDNS(keysMap, certData, acData) {
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
-    h += '<table><thead><tr><th class="col-cert-name" data-sort="name">名称</th><th>SAN</th><th class="col-exp" data-sort="expiry">到期</th><th class="col-badge-sm" data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
+    h += '<div class="cert-table-wrap"><table class="cert-table"><thead><tr><th class="col-cert-name" data-sort="name">名称</th><th class="col-cert-san">SAN</th><th class="col-exp" data-sort="expiry">到期</th><th class="col-badge-sm" data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
     certs.forEach(function(c) {
       var name = c.bundle_name || c.name || '';
       var exp = c.expiry || '';
@@ -1760,13 +1785,13 @@ function renderDNS(keysMap, certData, acData) {
   if (accts.length === 0) {
     h += '<div class="empty">暂无 ACME 帐号</div>';
   } else {
-    h += '<table><thead><tr><th class="col-cert-name" data-sort="email">Email</th><th data-sort="ca">CA</th><th class="col-exp">Key</th><th class="col-badge-sm" data-sort="registered">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
+    h += '<div class="acme-table-wrap"><table class="acme-table"><thead><tr><th class="col-cert-name" data-sort="email">Email</th><th data-sort="ca">CA</th><th class="col-exp">Key</th><th class="col-badge-sm" data-sort="registered">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
     accts.forEach(function(a, i) {
       h += '<tr><td class="col-cert-name">' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
       h += '<td class="col-badge-sm">' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
     });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
   }
   h += '</div>';
 

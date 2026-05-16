@@ -1263,12 +1263,10 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 			}
 		}
 		if err != nil {
-			truncated := errMsg
-			if len(truncated) > 200 {
-				truncated = truncated[:200] + "..."
-			}
-			log.Printf("[cert] certutil -importpfx 失败 %s: %v\n%s", bundleName, err, errMsg)
-			agentLog("证书部署: certutil导入失败(%d字) %s: %s", len(pfxPassword), bundleName, strings.TrimSpace(truncated))
+			// v1.6.17: certutil 在中文Windows输出GBK编码, 直接取hex错误码避免乱码
+			ec := certutilErrorCode(errMsg)
+			log.Printf("[cert] certutil -importpfx 失败 %s: %v, code=%s", bundleName, err, ec)
+			agentLog("证书部署: certutil导入失败 %s: %s", bundleName, ec)
 			return false
 		}
 	}
@@ -1347,13 +1345,10 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding, 
 	}
 	importOut, importErr := exec.Command("certutil", "-importpfx", "-p", pfxPassword, "-enterprise", pfxFile).CombinedOutput()
 	if importErr != nil {
-		// v1.5.37: certutil 错误也上报 Manager
-		errMsg := string(importOut)
-		if len(errMsg) > 200 {
-			errMsg = errMsg[:200] + "..."
-		}
-		log.Printf("[cert] certutil -importpfx 失败 (openssl路径): %v\n%s", importErr, string(importOut))
-		agentLog("证书部署: certutil导入失败(openssl) %s: %s", bundleName, strings.TrimSpace(errMsg))
+		// v1.6.17: 仅取hex错误码, 避免中文乱码
+		ec := certutilErrorCode(string(importOut))
+		log.Printf("[cert] certutil -importpfx 失败 (openssl路径): %v code=%s", importErr, ec)
+		agentLog("证书部署: certutil导入失败(openssl) %s: %s", bundleName, ec)
 		return false
 	}
 	log.Printf("证书已导入: %s (指纹=%s CN=%s)", bundleName, thumb[:8]+"...", certCN)
@@ -1692,6 +1687,28 @@ func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
 // 现合并为一次调用减少进程开销。
 // v1.5.38: 增加 pfxPassword 参数 — certutil -dump 密码保护的 PFX 文件需要 -p 密码。
 // Win2022 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
+// certutilErrorCode v1.6.17: 从certutil输出提取hex错误码, 避免中文乱码
+// certutil在中文Windows输出GBK, 直接log会出现"ָ 벻 ȷ"等乱码
+func certutilErrorCode(output string) string {
+	// 匹配 0x80070056 或 0xXXXXXXXX 格式的hex错误码
+	re := regexp.MustCompile(`0x[0-9a-fA-F]{8}`)
+	if m := re.FindString(output); m != "" {
+		return fmt.Sprintf("错误码=%s", m)
+	}
+	// 回退: 取第一行非空文本的前100字符(ASCII safek)
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 100 {
+			line = line[:100] + "..."
+		}
+		return fmt.Sprintf("输出=%s", line)
+	}
+	return "未知错误"
+}
+
 func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
 	out, err := exec.Command("certutil", "-dump", "-p", pfxPassword, pfxFile).CombinedOutput()
 	if err != nil {

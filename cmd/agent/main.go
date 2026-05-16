@@ -1204,14 +1204,17 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 		return fmt.Errorf("replace: %w", err)
 	}
 
-	// Linux oneshot 模式: 升级后触发即时心跳，避免 DNS 更新中断 5 分钟
-	if runtime.GOOS != "windows" {
-		restartAgentAfterUpgrade()
+	// v1.6.10 C5: 修复 Windows 升级死循环根因 — os.Exit(0) 绕过SCM协议导致后续sc start永久卡START_PENDING
+	if runtime.GOOS == "windows" {
+		// Windows: 不退出! 批处理已接管, 它会发 sc stop → SCM标准停止 → 文件解锁 → 替换 → 重启
+		// 当前进程继续运行, 等待批处理的 sc stop 触发 Execute() 的 clean shutdown
+		upgradeLogger("批处理已启动, 等待SCM标准停止信号...")
+		return nil
 	}
 
-	// replaceRunningBinary handles platform-specific replacement.
-	// This line should never be reached on Windows (CreateProcess detaches).
-	upgradeLogger("替换成功! 即将退出进程...") // 写入文件后再os.Exit
+	// Linux oneshot 模式: 升级后触发即时心跳，避免 DNS 更新中断 5 分钟
+	restartAgentAfterUpgrade()
+	upgradeLogger("替换成功! 即将退出进程...")
 	os.Exit(0)
 	return nil
 }

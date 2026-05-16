@@ -18,19 +18,6 @@
   --c-ch0:#1677ff;--c-ch1:#52c41a;--c-ch2:#faad14;--c-ch3:#ff4d4f;--c-ch4:#722ed1;
   --sidebar-w:200px;--topbar-h:48px;--radius:6px;--shadow:0 1px 2px rgba(0,0,0,.03);
 }
-/* 暗色模式 */
-body.dark{
-  --c-primary:#4d94ff;--c-primary-bg:#1a2744;--c-primary-hover:#243356;
-  --c-bg:#141420;--c-card:#1e1e30;--c-text:#e0e0e0;--c-text2:#9090a0;
-  --c-border:#2a2a40;--c-input-border:#3a3a55;--c-th-bg:#252538;
-  --shadow:0 1px 2px rgba(0,0,0,.2);
-}
-@media(prefers-color-scheme:dark){
-  body.auto{--c-primary:#4d94ff;--c-primary-bg:#1a2744;--c-primary-hover:#243356;
-  --c-bg:#141420;--c-card:#1e1e30;--c-text:#e0e0e0;--c-text2:#9090a0;
-  --c-border:#2a2a40;--c-input-border:#3a3a55;--c-th-bg:#252538;
-  --shadow:0 1px 2px rgba(0,0,0,.2)}
-}
 html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--c-text);background:var(--c-bg)}
 #app{display:flex;height:100vh;overflow:hidden}
 #app.login-page{display:none}
@@ -747,32 +734,10 @@ function initApp() {
   navigate('dashboard');
   startAutoRefresh();
   fetchSideVersion();
-  fetchTimezone();
-  initTheme(); // v1.6.27: 初始化暗色模式
+  fetchTimezone(); // v1.6.20: 获取时区信息用于UI显示
 }
 
 // v1.6.20: 从 /api/ping 获取时区信息
-// v1.6.27: 暗色模式
-function initTheme() {
-  var mode = localStorage.getItem('theme') || 'auto';
-  applyTheme(mode);
-  // 监听系统主题变化 (auto模式)
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
-    if (localStorage.getItem('theme') === 'auto') applyTheme('auto');
-  });
-}
-function applyTheme(mode) {
-  document.body.classList.remove('auto', 'dark');
-  if (mode === 'dark') { document.body.classList.add('dark'); }
-  else if (mode === 'auto') { document.body.classList.add('auto'); }
-  // light: no class
-}
-function setTheme(mode) {
-  localStorage.setItem('theme', mode);
-  applyTheme(mode);
-  toast('外观: ' + (mode === 'dark' ? '暗色' : mode === 'light' ? '明亮' : '自动'), 'success');
-}
-
 async function fetchTimezone() {
   try {
     var r = await apiJSON('/api/ping');
@@ -2563,12 +2528,6 @@ async function loadSettings(silent) {
 }
 function renderSettings(smtp, rl, tz) {
   var h = '';
-  // v1.6.27: 外观卡片
-  var curTheme = localStorage.getItem('theme') || 'auto';
-  h += '<div class="card"><div class="card-header"><h3>外观</h3></div>';
-  h += '<div class="form-inline" style="gap:8px"><label class="checkbox-row"><input type="radio" name="theme" value="auto"' + (curTheme === 'auto' ? ' checked' : '') + ' onchange="setTheme(\'auto\')"> 自动 (跟随系统)</label>';
-  h += '<label class="checkbox-row"><input type="radio" name="theme" value="light"' + (curTheme === 'light' ? ' checked' : '') + ' onchange="setTheme(\'light\')"> 明亮</label>';
-  h += '<label class="checkbox-row"><input type="radio" name="theme" value="dark"' + (curTheme === 'dark' ? ' checked' : '') + ' onchange="setTheme(\'dark\')"> 暗色</label></div></div>';
   h += '<div class="card"><div class="card-header"><h3>时区</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>管理端时区</label><select id="tz-select">';
   ['Asia/Shanghai','Asia/Tokyo','Asia/Seoul','Asia/Singapore','Asia/Kolkata','Asia/Dubai','Europe/London','Europe/Berlin','Europe/Moscow','America/New_York','America/Chicago','America/Los_Angeles','Australia/Sydney','Pacific/Auckland','UTC'].forEach(function(t){

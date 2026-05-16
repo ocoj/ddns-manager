@@ -327,17 +327,22 @@ th{text-align:left}
   #page-settings .card{margin-bottom:6px!important}
   #page-settings .btn-row{margin-top:6px!important}
   #page-settings label{margin-bottom:2px!important}
-  /* 版本管理卡片 */
-  .ver-table thead{display:none}
-  .ver-table,.ver-table tbody,.ver-table tr,.ver-table td{display:block;width:100%}
-  .ver-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
-  .col-up-os{display:none!important}
-  .col-up-node{display:inline!important;width:auto!important;font-size:13px;font-weight:600;margin-right:8px}
-  .col-up-stat{display:inline!important;width:auto!important;margin-right:8px}
-  .col-up-ver{display:inline!important;width:auto!important;font-size:12px;margin-right:8px;font-family:Consolas,Monaco,monospace}
-  .ver-table td:has(select){display:inline!important;width:auto!important;margin-right:8px}
-  .ver-table td:has(select) select{height:28px;font-size:12px}
-  .col-up-status{display:inline!important;width:auto!important}
+  /* 版本+二进制卡片 */
+  .ver-table thead,.bin-table thead{display:none}
+  .ver-table,.bin-table,.ver-table tbody,.bin-table tbody,.ver-table tr,.bin-table tr{display:block;width:100%}
+  .ver-table tr,.bin-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .ver-table td,.bin-table td{padding:2px 0}
+  /* 版本: 节点+系统+状态 一行 */
+  .ver-table .col-up-node,.ver-table .col-up-os,.ver-table .col-up-stat{display:inline-block!important;margin-right:6px;width:auto!important}
+  .col-up-node{font-size:13px!important;font-weight:600}
+  .col-up-os{font-size:11px!important;color:var(--c-text2)}
+  /* 版本: 其余二行 inline */
+  .ver-table td:nth-child(5),.ver-table td:nth-child(6),.ver-table td:nth-child(7){display:inline-block!important;margin-right:6px;font-size:11px;width:auto!important}
+  .ver-table td:nth-child(6) select{height:26px;font-size:11px}
+  /* 二进制: 文件名 block, 大小跟在后面 inline */
+  .bin-table .mono{display:block!important;font-size:12px;font-family:Consolas,Monaco,monospace}
+  .col-bin-size{display:inline!important;width:auto!important;font-size:11px;color:var(--c-text2);}
+  .col-bin-ver,.col-bin-time,.bin-table .col-act{display:inline-block!important;margin-right:8px;font-size:11px;width:auto!important}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
@@ -2112,13 +2117,13 @@ function renderVersions(verData, binData, nodes) {
   if (bins.length === 0) {
     h += '<div class="empty">暂无</div>';
   } else {
-    h += '<table><thead><tr><th data-sort="name">文件名</th><th class="col-bin-size" data-sort="size">大小</th><th class="col-bin-ver" data-sort="version">版本</th><th class="col-bin-time" data-sort="mod_time">时间</th><th class="col-act">操作</th></tr></thead><tbody>';
+    h += '<div class="bin-table-wrap"><table class="bin-table"><thead><tr><th data-sort="name">文件名</th><th class="col-bin-size" data-sort="size">大小</th><th class="col-bin-ver" data-sort="version">版本</th><th class="col-bin-time" data-sort="mod_time">时间</th><th class="col-act">操作</th></tr></thead><tbody>';
     bins.forEach(function(b) {
       var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
       h += '<tr><td class="mono">' + he(b.name || '') + '</td><td class="col-bin-size">' + sizeStr + '</td><td class="col-bin-ver">' + he(b.version || '-') + '</td><td class="col-bin-time">' + he(b.mod_time || '-') + '</td>';
       h += '<td class="col-act"><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
     });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
   }
   h += '</div>';
 

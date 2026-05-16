@@ -297,9 +297,9 @@ th{text-align:left}
   .log-filter-bar{display:none!important}
   .log-filter-bar.open{display:flex!important;flex-wrap:wrap;gap:2px;row-gap:2px}
   .log-filter-bar.open .form-group{margin-bottom:0!important}
-  .log-filter-bar.open .form-group{flex:1 1 45%!important;min-width:100px}
+  .log-filter-bar.open .form-group{flex:1 1 48%!important;min-width:0!important}
   .log-filter-bar.open .form-group label{font-size:11px}
-  .log-filter-bar.open .form-group input,.log-filter-bar.open .form-group select{width:100%}
+  .log-filter-bar.open .form-group input,.log-filter-bar.open .form-group select{width:100%;-webkit-appearance:none;max-width:100%}
   .log-filter-bar.open .form-group .btn{margin:0;font-size:12px;padding:4px 8px}
   /* 按钮组保持一排, 隐藏label */
   .log-filter-bar.open .form-group[style*="0 0 auto"]{flex:0 0 auto!important;min-width:0!important}
@@ -314,7 +314,11 @@ th{text-align:left}
   .col-log-node{display:inline!important;width:auto!important;font-size:12px!important;color:var(--c-primary);margin-right:6px}
   .col-log-cat{display:inline!important;width:auto!important;margin-right:4px}
   .col-log-cat .badge{font-size:10px!important;padding:1px 5px}
-  .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all;display:block!important;margin-top:2px;width:100%!important}
+  .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all;overflow-wrap:anywhere;display:block!important;margin-top:2px;width:100%!important;padding-top:2px}
+  /* 卡片内间距 */
+  .log-table tr{padding:8px 0!important;border-bottom:1px solid var(--c-border)}
+  /* iOS安全区底距 */
+  #content{padding-bottom:calc(20px + env(safe-area-inset-bottom, 0px))}
   #page-logs td{max-width:none!important;overflow:visible!important;text-overflow:clip!important}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}

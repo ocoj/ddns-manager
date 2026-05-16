@@ -2330,24 +2330,25 @@ function renderLogs(data, filter) {
   var f = filter || {};
   var h = '';
   h += '<div class="card"><div class="card-header"><h3>系统日志 <span style="font-size:11px;color:var(--c-text2);font-weight:400">(' + (window._tzLabel || '') + ')</span></h3></div>';
-  h += '<div class="form-inline" style="margin-bottom:12px;gap:6px;align-items:flex-end">';
-  h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node"><option value="">全部</option>';
+  h += '<div class="form-inline" style="margin-bottom:8px;gap:4px;align-items:flex-end;flex-wrap:wrap">';
+  h += '<div class="form-group" style="flex:0 1 120px"><label>节点</label><select id="log-filter-node"><option value="">全部</option>';
   nodeNames.forEach(function(n) {
     h += '<option value="' + he(n.id) + '"' + (f.node === n.id ? ' selected' : '') + '>' + he(n.label) + '</option>';
   });
   h += '</select></div>';
-  h += '<div class="form-group" style="flex:0 1 110px"><label>分类</label><select id="log-filter-cat"><option value="">全部</option>';
+  h += '<div class="form-group" style="flex:0 1 100px"><label>分类</label><select id="log-filter-cat"><option value="">全部</option>';
   categories.forEach(function(c) {
     h += '<option value="' + he(c) + '"' + (f.category === c ? ' selected' : '') + '>' + he(c) + '</option>';
   });
   h += '</select></div>';
-  h += '<div class="form-group" style="flex:0 1 120px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="font-size:11px"></div>';
-  h += '<div class="form-group" style="flex:0 1 120px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="font-size:11px"></div>';
-  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary" onclick="applyLogFilter()">搜索</button></div>';
-  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="resetLogFilter()">重置</button></div>';
-  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="downloadLogs()">下载</button></div>';
-  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-danger" onclick="cleanupLogs()">清理</button></div>';
+  h += '<div class="form-group" style="flex:0 1 115px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="font-size:11px"></div>';
+  h += '<div class="form-group" style="flex:0 1 115px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="font-size:11px"></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary btn-sm" onclick="applyLogFilter()" style="font-size:11px;padding:4px 10px">搜索</button></div>';
+  h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-sm" onclick="resetLogFilter()" style="font-size:11px;padding:4px 8px">重置</button></div>';
   h += '</div>';
+  h += '<div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px">';
+  h += '<button class="btn btn-sm" onclick="downloadLogs()" style="font-size:11px;padding:2px 8px">下载</button>';
+  h += '<button class="btn btn-sm btn-danger" onclick="cleanupLogs()" style="font-size:11px;padding:2px 8px">清理</button></div>';
   h += '<table><thead><tr><th class="col-log-time">时间</th><th class="col-log-node">节点</th><th class="col-log-cat">分类</th><th>内容</th></tr></thead><tbody>';
   if (events.length === 0) {
     h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';

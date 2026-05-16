@@ -354,7 +354,7 @@ th{text-align:left}
   .dns-table .col-dns-name{font-weight:600}
   .dns-table .col-prov{color:var(--c-primary)}
   .dns-table .col-dom{display:block!important;font-size:11px;color:var(--c-text2);margin:2px 0;width:100%!important}
-  .dns-table .col-act{display:block!important;width:auto!important}
+  .dns-table .col-act{display:block!important;width:auto!important;text-align:right}
   /* 证书: 名称+剩余 行1, SAN+到期+操作 行2 */
   .cert-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
   .cert-table .col-badge-sm{display:inline-block!important;width:auto!important}
@@ -367,6 +367,17 @@ th{text-align:left}
   .acme-table .col-exp{display:none!important}
   .acme-table td:nth-child(2){display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
   .acme-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  /* 节点卡片: 名称+版本+健康+状态 行1, IP+操作 行2 */
+  .node-table thead{display:none}
+  .node-table,.node-table tbody,.node-table tr{display:block;width:100%}
+  .node-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .node-table .col-dash-node,.node-table .col-ver,.node-table .col-badge{display:inline-block!important;margin-right:6px;width:auto!important}
+  .node-table .col-dash-node{font-size:13px!important;font-weight:600}
+  .node-table .col-dash-node .meta-row{display:none!important}
+  .node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
+  .node-table td:nth-child(3),.node-table td:nth-child(4){display:none!important}
+  .node-table .mono{display:inline-block!important;font-size:11px;width:auto!important}
+  .node-table .col-act{display:block!important;text-align:right;margin-top:2px}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
@@ -1463,7 +1474,7 @@ function renderNodes(nodes) {
   // Apply saved sort state before rendering
   sortData(nodes, 'nodes');
   var h = '<div class="card"><div class="card-header"><h3>节点列表 (' + nodes.length + ')</h3></div>';
-  h += '<table><thead><tr><th class="col-dash-node" data-sort="name">节点名称</th><th data-sort="ip">IP</th><th data-sort="os">系统</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="online">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
+  h += '<div class="node-table-wrap"><table class="node-table"><thead><tr><th class="col-dash-node" data-sort="name">节点名称</th><th data-sort="ip">IP</th><th data-sort="os">系统</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="online">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="8" class="empty">暂无节点</td></tr>';
   } else {
@@ -1492,9 +1503,9 @@ function renderNodes(nodes) {
       h += '</div></td></tr>';
     });
   }
-  h += '</tbody></table></div>';
+  h += '</tbody></table></div></div>';
   document.getElementById('page-nodes').innerHTML = h;
-  var nodesTable = document.querySelector('#page-nodes table');
+  var nodesTable = document.querySelector('#page-nodes .node-table');
   enhanceSortHeaders(nodesTable, 'nodes', loadNodes);
 }
 

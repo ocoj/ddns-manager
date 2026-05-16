@@ -327,6 +327,17 @@ th{text-align:left}
   #page-settings .card{margin-bottom:6px!important}
   #page-settings .btn-row{margin-top:6px!important}
   #page-settings label{margin-bottom:2px!important}
+  /* 版本管理卡片 */
+  .ver-table thead{display:none}
+  .ver-table,.ver-table tbody,.ver-table tr,.ver-table td{display:block;width:100%}
+  .ver-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .col-up-os{display:none!important}
+  .col-up-node{display:inline!important;width:auto!important;font-size:13px;font-weight:600;margin-right:8px}
+  .col-up-stat{display:inline!important;width:auto!important;margin-right:8px}
+  .col-up-ver{display:inline!important;width:auto!important;font-size:12px;margin-right:8px;font-family:Consolas,Monaco,monospace}
+  .ver-table td:has(select){display:inline!important;width:auto!important;margin-right:8px}
+  .ver-table td:has(select) select{height:28px;font-size:12px}
+  .col-up-status{display:inline!important;width:auto!important}
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
@@ -2113,7 +2124,7 @@ function renderVersions(verData, binData, nodes) {
 
   if (nodes.length > 0) {
     h += '<div class="card"><div class="card-header"><h3>节点版本</h3></div>';
-    h += '<table><thead><tr><th style="width:38px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
+    h += '<div class="ver-table-wrap"><table class="ver-table"><thead><tr><th style="width:38px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th class="col-up-os" data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
     // 从服务端读取升级状态 (替代 localStorage，跨设备一致)
     var trigData = window._upgState || {};
     nodes.forEach(function(n) {
@@ -2151,7 +2162,7 @@ function renderVersions(verData, binData, nodes) {
       h += '</select></td>';
       h += '<td class="col-up-status">' + statusCell + '</td></tr>';
     });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
     h += '<div class="btn-wrap" style="margin-top:8px"><button class="btn btn-primary" onclick="batchUpgrade()">批量升级</button></div></div>';
   }
 

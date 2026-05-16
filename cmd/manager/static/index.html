@@ -381,6 +381,18 @@ th{text-align:left}
   .node-table td:nth-child(4){font-size:11px;color:var(--c-text2);margin-right:auto}
   .node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
   .node-table .col-badge{width:auto!important}
+  /* 仪表盘节点卡片: 节点+IP 行1, 域名+健康+版本+状态 行2 */
+  .dash-node-table thead{display:none}
+  .dash-node-table,.dash-node-table tbody{display:block;width:100%}
+  .dash-node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
+  .dash-node-table td{padding:1px 0;width:auto!important}
+  .dash-node-table .col-dash-node{font-size:13px!important;font-weight:600}
+  .dash-node-table .col-dash-node .meta-row{display:none!important}
+  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;flex-basis:100%!important}
+  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2)}
+  .dash-node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
+  .dash-node-table .col-badge{width:auto!important}
+
   #page-logs .col-log-time{font-size:10px!important}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
@@ -1158,7 +1170,7 @@ function renderDashboard(stats, nodes, events, access) {
   h += '</div>';
 
   h += '<div class="card"><div class="card-header"><h3>节点列表</h3></div>';
-  h += '<table><thead><tr><th class="col-dash-node" data-sort="name">节点</th><th data-sort="ip">IP</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="status">状态</th></tr></thead><tbody>';
+  h += '<div class="dash-node-table-wrap"><table class="dash-node-table"><thead><tr><th class="col-dash-node" data-sort="name">节点</th><th data-sort="ip">IP</th><th class="col-dom" data-sort="domainsStr">域名</th><th class="col-badge" data-sort="healthSort">健康</th><th class="col-ver" data-sort="version">版本</th><th class="col-badge" data-sort="status">状态</th></tr></thead><tbody>';
   if (nodes.length === 0) {
     h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
   } else {

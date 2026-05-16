@@ -35,7 +35,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	if cfg, _ := s.store.LoadAgentConfig(); cfg != nil {
 		agentVer = cfg.LatestVersion
 	}
-	jsonOK(w, map[string]interface{}{"status": "ok", "version": s.version, "agent_version": agentVer})
+	jsonOK(w, map[string]interface{}{"status": "ok", "version": s.version, "agent_version": agentVer, "timezone": s.GetTimezone().String()})
 }
 
 func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request) {

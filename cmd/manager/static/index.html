@@ -619,6 +619,17 @@ function initApp() {
   navigate('dashboard');
   startAutoRefresh();
   fetchSideVersion();
+  fetchTimezone(); // v1.6.20: 获取时区信息用于UI显示
+}
+
+// v1.6.20: 从 /api/ping 获取时区信息
+async function fetchTimezone() {
+  try {
+    var r = await apiJSON('/api/ping');
+    if (r.data && r.data.timezone) {
+      window._tzLabel = r.data.timezone;
+    }
+  } catch(e) { window._tzLabel = 'UTC'; }
 }
 
 // 从 /api/ping 拉取 Manager 版本号，显示在侧边栏底部
@@ -2360,7 +2371,7 @@ function renderLogs(data, filter) {
   var nodeNames = window._logNodeNames || [];
   var f = filter || {};
   var h = '';
-  h += '<div class="card"><div class="card-header"><h3>系统日志</h3></div>';
+  h += '<div class="card"><div class="card-header"><h3>系统日志 <span style="font-size:11px;color:var(--c-text2);font-weight:400">(' + (window._tzLabel || '') + ')</span></h3></div>';
   h += '<div class="form-inline" style="margin-bottom:12px;gap:6px;align-items:flex-end">';
   h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node"><option value="">全部</option>';
   nodeNames.forEach(function(n) {

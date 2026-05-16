@@ -529,13 +529,8 @@ function normalizeNodes(data) {
 function normalizeEvents(events) {
   if (!events || !events.length) return [];
   return events.map(function(e) {
-    var t = e.time || '';
-    // v1.6.24: 保留完整日期+时间 (YYYY-MM-DD HH:MM:SS)
-    if (t.indexOf('T') > -1) {
-      t = t.split('T')[0] + ' ' + t.split('T')[1].substring(0, 8);
-    }
     return {
-      time: t,
+      time: e.time || '',  // v1.6.24: 保留原始ISO格式(含时区), 供fmtTime转换
       node: e.node || e.user || '-',
       category: e.category || '',
       action: e.action || '',
@@ -2284,7 +2279,7 @@ async function loadLogsIncremental() {
     var newRows = [];
     for (var i = 0; i < events.length; i++) {
       var l = events[i];
-      var ts = l.time; // normalizeEvents已格式化, 不再经fmtTime二次转换
+      var ts = fmtTime(l.time);
       if (ts === firstTime) break;
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       newRows.push('<tr><td class="col-log-time">' + ts + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>');
@@ -2360,7 +2355,7 @@ function renderLogs(data, filter) {
     // API已返回倒序(最新在顶), 无需前端反转
     events.forEach(function(l) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      h += '<tr><td class="col-log-time">' + he(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
+      h += '<tr><td class="col-log-time">' + fmtTime(l.time) + '</td><td class="col-log-node">' + he(l.node || '-') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td>' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });
@@ -2600,15 +2595,15 @@ function jsStr(s) {
 // fmtTime 将 UTC 时间字符串转为配置时区显示
 function fmtTime(utcStr) {
   if (!utcStr) return '-';
-  var d = new Date(utcStr.replace(/Z$/,'') + 'Z');
+  // v1.6.24: 兼容 ISO 8601 (Z / +HH:MM), Date直接解析带时区的字符串
+  var d = new Date(utcStr);
   if (isNaN(d.getTime())) return utcStr;
   try {
     var tz = window._tz || localStorage.getItem('ddns-tz') || 'Asia/Shanghai';
     var s = d.toLocaleString('sv', {timeZone:tz, hour12:false});
     if (s && s.length > 10) return s;
   } catch(e) {}
-  // 兜底: 直接用 UTC 方法 + 硬编码 Asia/Shanghai 偏移
-  d.setHours(d.getHours() + 8);
+  // 兜底: UTC方法格式化
   return d.getUTCFullYear()+'-'+('0'+(d.getUTCMonth()+1)).slice(-2)+'-'+('0'+d.getUTCDate()).slice(-2)+' '+('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+':'+('0'+d.getUTCSeconds()).slice(-2);
 }
 

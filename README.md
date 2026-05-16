@@ -8,10 +8,10 @@
 |------|------|
 | **[架构与实现](docs/架构与实现.md)** | 后端架构与实现 — 数据模型、API、配置引擎、安全、部署 |
 | **[前端设计](docs/前端设计.md)** | Web 前端设计规范 — 布局、色彩、组件、API 对照 |
-| **[变更日志](CHANGELOG.md)** | 版本变更日志（v1.5.1 → v1.6.15） |
+| **[变更日志](CHANGELOG.md)** | 版本变更日志（v1.5.1 → v1.6.18） |
 | **[安装接口规范](docs/安装接口规范.md)** | ⚠️ 冻结 — 安装器/Agent/Manager 三方接口契约 |
 | **[版本推进规范](docs/VERSIONING.md)** | 📋 v1.5.37+ — 发版流程、/bin/管理、历史教训 |
-| **[Windows 静默执行规范](docs/windows-dev-notes.md)** | 🔴 v1.6.15 — 批处理/PS/netsh 禁用规则 |
+| **[Windows 静默执行规范](docs/windows-dev-notes.md)** | 🔴 v1.6.18 — 批处理/PS/netsh/certutil 禁用规则 |
 | **[安全审计](docs/audits/)** | 全量代码审计报告 |
 | **[图标资源](docs/图标.md)** | 侧边栏 SVG 图标资源 |
 
@@ -49,7 +49,7 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.15** | v1.6.x C5~C7: Windows升级重写 + IIS扫描恢复 + 静默执行规范 |
+| ddns-manager | **v1.6.18** | v1.6.x C5~C8: Windows升级重写 + IIS扫描 + certutil乱码修复 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

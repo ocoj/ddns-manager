@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## v1.6.18 — 2026-05-16
+
+### certutil错误日志消除中文GBK乱码
+- certutil在中文Windows输出GBK编码, 直接log出现乱码
+- certutilErrorCode() 提取hex错误码(0x80070056)替代原始输出
+
+## v1.6.17 — 2026-05-16
+
+### IIS扫描条件修正 — 证书已部署为准
+- v1.6.16用cfg.IISCertBindings判断, 与Manager侧cert_bindings语义不同
+- 改为os.ReadDir(cfg.CertPath) — 证书目录有内容才扫描
+
+## v1.6.16 — 2026-05-16
+
+### IIS扫描/证书收集按配置对齐
+- scanIISBindingsIfNeeded / collectCertHashesIfNeeded
+- Win10(无证书): 跳过PowerShell调用, 无IIS日志
+
 ## v1.6.15 — 2026-05-16
 
 ### C7: 回滚 netsh 文本解析, 恢复 WebAdministration API

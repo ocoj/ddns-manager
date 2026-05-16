@@ -77,4 +77,4 @@ IP:端口                      : 0.0.0.0:443    ← 不是 "IP:port"！
 | v1.6.7 | WebAdministration API | ✅ 成功 |
 | v1.6.13 C6 | 废弃批处理升级 | ✅ 成功 |
 | v1.6.14 C7 | 误回退netsh文本 | ❌ 0个SSL绑定(重蹈v1.6.1) |
-| v1.6.15 C7 | 恢复WebAdministration | ✅ |
+| v1.6.18 | certutil GBK乱码 | certutil在中文Windows输出GBK, 直接log产生乱码, 仅取hex错误码 |

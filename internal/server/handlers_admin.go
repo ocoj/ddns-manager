@@ -970,6 +970,9 @@ func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord, testDomain st
 		ipv4cache := &util.IpCache{}
 		ipv6cache := &util.IpCache{}
 		provider.Init(&dc, ipv4cache, ipv6cache)
+		// v1.6.27: 必须调用 AddUpdateDomainRecords 触发真实 DNS API 调用
+		// Init() 只做本地设置不验证凭证, 假Key也会通过
+		provider.AddUpdateDomainRecords()
 		done <- true
 	}()
 

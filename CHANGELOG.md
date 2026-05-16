@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## v1.6.27 — 2026-05-16 夜间
+
+### 暗色模式 + DNS Key测试修复
+- 设置页新增"外观"卡片: 自动/明亮/暗色三种切换
+- CSS变量覆盖: body.dark + prefers-color-scheme媒体查询
+- 暗色输入框/按钮反色处理
+- DNS Key测试增加AddUpdateDomainRecords触发真实API验证
+
+## v1.6.26 — 2026-05-16 下午
+
+### 移动端全页面卡片布局适配
+- 日志页: 表格→flex卡片, 筛选折叠, 日期+节点+内容全宽
+- 版本管理: 节点/二进制表→flex卡片, 隐藏次要列
+- DNS&证书: 三表→flex卡片, 操作按钮右对齐
+- 节点页: flex三行卡片, 系统/指纹隐藏
+- 仪表盘: 节点表+事件列表→flex卡片, 独立卡片分隔
+- 最近事件max-height移除, 全展开
+
+## v1.6.25 — 2026-05-16
+
+### Agent日志时区统一
+- DNS日志时间统一UTC+UTC后缀
+- 前端normalizeEvents保留ISO格式供fmtTime转换
+
+## v1.6.19-v1.6.24 — 2026-05-16
+
+### Web UI刷新机制重写 + 时区修复
+- 全页5s刷新→仅数据静默更新, 自动/手动切换
+- 日志页增量prepend, 最新在顶
+- 时区转换修复: normalizeEvents+fmtTime双重转换问题
+- certutil错误日志消除GBK乱码
+- IIS扫描条件: 证书目录有内容才扫描
+- GetType修复: normalizeGetType支持netinterface→netInterface
+
 ## v1.6.18 — 2026-05-16
 
 ### certutil错误日志消除中文GBK乱码

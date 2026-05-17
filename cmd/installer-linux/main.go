@@ -261,40 +261,16 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	fmt.Println()
 	fmt.Println("  [4/4] 安装服务")
 
-	// v1.6.32: 指纹匹配时跳过注册(旧机重装)
-	// v1.6.33 P10: 旧机重装必须使用原密码
-	needRegister := !exists || existingFP != fingerprint
+	// v1.6.33 P10: 始终注册(新装或旧机重装), 旧密码已丢失使用新密码
+	// 409表示节点仍在管理端→需手动删除后重试
 	var password string
-	if needRegister {
-		password = installer.GeneratePassword()
-		if err := registerNode(baseURL, nodeName, fingerprint, password, insecure); err != nil {
-			fmt.Printf("  [!] 注册失败: %v\n", err)
+	password = installer.GeneratePassword()
+	if err := registerNode(baseURL, nodeName, fingerprint, password, insecure); err != nil {
+		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "已注册") {
+			fmt.Printf("  [!] 节点已在管理端注册, 请先登录WebUI删除旧节点后重装\n")
+			os.Exit(1)
 		}
-	} else {
-		for {
-			fmt.Print("  请输入原节点密码 (如遗忘请输入 new 重新注册): ")
-			input, err := installer.ReadLine(reader)
-			if err != nil {
-				log.Fatal("取消安装")
-			}
-			input = strings.TrimSpace(input)
-			if input == "" {
-				fmt.Println("  [!] 密码不能为空")
-				continue
-			}
-			if strings.ToLower(input) == "new" {
-				password = installer.GeneratePassword()
-				if err := registerNode(baseURL, nodeName, fingerprint, password, insecure); err != nil {
-					fmt.Printf("  [!] 重新注册失败: %v\n", err)
-					continue
-				}
-				fmt.Println("  [OK] 已重新注册, 密码已更新")
-				break
-			}
-			password = input
-			fmt.Println("  [OK] 使用原密码, 保留注册信息")
-			break
-		}
+		fmt.Printf("  [!] 注册失败: %v\n", err)
 	}
 
 	cfg := &model.AgentConfig{

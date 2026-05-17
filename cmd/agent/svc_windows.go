@@ -100,8 +100,9 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 				return false, 0
 			}
 		case <-s.upgradeShutdown:
-			// v1.6.12 C6: 升级触发 — 通过SCM标准协议退出进程
-			// 助手上已调度: ping等待3s→move新二进制→sc config auto→sc start
+			// v1.6.12 C6+v1.6.31: 升级触发 — 通过SCM标准协议退出进程
+			// upgrade_helper.exe 已调度: PID等待→MoveFileEx原子替换→sc start→轮询验证 RUNNING
+			// 降级批处理: 10次ping等待→move/copy→sc start
 			log.Printf("[daemon] 升级触发服务停止 (SCM标准退出)")
 			status <- svc.Status{State: svc.StopPending}
 			close(s.stopCh)

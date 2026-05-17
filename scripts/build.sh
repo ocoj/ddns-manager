@@ -183,7 +183,36 @@ build_windows_helper() {
     echo "  ✅ ${ver_out}.sha256"
 }
 
-# ── Installer ──
+# ── Linux 安装器 (新, v1.6.30+) ──
+
+build_installer_linux() {
+    local arch="$1"
+    echo ""
+    echo "── Building Linux Installer ($arch) ──"
+
+    cd "$PROJECT_DIR/cmd/installer-linux"
+    out="$BUILD_DIR/ddns-installer-linux-${arch}"
+    GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+        go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
+    chmod +x "$out"
+    echo "  ✅ $out ($(du -h "$out" | cut -f1))"
+}
+
+# ── Windows 安装器 (新, v1.6.30+) ──
+
+build_installer_windows() {
+    local arch="$1"
+    echo ""
+    echo "── Building Windows Installer ($arch) ──"
+
+    cd "$PROJECT_DIR/cmd/installer-windows"
+    out="$BUILD_DIR/ddns-installer-windows-${arch}.exe"
+    GOOS=windows GOARCH="$arch" CGO_ENABLED=0 \
+        go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
+    echo "  ✅ $out ($(du -h "$out" | cut -f1))"
+}
+
+# ── Installer (旧版 v1.0.0 冻结, 保留不清除) ──
 
 build_installer() {
     local arch="$1"
@@ -268,10 +297,15 @@ build_linux arm64
 build_linux arm    # Raspberry Pi 3 (32-bit) — Go标准命名, 文件名与detectPlatform一致
 build_manager amd64
 build_manager arm64
-build_installer amd64
-build_installer arm64
-build_installer arm
-build_installer_win amd64
+build_installer_linux amd64
+build_installer_linux arm64
+# build_installer_linux arm (arm32暂不需要安装器)
+build_installer_windows amd64
+# ── 以下为旧版安装器 (v1.0.0冻结, 保留不发) ──
+# build_installer amd64
+# build_installer arm64
+# build_installer arm
+# build_installer_win amd64
 pack_windows_zip
 
 echo ""

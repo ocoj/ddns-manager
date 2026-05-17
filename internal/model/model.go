@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kk/ddns-manager/internal/provider"
 )
 
 type DDNSHealthInfo struct {
@@ -214,8 +216,8 @@ func CompareSemVer(a, b string) int {
 	return 0
 }
 
-// IsKnownDNSProvider v1.6.29 H1 (DEPRECATED): 请直接使用 provider.IsKnown()。
-// 保留此函数仅用于向后兼容。新增 provider 时只需更新 provider/registry.go。
+// IsKnownDNSProvider v1.6.30 M1 (DEPRECATED): 委托给 provider.IsKnown(), 不再返回空实现
+// v1.6.29 H1 标记废弃但实现仍是 name != "" 假验证 — 现改为委托给单一真相源
 func IsKnownDNSProvider(name string) bool {
-	return name != ""
+	return provider.IsKnown(name)
 }

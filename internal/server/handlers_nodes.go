@@ -108,6 +108,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if h.LastErrorDetail != "" {
 			detail += fmt.Sprintf(" detail=%s", h.LastErrorDetail)
 		}
+		// v1.6.33 P4: DNS 更新失败时独立记录错误详情日志, 不依赖心跳 detail 截断
+		s.logMgr.LogWithNode("dns-update", "DNS更新失败", nodeID,
+			fmt.Sprintf("err=%s failed=%v detail=%s", h.LastError, h.FailedDomains, h.LastErrorDetail), "error")
 	}
 	// v1.5.31 C1: 证书部署错误计入心跳详情和结构化状态
 	if len(req.Status.CertErrors) > 0 {

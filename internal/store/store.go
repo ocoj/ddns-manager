@@ -799,6 +799,23 @@ func (s *ManagerStore) SaveACMEAccounts(accounts []ACMEAccountConfig) error {
 	return s.saveACMEAccountsLocked(accounts)
 }
 
+// UpdateACMEAccountsAtomic v1.6.30 H4: 原子化的 load→modify→save, 防止并发 TOCTOU 写覆盖
+func (s *ManagerStore) UpdateACMEAccountsAtomic(fn func([]ACMEAccountConfig) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	accounts, err := s.loadACMEAccountsLocked()
+	if err != nil {
+		return err
+	}
+	if accounts == nil {
+		accounts = []ACMEAccountConfig{}
+	}
+	if err := fn(accounts); err != nil {
+		return err
+	}
+	return s.saveACMEAccountsLocked(accounts)
+}
+
 // saveACMEAccountsLocked writes to disk. Caller must hold s.mu.Lock().
 func (s *ManagerStore) saveACMEAccountsLocked(accounts []ACMEAccountConfig) error {
 	data, err := json.MarshalIndent(accounts, "", "  ")

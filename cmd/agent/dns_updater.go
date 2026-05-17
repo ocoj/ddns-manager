@@ -161,10 +161,9 @@ func (u *DNSUpdater) Run() DNSStatus {
 			if len(detail) > 500 {
 				detail = detail[:500] + "..."
 			}
-			// v1.6.10 H1: 每段错误独立保存, 循环外统一拼接 LastErrorDetail
-			if len(segErrors) < len(u.cfg.DnsConf) {
-				segErrors = append(segErrors, segErr{provider: dc.DNS.Name, detail: detail})
-			}
+			// v1.6.33 P2: 每段错误独立记录 — 移除有缺陷的 len(segErrors) < len(DnsConf) 条件
+			// 原条件在"不支持的provider"提前占位时可能导致后续段的错误被静默丢弃
+			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, detail: detail})
 			u.logBuf.Write(fmt.Sprintf("API错误详情(%s): %s", dc.DNS.Name, detail))
 		}
 
@@ -233,13 +232,15 @@ func (u *DNSUpdater) Run() DNSStatus {
 		}
 	}
 
+// v1.6.30 H6: 无论 DNS 更新成功与否, IP 已获取就设置 IPv4OK/IPv6OK
+	// DNS 记录更新失败不等于 IP 获取失败 (原逻辑误标 IP 状态)
+	u.status.IPv4Msg = buildIPMsg(u.status.IPv4, u.status.IPv4Enabled)
+	u.status.IPv6Msg = buildIPMsg(u.status.IPv6, u.status.IPv6Enabled)
+	if u.status.IPv4 != "" { u.status.IPv4OK = true }
+	if u.status.IPv6 != "" { u.status.IPv6OK = true }
+
 	// v1.6.10 M1 + v1.6.11 B2: DNS 更新结果持久化, 区分IP状态
 	if allOK {
-		// 检查IP获取情况并构建描述性消息
-		u.status.IPv4Msg = buildIPMsg(u.status.IPv4, u.status.IPv4Enabled)
-		u.status.IPv6Msg = buildIPMsg(u.status.IPv6, u.status.IPv6Enabled)
-		if u.status.IPv4 != "" { u.status.IPv4OK = true }
-		if u.status.IPv6 != "" { u.status.IPv6OK = true }
 		agentLog("[dns] 更新完成: ipv4=%s(%s) ipv6=%s(%s)",
 			u.status.IPv4, u.status.IPv4Msg, u.status.IPv6, u.status.IPv6Msg)
 	} else {
@@ -356,7 +357,8 @@ func newLogBuffer(size int) *LogBuffer {
 func (lb *LogBuffer) Write(msg string) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("15:04:05 UTC") + " " + msg
+	// v1.6.30 H3: 统一使用 UTC+RFC3339 时间戳, 与 agent_events.log 格式一致
+	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("2006-01-02T15:04:05Z") + " " + msg
 	lb.pos++
 }
 

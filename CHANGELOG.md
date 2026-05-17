@@ -1,6 +1,60 @@
 # CHANGELOG
 
 
+## v1.6.33 — 2026-05-17
+
+### 🔴 第十三次审计修复 (6项) — 客户端升级/日志完整性/代码一致性
+
+#### Critical (3项)
+- **P1**: upgrade_windows.go — Phase 2 增加版本化二进制写入 `copyFile(newBinaryPath, versionedPath)`, 对齐 Linux 版完整 `io.Copy` 流程
+- **P2**: dns_updater.go — `segErrors` 移除有缺陷的 `len(segErrors) < len(DnsConf)` 条件, 防止多段配置时错误被静默丢弃
+- **P3**: handlers_admin.go — `testDNSKeyOnline` 委托给 `provider.ValidateKeyOnline`, 消除重复 provider 创建逻辑, 统一注册表为单一真相源
+
+#### High (3项)
+- **P4**: handlers_nodes.go — DNS 更新失败时独立记录 `dns-update` 类别错误日志, 不再依赖心跳 detail 字符串截断
+- **P5**: main.go — `sendDDNSHealthHeartbeat` 补全 CertErrors 字段, 确保证书部署错误通过跟进心跳上报
+- **P6**: main.go — `agentLog` 文件时间戳统一为 UTC+RFC3339, 与 `dns_updater.LogBuffer` 格式一致
+
+#### 🧪 新增测试
+- TestSegErrorsMultipleSegments — 多段配置 segErrors 索引完整性
+- TestFollowupHeartbeatCertErrors — 跟进心跳 CertErrors 字段验证
+- TestAgentLogUTCTimezone — agentLog 时间戳 UTC 格式一致性
+
+
+## v1.6.30 — 2026-05-17
+
+### 🔴 第十二次全量审计修复 (16项) — Windows升级/证书哈希/日志一致性/并发安全
+
+#### Critical (2项)
+- **C1**: upgrade_windows.go — `copyFile` 将下载二进制复制到自身(无操作), 改为存在性+大小验证
+- **C2**: main.go — `ensureSymlink` 增加 `.sha256/.tmp/.linktmp` 排除, 防止误选非二进制文件
+
+#### High (6项)
+- **H1**: sendDDNSHealthHeartbeat 补全 CertPath/CertHashes/IPv4OK/IPv6OK 字段
+- **H2**: collectCertHashes 磁盘扫描同时注册相对名和完整路径, 对齐 Manager deploy_path 键名
+- **H3**: LogBuffer.Write 时间戳统一为 UTC+RFC3339 格式, 与 agent_events.log 一致
+- **H4**: updateACMEMgrKey 改为 store.UpdateACMEAccountsAtomic 原子化, 消除 TOCTOU 写覆盖
+- **H5**: testDNSKeyOnline done channel buffer 扩容到 2, 防止 ctx 取消后 goroutine 写入阻塞泄漏
+- **H6**: dns_updater IPv4OK/IPv6OK 移到 allOK 分支外, 避免 DNS 失败时误标"IP获取失败"
+
+#### Medium (5项)
+- **M1**: model.IsKnownDNSProvider 死代码修复 — 从 `name != ""` 改为委托 provider.IsKnown()
+- **M2**: collectCertHashes Phase 2 仅填充无 .cert_hash 的目录(已有注释+守护逻辑)
+- **M3**: manifest 并发读窗口已注释化(极低风险, 自纠正)
+- **M4**: sc config disabled 失败非致命(降级路径明确)
+- **M5**: certutil 错误码正则保持宽松匹配(8+位hex)
+
+#### Low (3项)
+- **L1**: recycleIISAppPools XML 字符串解析可接受(System.Xml.XmlDocument 等价)
+- **L2**: buildIPMsg 留在 dns_updater.go(单文件内聚)
+- **L3**: CertHashes 先赋值后可能修改(已由锁保护)
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.6.30 ✅
+- 二进制上传: 4平台Agent + upgrade_helper + sha256
+- 升级推送: agent_version=1.6.30 已设置
+
+
 ## v1.6.29 — 2026-05-17
 
 ### 🔴 全量审计修复 (14项) — 客户端升级/证书推送/心跳上报/日志链路

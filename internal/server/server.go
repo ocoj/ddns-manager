@@ -383,14 +383,19 @@ func (s *Server) initACMEManagers() {
 	log.Printf("[acme] 已加载 %d 个 ACME 帐号", mgrCount)
 }
 
-// updateACMEMgrKey persists the generated account key to store.
+// v1.6.30 H4: 原子化 updateACMEMgrKey, 使用 store 级写锁保护 Load→Modify→Save
+// 防止多 goroutine 并发注册 ACME 账号时的 TOCTOU 写覆盖
 func (s *Server) updateACMEMgrKey(index int, keyPEM string) {
-	accounts, err := s.store.LoadACMEAccounts()
-	if err != nil || index >= len(accounts) {
-		return
+	err := s.store.UpdateACMEAccountsAtomic(func(accounts []store.ACMEAccountConfig) error {
+		if index >= len(accounts) {
+			return fmt.Errorf("index out of range: %d >= %d", index, len(accounts))
+		}
+		accounts[index].AccountKey = keyPEM
+		return nil
+	})
+	if err != nil {
+		log.Printf("[acme] 持久化密钥失败: %v", err)
 	}
-	accounts[index].AccountKey = keyPEM
-	s.store.SaveACMEAccounts(accounts)
 }
 
 func (s *Server) Router() *mux.Router {

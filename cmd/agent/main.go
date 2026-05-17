@@ -47,6 +47,17 @@ var lastConfigHash string
 var certHashMap = map[string]string{}
 var certHashMapMu sync.Mutex // H6: protects certHashMap from concurrent access
 
+// certHashMapRead v1.6.30 H1: 返回 certHashMap 的只读快照, 用于跟进心跳
+func certHashMapRead() map[string]string {
+	certHashMapMu.Lock()
+	defer certHashMapMu.Unlock()
+	out := make(map[string]string, len(certHashMap))
+	for k, v := range certHashMap {
+		out[k] = v
+	}
+	return out
+}
+
 // dnsUpdater is the global DNS updater instance (initialized once via sync.Once)
 var (
 	dnsUpdater       *DNSUpdater
@@ -75,7 +86,8 @@ func agentLog(format string, args ...interface{}) {
 	f := agentEventsFile
 	agentEventsFileMu.Unlock()
 	if f != nil {
-		fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+		// v1.6.33 P6: 统一使用 UTC+RFC3339 时间戳, 与 dns_updater LogBuffer 格式一致
+		fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), msg)
 	}
 }
 
@@ -206,8 +218,10 @@ func ensureSymlink() {
 	var bestName string
 	for _, e := range entries {
 		name := e.Name()
-		// v1.6.29 M4: 排除 .new 临时升级文件, 防止选中未完成的升级二进制
-		if !strings.HasPrefix(name, "node-agent-v") || e.IsDir() || strings.HasSuffix(name, ".new") {
+		// v1.6.29 M4+v1.6.30 C2: 排除 .new 临时升级文件和 .sha256 校验文件, 防止选中非可执行文件
+		if !strings.HasPrefix(name, "node-agent-v") || e.IsDir() ||
+			strings.HasSuffix(name, ".new") || strings.HasSuffix(name, ".sha256") ||
+			strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".linktmp") {
 			continue
 		}
 		// 提取版本号: node-agent-v1.5.34-linux-amd64 → 1.5.34
@@ -583,14 +597,23 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.Heart
 	return &hr, nil
 }
 
-// sendDDNSHealthHeartbeat v1.6.28 H1+v1.6.29 C3: 配置变更后 DNS 更新失败时发送跟进心跳
-// 携带完整 DDNSHealth + IPv4/IPv6 + FailedDomains + LastErrorDetail, 不等 5 分钟周期
+// sendDDNSHealthHeartbeat v1.6.28 H1+v1.6.29 C3+v1.6.30 H1: 配置变更后 DNS 更新失败时发送跟进心跳
+// 携带完整 DDNSHealth + IPv4/IPv6 + FailedDomains + LastErrorDetail + CertPath + CertHashes, 不等 5 分钟周期
 func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
+	// v1.6.30 H1: 补全 CertPath/CertHashes/IPv4OK/IPv6OK, 与常规心跳字段对齐
+	// v1.6.33 P5: 补全 CertErrors 字段, 确保证书部署错误也在跟进心跳中上报
+	lastCertErrorsMu.Lock()
+	followCertErrors := lastCertErrors
+	lastCertErrorsMu.Unlock()
+
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
 		Fingerprint: cfg.Fingerprint,
 		Status: model.NodeStatus{
 			AgentVersion: version,
+			CertPath:     cfg.CertPath,
+			CertHashes:   certHashMapRead(), // 只读拷贝, 避免锁竞争
+			CertErrors:   followCertErrors,  // v1.6.33 P5: 补全证书部署错误上报
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
 			DDNSHealth: &model.DDNSHealthInfo{
@@ -599,6 +622,10 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 				LastError:       status.LastError,
 				LastErrorDetail: status.LastErrorDetail,
 				FailedDomains:   status.FailedDomains,
+				IPv4OK:          status.IPv4OK,
+				IPv6OK:          status.IPv6OK,
+				IPv4Msg:         buildIPMsg(status.IPv4, status.IPv4Enabled),
+				IPv6Msg:         buildIPMsg(status.IPv6, status.IPv6Enabled),
 				Status:          "ERR",
 				StatusMsg:       fmt.Sprintf("配置变更后DNS更新失败: %s", status.LastError),
 			},
@@ -997,6 +1024,7 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			}
 			rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 			mu.Lock()
+			// v1.6.30 M2: 仅在无 .cert_hash 条目时才填充磁盘 hash, 防止覆盖权威 hash
 			if _, exists := result[cfg.CertPath]; !exists { result[cfg.CertPath] = rootHash }
 			mu.Unlock()
 		}
@@ -1019,7 +1047,10 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			}
 			diskHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 			mu.Lock()
+			// v1.6.30 H2: 同时注册相对名和完整路径, 兼容 Manager deploy_path 两套键名
 			if _, exists := result[e.Name()]; !exists { result[e.Name()] = diskHash }
+			fullPath := filepath.Join(cfg.CertPath, e.Name())
+			if _, exists := result[fullPath]; !exists { result[fullPath] = diskHash }
 			mu.Unlock()
 		}
 	}()
@@ -1238,6 +1269,12 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 			os.Remove(tmpFile)
 			return fmt.Errorf("checksum mismatch: want %s, got %s", update.Checksum, actual)
 		}
+	}
+
+	// v1.6.30: Windows 上同时下载 upgrade_helper.exe, 防止上次升级自删除后下次缺失
+	// 非关键操作 — 下载失败不阻塞升级 (replaceRunningBinary 内会降级到批处理)
+	if runtime.GOOS == "windows" {
+		downloadUpgradeHelper(cfg, update.Version)
 	}
 
 	upgradeLogger("开始替换二进制: %s → v%s", exePath, update.Version)

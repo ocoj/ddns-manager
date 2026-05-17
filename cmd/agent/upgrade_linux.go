@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kk/ddns-manager/internal/model"
 )
 
 // replaceRunningBinary 用版本化文件名+符号链接替换当前运行的 Agent。
@@ -141,3 +143,6 @@ func restartAgentAfterUpgrade() {
 	// 3次重试均失败: 不阻塞升级流程, agent timer 会在下次触发时间自动拉起
 	log.Printf("[upgrade] systemctl start 3次重试均失败, 依赖 node-agent.timer 下次自动触发")
 }
+
+// downloadUpgradeHelper v1.6.31: Linux stub (Windows-only 功能, 在 upgrade_windows.go 实现)
+func downloadUpgradeHelper(cfg *model.AgentConfig, targetVersion string) {}

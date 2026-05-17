@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	ddnsconfig "github.com/jeessy2/ddns-go/v6/config"
-	"github.com/jeessy2/ddns-go/v6/util"
 	"github.com/kk/ddns-manager/internal/model"
 	"github.com/kk/ddns-manager/internal/store"
 	"github.com/kk/ddns-manager/internal/logger"
@@ -666,7 +664,9 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 		jsonErr(w, http.StatusBadRequest, "ver 和 os 参数必填")
 		return
 	}
-	// 安全校验: ver 仅允许 SEMVER 格式字符 (0-9.v-) + 最大 32 字符
+	// v1.6.31: 统一去除 v 前缀, 防止 ver=v1.6.30 → node-agent-vv1.6.30.exe
+	ver = strings.TrimPrefix(ver, "v")
+	// 安全校验: ver 仅允许 SEMVER 格式字符 (0-9.) + 最大 32 字符
 	if len(ver) > 32 || strings.ContainsAny(ver, "\x00\\/&;`'\"|<>*?%!$#@~ ") {
 		jsonErr(w, http.StatusBadRequest, "版本号格式非法")
 		return
@@ -761,6 +761,9 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 // install.bat 模板 — 与 build/install.bat.in 内容一致。
 // __VERSION__ 运行时替换为实际版本号。
 const installBatTemplate = `@echo off
+REM ddns-manager Windows 安装启动器
+REM 用途: 提升管理员权限 → 启动 Go 安装向导
+
 chcp 65001 >nul
 title ddns-manager v__VERSION__ 安装向导
 
@@ -770,6 +773,7 @@ echo   Version: v__VERSION__  ^|  Lanxun CO.,Ltd.
 echo ============================================
 echo.
 
+REM ── 检查管理员权限 ──
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [错误] 请右键以管理员身份运行 install.bat
@@ -778,15 +782,18 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+REM ── 定位安装器 (同目录) ──
 set "INSTALLER=%~dp0ddns-installer.exe"
 if not exist "%INSTALLER%" (
     echo [错误] 未找到 ddns-installer.exe
     echo        请确保所有文件在同一目录
+    echo        当前目录: %~dp0
     echo.
     pause
     exit /b 1
 )
 
+REM ── 启动安装向导 ──
 echo 启动安装向导...
 echo.
 "%INSTALLER%" %*
@@ -831,7 +838,7 @@ const readmeTemplate = `============================================
 
 [卸载]
   以管理员身份运行:
-    C:\ddns-manager\ddns-installer.exe -uninstall
+    C:\ddns-agent\ddns-installer.exe -uninstall
 `
 
 
@@ -971,49 +978,19 @@ func (s *Server) handleTestDNSKey(w http.ResponseWriter, r *http.Request) {
 // v1.5.34 H5: 增强错误检测 — 增加更多提供商错误模式 + 输出完整捕获日志供人工判断
 // v1.5.36 C2: testDomain 参数强制 API 调用, 设为 "@" 可触发真实 API(避免 nil domains 假验证)
 func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord, testDomain string) (valid bool, detail string) {
-	fn, ok := provider.Registry[dk.Provider]
-	if !ok {
-		return false, fmt.Sprintf("不支持的DNS提供商: %s", dk.Provider)
-	}
-	provider := fn()
-
-	dc := ddnsconfig.DnsConfig{
-		DNS: ddnsconfig.DNS{Name: dk.Provider, ID: dk.AccessKeyID, Secret: dk.AccessKeySecret},
-	}
-	dc.Ipv4.Enable = true
-	dc.Ipv4.GetType = "url"
-	dc.Ipv4.URL = "http://ipv4.icanhazip.com"
-	// v1.5.36 C2: 使用 testDomain 触发真实 API 调用(如 @ 根域名),
-	// 防止 nil domains 导致 provider.Init() 跳过所有 API 调用(假验证)
-	dc.Ipv4.Domains = []string{testDomain}
-	dc.Ipv6.Enable = false
-
-	// 捕获 ddns-go 的 log 输出以检测 API 错误
+	// v1.6.33 P3: 委托给 provider.ValidateKeyOnline (统一注册表单一真相源)
+	// 消除 handlers_admin.go 中的重复 provider 创建逻辑
 	var logBuf bytes.Buffer
 	origWriter := log.Writer()
 	log.SetOutput(io.MultiWriter(origWriter, &logBuf))
 	defer log.SetOutput(origWriter)
 
-	done := make(chan bool, 1)
+	done := make(chan bool, 2) // v1.6.30 H5: buffer=2 防止 ctx 取消后 goroutine 写入阻塞泄漏
 	go func() {
 		defer func() { recover() }()
-		ipv4cache := &util.IpCache{}
-		ipv6cache := &util.IpCache{}
-		provider.Init(&dc, ipv4cache, ipv6cache)
-		// v1.6.27: 必须调用 AddUpdateDomainRecords 触发真实 DNS API 调用
-		// Init() 只做本地设置不验证凭证, 假Key也会通过
-		domains := provider.AddUpdateDomainRecords()
-		// v1.6.28 H3: 检查返回的域名更新状态 — 全部失败则判定 Key 无效
-		// AddUpdateDomainRecords 的返回值包含各域名的 UpdateStatus
-		allFailed := true
-		for _, d := range domains.Ipv4Domains {
-			if d.UpdateStatus != ddnsconfig.UpdatedFailed {
-				allFailed = false
-				break
-			}
-		}
-		if allFailed && len(domains.Ipv4Domains) > 0 {
-			done <- false // 信号: API调用全部失败
+		_, _, err := provider.ValidateKeyOnline(dk.Provider, dk.AccessKeyID, dk.AccessKeySecret, testDomain)
+		if err != nil {
+			done <- false
 			return
 		}
 		done <- true

@@ -18,7 +18,7 @@ DNS 更新状态，实现 DDNS 集中管理。
   1. 将 zip 内所有文件解压到同一目录
   2. 右键 install.bat → 以管理员身份运行
   3. 按向导提示输入：
-     a. 管理端地址（如 https://manager.example.com:30443）
+     a. 管理端地址（如 https://your-server.com:30443）
      b. 安装目录（默认 C:\ddns-manager）
      c. 节点名称（如 win-pc，不可与其他节点重名）
   4. 向导自动完成：注册→安装服务→启动

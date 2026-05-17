@@ -2610,7 +2610,7 @@ function renderSettings(smtp, rl, tz) {
   h += '<div class="form-group"><label>端口</label><input id="smtp-port" value="' + he(smtp.port || '465') + '" style="width:100px"></div></div>';
   // 第三行: 收件人 + 管理端域名
   h += '<div class="form-row"><div class="form-group"><label>收件人</label><input id="smtp-to" value="' + he(smtp.to || '') + '" placeholder="admin@example.com"></div>';
-  h += '<div class="form-group"><label>管理端域名</label><input id="smtp-mgr-url" value="' + he(smtp.manager_url || '') + '" placeholder="如 https://manager.example.com:30443"><div class="tip">邮件中可点击的管理端链接，留空使用服务器 IP:端口</div></div></div>';
+  h += '<div class="form-group"><label>管理端域名</label><input id="smtp-mgr-url" value="' + he(smtp.manager_url || '') + '" placeholder="如 https://your-server.com:30443"><div class="tip">邮件中可点击的管理端链接，留空使用服务器 IP:端口</div></div></div>';
   // 第四行: 证书告警天数 (独立一行)
   h += '<div class="form-row"><div class="form-group"><label>证书告警天数</label><input id="smtp-cert-days" value="' + he(smtp.cert_expiry_days || '7') + '" style="width:80px"></div></div>';
   h += '<div style="margin:12px 0"><b style="font-size:12px;color:var(--c-text2)">通知事件:</b></div><div class="form-row">';

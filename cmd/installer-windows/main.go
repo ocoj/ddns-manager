@@ -147,7 +147,7 @@ func runInstall() {
 	managerURL := ""
 	baseURL := ""
 	for {
-		fmt.Print("  管理端地址 (如 https://manager.example.com:30443): ")
+		fmt.Print("  管理端地址 (如 https://your-server.com:30443): ")
 		var err error
 		managerURL, err = installer.ReadLine(reader)
 		if err != nil {

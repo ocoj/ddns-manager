@@ -3,22 +3,42 @@
 
 ## v1.6.33 — 2026-05-17
 
-### 🔴 第十三次审计修复 (6项) — 客户端升级/日志完整性/代码一致性
+### 🔴 第十三次审计修复 (13项) — 客户端升级/日志完整性/代码一致性/安装器
 
-#### Critical (3项)
+#### Critical (4项)
 - **P1**: upgrade_windows.go — Phase 2 增加版本化二进制写入 `copyFile(newBinaryPath, versionedPath)`, 对齐 Linux 版完整 `io.Copy` 流程
 - **P2**: dns_updater.go — `segErrors` 移除有缺陷的 `len(segErrors) < len(DnsConf)` 条件, 防止多段配置时错误被静默丢弃
 - **P3**: handlers_admin.go — `testDNSKeyOnline` 委托给 `provider.ValidateKeyOnline`, 消除重复 provider 创建逻辑, 统一注册表为单一真相源
+- **P7**: handlers_nodes.go — Manager存"1.6.33" vs Agent报"v1.6.33"版本号判等用`==`字符串比较, 改为`CompareSemVer()`, 修复升级永远无法标记完成的根因
 
-#### High (3项)
+#### High (4项)
 - **P4**: handlers_nodes.go — DNS 更新失败时独立记录 `dns-update` 类别错误日志, 不再依赖心跳 detail 字符串截断
 - **P5**: main.go — `sendDDNSHealthHeartbeat` 补全 CertErrors 字段, 确保证书部署错误通过跟进心跳上报
 - **P6**: main.go — `agentLog` 文件时间戳统一为 UTC+RFC3339, 与 `dns_updater.LogBuffer` 格式一致
+- **P10**: installers — 旧机重装(指纹匹配)始终调`/api/register`, Manager端指纹匹配时只更新密码不重建节点, 零手动输入
 
-#### 🧪 新增测试
-- TestSegErrorsMultipleSegments — 多段配置 segErrors 索引完整性
-- TestFollowupHeartbeatCertErrors — 跟进心跳 CertErrors 字段验证
-- TestAgentLogUTCTimezone — agentLog 时间戳 UTC 格式一致性
+#### Medium/Low (5项)
+- **P8**: server.go — `/bin/`和`/dl/`路由增加HEAD方法支持, 修复代理HEAD健康检查返回404
+- **P9**: installer/util.go — `CopyFile`内部增加`os.MkdirAll`, 修复首次安装时目录不存在导致的"系统找不到路径"错误
+- **P11**: install.bat — `pushd`+`setlocal enabledelayedexpansion`+相对路径, 修复括号路径(如`...(1)`)导致cmd解析失败
+- **P12**: 去硬编码域名 — 安装器/WebUI/README占位符改为通用示例`your-server.com`
+- **P13**: install.sh自动跟随域名 — `__MANAGER_URL__`占位符+Manager动态替换+NPM精确匹配location传`$http_host`保留端口
+
+#### 🔧 NPM 反代配置 (P13)
+在NPM Custom配置中添加精确匹配location块, 确保`install.sh`下载时自动填入正确的域名+端口:
+```nginx
+location = /bin/install.sh {
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_pass http://172.17.0.1:9877;
+}
+```
+详细说明见 `docs/架构与实现.md §16.5.1`
+
+#### 🧪 新增测试 (6个)
+- TestSegErrorsMultipleSegments / TestFollowupHeartbeatCertErrors / TestAgentLogUTCTimezone
+- TestProviderValidateKeyOnline / TestDNSUpdateFailedDomainsReporting / TestVersionedBinaryWrite
 
 
 ## v1.6.30 — 2026-05-17

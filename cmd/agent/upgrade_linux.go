@@ -15,7 +15,8 @@ import (
 )
 
 // replaceRunningBinary 用版本化文件名+符号链接替换当前运行的 Agent。
-// 下载 → 写入 node-agent-v{VERSION}-{os}-{arch} → 更新符号链接 → 删旧版。
+// 写入新二进制 node-agent-v{VERSION}-{os}-{arch} → 更新符号链接 → 删旧版。
+// (下载由 selfUpgrade 在调用前完成)
 // 符号链接确保 systemd timer 无需改配置即可指向新版本。
 //
 // v1.5.37: 符号链接原子替换 — 通过 tmpLink + os.Rename 避免 Remove→Symlink
@@ -35,7 +36,12 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	defer src.Close()
 
 	dir := filepath.Dir(curExe)
-	oldName := filepath.Base(curExe) // e.g. "node-agent-v1.5.2-linux-amd64"
+	// v1.6.29 H6: 解析符号链接到真实文件名, 避免删除 "node-agent" (symlink) 而非真实二进制
+	resolvedExe := curExe
+	if rp, err := filepath.EvalSymlinks(curExe); err == nil {
+		resolvedExe = rp
+	}
+	oldName := filepath.Base(resolvedExe) // e.g. "node-agent-v1.5.2-linux-amd64"
 
 	// 构建版本化文件名: node-agent-v{VERSION}-{os}-{arch}
 	// v1.6.10 L2: 增加时间戳兜底, 防止版本号提取失败时生成无效文件名

@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v1.6.29 — 2026-05-17
+
+### 🔴 全量审计修复 (14项) — 客户端升级/证书推送/心跳上报/日志链路
+
+#### Critical (5项)
+- **C1**: Windows升级助手 `upgrade_helper.exe` 纳入构建脚本 — _v1.6.28 从未编译, 永久走批处理降级_
+- **C2**: 证书加载失败时保留旧hash — _清空hash导致每5分钟重推证书永久循环_
+- **C3**: `sendDDNSHealthHeartbeat` 增加 FailedDomains/LastErrorDetail 字段 — _跟进心跳缺失诊断信息_
+- **C4**: `SaveDNSKeys` 补设 `dnsKeysCacheLoaded` 标志 — _延迟加载时缓存状态不一致_
+- **C5**: 升级助手 `sc start` 后轮询验证 RUNNING 状态 (最多30s) — _新二进制崩溃→启动成功假象→永久离线_
+
+#### High (5项)
+- **H1**: DNS提供商标识统一到 `provider.Registry` 单一真相源 — _消除 model.go/handlers_admin.go/测试 三份维护_
+- **H2**: `collectCertHashes` 合并磁盘扫描到 WalkDir goroutine — _30s超时统一保护, 消除NFS挂载阻塞风险_
+- **H3**: `renderDDNSConfig` YAML构建后清除内存中的 Secret — _防止未来调试日志泄露明文密钥_
+- **H5**: 证书绑定验证移到审批判断之前 — _已审批节点证书被删后不验证→推送循环_
+- **H6**: Linux升级删除旧二进制前解析符号链接 — _删除 "node-agent" 而非真实版本化文件_
+- **H7**: Linux `reloadService` 重启后轮询 `is-active` 验证 — _restart 返回成功但服务未读取新证书_
+
+#### Medium (3项)
+- **M4**: `ensureSymlink` 排除 `.new` 临时升级文件
+- **M5**: 心跳401/403认证失败不重试 — _凭证错误重试无意义_
+- **L1**: `upgrade_linux.go` 注释修正（下载→写入）
+
+#### 🧪 部署状态
+- Manager (10.0.0.1): v1.6.29 ✅
+- 二进制上传: 4平台Agent + upgrade_helper + sha256 全部到位
+- 升级推送: agent_version=1.6.29 已设置, UpgradeState 已清空
+- 客户端待心跳自动升级...
+
+
 ## v1.6.28 — 2026-05-17
 
 ### 🔴 全量安全审计与修复 (24项)

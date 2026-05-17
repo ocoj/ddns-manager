@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -37,6 +38,8 @@ import (
 
 // v1.5.34 C1: 降级拒绝 sentinel error，与升级成功/失败区分
 var errDowngradeBlocked = fmt.Errorf("downgrade blocked")
+// v1.6.29 M5: 认证失败 sentinel, 心跳重试循环遇此错误跳过重试
+var errAuthFailed = fmt.Errorf("auth failed")
 
 // version is set at build time via -ldflags "-X main.version=x.y.z"
 var version = "dev"
@@ -203,7 +206,8 @@ func ensureSymlink() {
 	var bestName string
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasPrefix(name, "node-agent-v") || e.IsDir() {
+		// v1.6.29 M4: 排除 .new 临时升级文件, 防止选中未完成的升级二进制
+		if !strings.HasPrefix(name, "node-agent-v") || e.IsDir() || strings.HasSuffix(name, ".new") {
 			continue
 		}
 		// 提取版本号: node-agent-v1.5.34-linux-amd64 → 1.5.34
@@ -555,6 +559,11 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.Heart
 	}
 	defer resp.Body.Close()
 
+	// v1.6.29 M5: 检测认证失败 (401/403), 返回 sentinel error 阻止重试
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("%w: HTTP %d", errAuthFailed, resp.StatusCode)
+	}
+
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50MB (多证书场景)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
@@ -574,8 +583,8 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.Heart
 	return &hr, nil
 }
 
-// sendDDNSHealthHeartbeat v1.6.28 H1: 配置变更后 DNS 更新失败时发送跟进心跳
-// 仅携带 DDNSHealth + IPv4/IPv6, 不请求配置/证书/升级, 不等 5 分钟周期
+// sendDDNSHealthHeartbeat v1.6.28 H1+v1.6.29 C3: 配置变更后 DNS 更新失败时发送跟进心跳
+// 携带完整 DDNSHealth + IPv4/IPv6 + FailedDomains + LastErrorDetail, 不等 5 分钟周期
 func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
@@ -585,18 +594,21 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
 			DDNSHealth: &model.DDNSHealthInfo{
-				Running:   status.Running,
-				LastOK:    status.LastOK,
-				LastError: status.LastError,
-				Status:    "ERR",
-				StatusMsg: fmt.Sprintf("配置变更后DNS更新失败: %s", status.LastError),
+				Running:         status.Running,
+				LastOK:          status.LastOK,
+				LastError:       status.LastError,
+				LastErrorDetail: status.LastErrorDetail,
+				FailedDomains:   status.FailedDomains,
+				Status:          "ERR",
+				StatusMsg:       fmt.Sprintf("配置变更后DNS更新失败: %s", status.LastError),
 			},
 		},
 	}
 	if _, err := sendHeartbeat(cfg, req); err != nil {
 		log.Printf("[dns] 跟进心跳发送失败: %v", err)
+		agentLog("跟进心跳发送失败: %v", err)
 	} else {
-		log.Printf("[dns] 跟进心跳已发送 (配置变更后DNS失败已上报)")
+		log.Printf("[dns] 跟进心跳已发送 (配置变更后DNS失败已上报) %d失败域名", len(status.FailedDomains))
 	}
 }
 
@@ -823,6 +835,7 @@ func reloadService(svc string) bool {
 		return false
 	}
 	// Linux: try reload first (nginx -s reload, systemctl reload), then restart
+	// v1.6.29 H7: restart 后等待服务激活, 确保证书已被新进程读取
 	_, err := exec.Command("systemctl", "reload", svc).CombinedOutput()
 	if err != nil {
 		// reload not supported, try restart
@@ -830,14 +843,22 @@ func reloadService(svc string) bool {
 		if err2 != nil {
 			log.Printf("[cert] 服务重载失败 %s: %v: %s", svc, err2, string(out2))
 			return false
-		} else {
-			log.Printf("[cert] 服务已重启: %s", svc)
-			return true
 		}
-	} else {
-		log.Printf("[cert] 服务已重载: %s", svc)
-		return true
+		// 等待服务进入 active 状态 (最多 5s), 确保证书文件已被新进程读取
+		for i := 0; i < 5; i++ {
+			time.Sleep(1 * time.Second)
+			if outChk, errChk := exec.Command("systemctl", "is-active", "--quiet", svc).CombinedOutput(); errChk == nil {
+				log.Printf("[cert] 服务已重启并激活: %s", svc)
+				return true
+			} else {
+				_ = outChk
+			}
+		}
+		log.Printf("[cert] 服务已重启(激活验证超时): %s", svc)
+		return true // 重启命令成功, 即使激活验证超时也认为成功
 	}
+	log.Printf("[cert] 服务已重载: %s", svc)
+	return true
 }
 
 // recycleIISAppPools recycles all IIS application pools so the new certificate
@@ -926,6 +947,8 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 	defer cancel()
 	done := make(chan struct{}, 1)
 	go func() {
+		defer func() { done <- struct{}{} }()
+		// Phase 1: WalkDir 扫描 .cert_hash 文件
 		filepath.WalkDir(cfg.CertPath, func(p string, d os.DirEntry, err error) error {
 			select {
 			case <-ctx.Done():
@@ -953,96 +976,63 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			}
 			return nil
 		})
-		done <- struct{}{}
+		if ctx.Err() != nil { return }
+		// Phase 2+3: 磁盘证书扫描 (v1.6.29 H2: 并入 goroutine, 受 30s 超时保护)
+		entries, _ := os.ReadDir(cfg.CertPath)
+		hasRootCerts := false
+		for _, e := range entries {
+			if ctx.Err() != nil { return }
+			if !e.IsDir() && isCertFile(e.Name()) { hasRootCerts = true; break }
+		}
+		if hasRootCerts {
+			var rootFiles []string
+			for _, e := range entries {
+				if e.IsDir() || !isCertFile(e.Name()) { continue }
+				rootFiles = append(rootFiles, e.Name())
+			}
+			sort.Strings(rootFiles)
+			h := sha256.New()
+			for _, fn := range rootFiles {
+				if data, err := os.ReadFile(filepath.Join(cfg.CertPath, fn)); err == nil { h.Write(data) }
+			}
+			rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
+			mu.Lock()
+			if _, exists := result[cfg.CertPath]; !exists { result[cfg.CertPath] = rootHash }
+			mu.Unlock()
+		}
+		for _, e := range entries {
+			if ctx.Err() != nil { return }
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") { continue }
+			subDir := filepath.Join(cfg.CertPath, e.Name())
+			if _, err := os.Stat(filepath.Join(subDir, ".cert_hash")); err == nil { continue }
+			certFiles, _ := os.ReadDir(subDir)
+			var files []string
+			for _, cf := range certFiles {
+				if cf.IsDir() || cf.Name() == "meta.json" { continue }
+				files = append(files, cf.Name())
+			}
+			if len(files) == 0 { continue }
+			sort.Strings(files)
+			h := sha256.New()
+			for _, fn := range files {
+				if data, err := os.ReadFile(filepath.Join(subDir, fn)); err == nil { h.Write(data) }
+			}
+			diskHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
+			mu.Lock()
+			if _, exists := result[e.Name()]; !exists { result[e.Name()] = diskHash }
+			mu.Unlock()
+		}
 	}()
+	// v1.6.29 H2: 全部扫描在 goroutine 内完成, 统一 30s 超时保护
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		log.Printf("[cert] 证书目录遍历超时 (30s): %s (可能是NFS挂载卡住)", cfg.CertPath)
 	}
-
-	// v1.5.41: 扫描磁盘上的证书文件, 为没有 .cert_hash 的部署计算 hash。
-	// 对齐 win-acme 设计: 管理员手动绑定证书到 IIS 后, Agent 自动识别并上报。
-	entries, _ := os.ReadDir(cfg.CertPath)
-	// 先检查 CertPath 根目录下的证书文件 (适用于 TargetPath=CertPath 的直接部署)
-	hasCertFiles := false
-	for _, e := range entries {
-		if !e.IsDir() && isCertFile(e.Name()) {
-			hasCertFiles = true
-			break
-		}
-	}
-	if hasCertFiles {
-		// CertPath 根目录下存在证书文件 → 计算 SHA256 作为 cert_hash
-		var rootFiles []string
-		for _, e := range entries {
-			if e.IsDir() || !isCertFile(e.Name()) {
-				continue
-			}
-			rootFiles = append(rootFiles, e.Name())
-		}
-		sort.Strings(rootFiles)
-		h := sha256.New()
-		for _, fn := range rootFiles {
-			data, err := os.ReadFile(filepath.Join(cfg.CertPath, fn))
-			if err != nil {
-				continue
-			}
-			h.Write(data)
-		}
-		rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
-		mu.Lock()
-		if _, exists := result[cfg.CertPath]; !exists {
-			result[cfg.CertPath] = rootHash
-		}
-		mu.Unlock()
-		log.Printf("[cert] 从磁盘(CertPath根)计算证书hash: %s...", rootHash[:16])
-	}
-	// 再扫描子目录 (用于 TargetPath 指向子目录的部署)
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		subDir := filepath.Join(cfg.CertPath, e.Name())
-		// 跳过已有 .cert_hash 的目录 (已在 WalkDir 中处理)
-		if _, err := os.Stat(filepath.Join(subDir, ".cert_hash")); err == nil {
-			continue
-		}
-		// 检查是否包含证书文件 (fullchain.pem / cert.pem)
-		certFiles, _ := os.ReadDir(subDir)
-		var files []string
-		for _, cf := range certFiles {
-			if cf.IsDir() || cf.Name() == "meta.json" {
-				continue
-			}
-			files = append(files, cf.Name())
-		}
-		if len(files) == 0 {
-			continue
-		}
-		// 按文件名排序后计算 SHA256 (对齐 Manager 侧 SaveCertBundle 的哈希算法)
-		sort.Strings(files)
-		h := sha256.New()
-		for _, fn := range files {
-			data, err := os.ReadFile(filepath.Join(subDir, fn))
-			if err != nil {
-				continue
-			}
-			h.Write(data)
-		}
-		diskHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
-		mu.Lock()
-		// v1.5.41: 用子目录名(BundleName)作为 key, 对齐 Manager 端 hashKey 匹配逻辑
-		dirName := e.Name()
-		if _, exists := result[dirName]; !exists {
-			result[dirName] = diskHash
-		}
-		mu.Unlock()
-		log.Printf("[cert] 从磁盘计算证书hash: %s → %s...", dirName, diskHash[:16])
-	}
-
 	return result
 }
+
+// ── newHTTPClient ──
 
 // newHTTPClient returns an http.Client that clones http.DefaultTransport
 // (preserving HTTP/2, connection pooling) with optional TLS verification skip.
@@ -1824,16 +1814,26 @@ func main() {
 			ch := make(chan os.Signal, 1)
 			signal.Notify(ch, os.Interrupt)
 			log.Printf("[daemon] %s 已启动, 版本=%s", runtime.GOOS, version)
-			// v1.5.20 H1: 心跳失败后 30s×3 快速重试，防止网络抖动导致 DNS 中断 5 分钟
+			// v1.5.20 H1+v1.6.29 M5: 心跳失败后 30s×3 快速重试 (认证失败不重试)
 			doHeartbeatWithRetry := func() {
 				if err := doHeartbeat(cfg); err != nil {
 					log.Printf("[daemon] 心跳失败: %v", err)
+					// v1.6.29 M5: 认证失败 (401/403) 不重试 — 凭证无效, 重试无意义
+					if errors.Is(err, errAuthFailed) {
+						log.Printf("[daemon] 认证失败, 跳过重试 (请检查节点凭证或审批状态)")
+						return
+					}
 					for i := 0; i < 3; i++ {
 						select {
 						case <-time.After(30 * time.Second):
 							log.Printf("[daemon] 第%d次重试...", i+1)
 							if err := doHeartbeat(cfg); err != nil {
 								log.Printf("[daemon] 重试%d失败: %v", i+1, err)
+								// 重试中发现认证失败时立即停止
+								if errors.Is(err, errAuthFailed) {
+									log.Printf("[daemon] 认证失败(重试中), 停止重试")
+									return
+								}
 							} else {
 								log.Printf("[daemon] 重试%d成功", i+1)
 								return

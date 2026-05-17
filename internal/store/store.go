@@ -396,8 +396,9 @@ func (s *ManagerStore) SaveDNSKeys(keys map[string]*model.DNSKeyRecord) error {
 	if err != nil {
 		return err
 	}
-	// Write-through: persist + update cache
+	// Write-through: persist + update cache (v1.6.29 C4: 设置 loaded 标志)
 	s.dnsKeysCache = keys
+	s.dnsKeysCacheLoaded = true
 	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
 }
 

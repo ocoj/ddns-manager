@@ -128,8 +128,8 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 校验 DNS provider 名称 — 防止拼写错误导致后续配置渲染失败
-	if !model.IsKnownDNSProvider(req.Provider) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("未知的DNS提供商: %q (支持的提供商: %s)", req.Provider, strings.Join(model.KnownDNSProviders(), ", ")))
+	if !provider.IsKnown(req.Provider) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("未知的DNS提供商: %q (支持的提供商: %s)", req.Provider, strings.Join(provider.Names(), ", ")))
 		return
 	}
 	keys, _ := s.store.LoadDNSKeys()

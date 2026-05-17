@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kk/ddns-manager/internal/model"
+	"github.com/kk/ddns-manager/internal/provider"
 )
 
 // TestNodeApproval_NewRegistrationDefault 验证新注册节点默认 Approved=false（边界条件）。
@@ -97,23 +98,24 @@ func TestDNSProviderValidation(t *testing.T) {
 	if !model.IsKnownDNSProvider("cloudflare") {
 		t.Error("cloudflare 应为已知 DNS provider")
 	}
-	if !model.IsKnownDNSProvider("tencentcloud") {
+	// v1.6.29 H1: 使用 provider.IsKnown 替代 model.IsKnownDNSProvider
+	if !provider.IsKnown("tencentcloud") {
 		t.Error("tencentcloud 应为已知 DNS provider")
 	}
 
 	// 边界: 未知 provider
-	if model.IsKnownDNSProvider("") {
+	if provider.IsKnown("") {
 		t.Error("空字符串不应为已知 DNS provider")
 	}
-	if model.IsKnownDNSProvider("alidn") { // 少了 s
+	if provider.IsKnown("alidn") { // 少了 s
 		t.Error("alidn (拼写错误) 不应为已知 DNS provider")
 	}
-	if model.IsKnownDNSProvider("unknown_provider") {
+	if provider.IsKnown("unknown_provider") {
 		t.Error("unknown_provider 不应为已知 DNS provider")
 	}
 
-	// 验证 provider 列表非空
-	providers := model.KnownDNSProviders()
+	// 验证 provider 列表非空 (v1.6.29 H1: 使用 provider.Registry 单一真相源)
+	providers := provider.Names()
 	if len(providers) < 28 {
 		t.Errorf("已知 DNS provider 数量不应少于 28, 实际 %d", len(providers))
 	}

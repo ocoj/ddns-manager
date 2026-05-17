@@ -160,6 +160,29 @@ build_manager() {
     echo "  ✅ ${ver_out}.sha256"
 }
 
+# ── Windows 升级助手 (v1.6.29 C1: 纳入构建, 替代不可靠批处理降级) ──
+
+build_windows_helper() {
+    local arch="$1"
+    echo ""
+    echo "── Building Windows Upgrade Helper ($arch) ──"
+
+    cd "$PROJECT_DIR/cmd/upgrade-helper"
+
+    out="$BUILD_DIR/upgrade_helper-windows-${arch}.exe"
+    GOOS=windows GOARCH="$arch" CGO_ENABLED=0 \
+        go build -trimpath -ldflags "-s -w" -o "$out" .
+
+    # versioned: upgrade_helper-v{VERSION}-windows-amd64.exe
+    ver_out="$BUILD_DIR/upgrade_helper-v${VER_NUM}-windows-${arch}.exe"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
+
+    echo "  ✅ $out ($(du -h "$out" | cut -f1))"
+    echo "  ✅ $ver_out (versioned)"
+    sha256sum "$ver_out" | while read h f; do echo "$h  $(basename "$f")"; done > "${ver_out}.sha256"
+    echo "  ✅ ${ver_out}.sha256"
+}
+
 # ── Installer ──
 
 build_installer() {
@@ -239,6 +262,7 @@ pack_windows_zip() {
 # ── Build all ──
 
 build_windows amd64
+build_windows_helper amd64
 build_linux amd64
 build_linux arm64
 build_linux arm    # Raspberry Pi 3 (32-bit) — Go标准命名, 文件名与detectPlatform一致

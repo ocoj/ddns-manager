@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -32,17 +33,25 @@ func (s *agentService) Execute(args []string, r <-chan svc.ChangeRequest, status
 		detectInstallDir()
 		initAgentLog()
 		log.Printf("[daemon] Windows Service started, version=%s", version)
-		// v1.5.20 H1: 心跳失败后 30s×3 快速重试，防止网络抖动导致 DNS 中断 5 分钟
+		// v1.5.20 H1+v1.6.29 M5: 心跳失败后 30s×3 快速重试 (认证失败不重试)
 		doHeartbeatWithRetry := func() {
 			if err := doHeartbeat(s.cfg); err != nil {
 				log.Printf("[daemon] 心跳失败: %v", err)
-				// 快速重试: 30s × 3 次，使用 select+stopCh 可中断
+				// v1.6.29 M5: 认证失败 (401/403) 不重试 — 凭证无效, 重试无意义
+				if errors.Is(err, errAuthFailed) {
+					log.Printf("[daemon] 认证失败, 跳过重试 (请检查节点凭证或审批状态)")
+					return
+				}
 				for i := 0; i < 3; i++ {
 					select {
 					case <-time.After(30 * time.Second):
 						log.Printf("[daemon] 第%d次重试...", i+1)
 						if err := doHeartbeat(s.cfg); err != nil {
 							log.Printf("[daemon] 重试%d失败: %v", i+1, err)
+							if errors.Is(err, errAuthFailed) {
+								log.Printf("[daemon] 认证失败(重试中), 停止重试")
+								return
+							}
 						} else {
 							log.Printf("[daemon] 重试%d成功", i+1)
 							return

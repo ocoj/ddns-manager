@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -142,8 +143,8 @@ func replaceBinary(newExe, curExe string) bool {
 	return true
 }
 
-// restartService 恢复服务自动启动并启动服务。
-// sc config start= auto → sc start
+// restartService 恢复服务自动启动并启动服务, 轮询验证 RUNNING 状态。
+// sc config start= auto → sc start → sc query 轮询 RUNNING (最多30s)
 func restartService() {
 	fmt.Printf("[%s] 恢复服务自动启动...\n", time.Now().Format(time.RFC3339))
 	out, err := exec.Command("sc", "config", "node-agent", "start=", "auto").CombinedOutput()
@@ -164,12 +165,38 @@ func restartService() {
 		if err != nil {
 			fmt.Printf("[%s] sc start 重试仍失败: %v %s\n",
 				time.Now().Format(time.RFC3339), err, string(out))
-		} else {
-			fmt.Printf("[%s] sc start 重试成功\n", time.Now().Format(time.RFC3339))
+			return
 		}
+		fmt.Printf("[%s] sc start 重试成功\n", time.Now().Format(time.RFC3339))
 	} else {
-		fmt.Printf("[%s] 服务启动成功\n", time.Now().Format(time.RFC3339))
+		fmt.Printf("[%s] sc start 返回成功\n", time.Now().Format(time.RFC3339))
 	}
+
+	// v1.6.29 C5: 轮询验证服务进入 RUNNING 状态 (最多 30s)
+	// 防止新二进制有bug导致启动即崩溃, sc start 报告成功但服务立即 STOPPED
+	for i := 0; i < 15; i++ {
+		time.Sleep(2 * time.Second)
+		queryOut, queryErr := exec.Command("sc", "query", "node-agent").CombinedOutput()
+		queryStr := string(queryOut)
+		if queryErr != nil {
+			fmt.Printf("[%s] sc query 失败 (%d/15): %v\n",
+				time.Now().Format(time.RFC3339), i+1, queryErr)
+			continue
+		}
+		if strings.Contains(queryStr, "RUNNING") {
+			fmt.Printf("[%s] 服务验证通过: RUNNING (%d/15)\n",
+				time.Now().Format(time.RFC3339), i+1)
+			return
+		}
+		if strings.Contains(queryStr, "STOPPED") {
+			fmt.Printf("[%s] 服务验证失败: 状态=STOPPED (%d/15), 新二进制可能崩溃\n",
+				time.Now().Format(time.RFC3339), i+1)
+			continue
+		}
+		fmt.Printf("[%s] 等待服务启动 (%d/15)...\n",
+			time.Now().Format(time.RFC3339), i+1)
+	}
+	fmt.Printf("[%s] 服务验证超时 (30s), 状态可能非RUNNING\n", time.Now().Format(time.RFC3339))
 }
 
 // selfDelete 通过 cmd /c 延迟删除自身 (升级助手)。

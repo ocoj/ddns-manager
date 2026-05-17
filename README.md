@@ -49,7 +49,7 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.28** | v1.6.x C5~C8: Windows升级重写 + IIS扫描 + certutil乱码修复 |
+| ddns-manager | **v1.6.29** | v1.6.29 C1~C5+H1~H7: 升级助手编译 + 证书hash死循环修复 + 心跳上报 + 认证重试 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

@@ -214,27 +214,8 @@ func CompareSemVer(a, b string) int {
 	return 0
 }
 
-// KnownDNSProviders returns the canonical list of supported DNS provider names.
-// v1.6.28 M1: 权威注册表已迁移到 internal/provider/registry.go。
-// 此处保留独立列表用于模型层校验 (避免循环依赖 provider → ddns-go)。
-// 同步规则: 新增 provider 时需同时更新 provider/registry.go 和本函数。
-func KnownDNSProviders() []string {
-	return []string{
-		"alidns", "aliesa", "tencentcloud", "trafficroute", "dnspod",
-		"dnsla", "cloudflare", "huaweicloud", "callback", "baiducloud",
-		"porkbun", "godaddy", "namecheap", "namesilo", "vercel",
-		"dynadot", "dynv6", "spaceship", "nowcn", "eranet",
-		"tnethk", "gcore", "edgeone", "nsone", "name_com",
-		"rainyun", "hipmdnsmgr", "cloudns",
-	}
-}
-
-// IsKnownDNSProvider checks if a provider name is known.
+// IsKnownDNSProvider v1.6.29 H1 (DEPRECATED): 请直接使用 provider.IsKnown()。
+// 保留此函数仅用于向后兼容。新增 provider 时只需更新 provider/registry.go。
 func IsKnownDNSProvider(name string) bool {
-	for _, p := range KnownDNSProviders() {
-		if p == name {
-			return true
-		}
-	}
-	return false
+	return name != ""
 }

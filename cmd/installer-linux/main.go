@@ -217,7 +217,6 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	if exists {
 		if existingFP == fingerprint {
 			fmt.Printf("  [!] 节点名 %q 指纹匹配 — 这是旧机重装\n", nodeName)
-			fmt.Println("  将保留原注册信息，无需重新注册")
 		} else {
 			fmt.Printf("  [!] 节点名 %q 已被其他机器注册 (指纹不同)\n", nodeName)
 			for {
@@ -263,6 +262,7 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	fmt.Println("  [4/4] 安装服务")
 
 	// v1.6.32: 指纹匹配时跳过注册(旧机重装)
+	// v1.6.33 P10: 旧机重装必须使用原密码
 	needRegister := !exists || existingFP != fingerprint
 	var password string
 	if needRegister {
@@ -271,8 +271,30 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 			fmt.Printf("  [!] 注册失败: %v\n", err)
 		}
 	} else {
-		fmt.Println("  [OK] 指纹匹配，复用原注册信息")
-		password = installer.GeneratePassword()
+		for {
+			fmt.Print("  请输入原节点密码 (如遗忘请输入 new 重新注册): ")
+			input, err := installer.ReadLine(reader)
+			if err != nil {
+				log.Fatal("取消安装")
+			}
+			input = strings.TrimSpace(input)
+			if input == "" {
+				fmt.Println("  [!] 密码不能为空")
+				continue
+			}
+			if strings.ToLower(input) == "new" {
+				password = installer.GeneratePassword()
+				if err := registerNode(baseURL, nodeName, fingerprint, password, insecure); err != nil {
+					fmt.Printf("  [!] 重新注册失败: %v\n", err)
+					continue
+				}
+				fmt.Println("  [OK] 已重新注册, 密码已更新")
+				break
+			}
+			password = input
+			fmt.Println("  [OK] 使用原密码, 保留注册信息")
+			break
+		}
 	}
 
 	cfg := &model.AgentConfig{

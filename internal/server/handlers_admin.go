@@ -658,6 +658,34 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
+	// v1.6.33 P13: install.sh 动态替换 __MANAGER_URL__ 为请求 Host
+	// 下载 install.sh 时自动填入当前管理端地址, 无需用户手动输入
+	if filename == "install.sh" {
+		content, err := os.ReadFile(resolved)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		// 从请求中推断外部地址 (NPM 代理传递 X-Forwarded-* 头)
+		scheme := "https"
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto // 信任代理头 (NPM 设置 https)
+		} else if r.TLS == nil && !strings.Contains(r.Host, ":30443") {
+			scheme = "http"
+		}
+		host := r.Host
+		// NPM 代理时优先用 X-Forwarded-Host (外部域名), 否则退到 Host (可能被 NPM 重写为 localhost)
+		if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+			host = fwdHost
+		}
+		managerURL := scheme + "://" + host
+		content = bytes.ReplaceAll(content, []byte("__MANAGER_URL__"), []byte(managerURL))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(content)
+		return
+	}
+
 	// ZIP 文件强制下载，触发浏览器另存为对话框
 	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))

@@ -680,6 +680,12 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 			host = fwdHost
 		}
 		managerURL := scheme + "://" + host
+		// 非标准端口: Host头不含端口时从 X-Forwarded-Port 补充
+		if !strings.Contains(host, ":") {
+			if port := r.Header.Get("X-Forwarded-Port"); port != "" && port != "80" && port != "443" {
+				managerURL += ":" + port
+			}
+		}
 		content = bytes.ReplaceAll(content, []byte("__MANAGER_URL__"), []byte(managerURL))
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(content)

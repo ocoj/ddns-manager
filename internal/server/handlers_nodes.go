@@ -149,11 +149,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.store.UpdateAgentConfigAtomic(func(agentCfg *store.AgentConfig) {
 			// v1.6.10 M4: Completed 检查 移到 shouldPush 确定之后
 			// 仅在本次心跳 不会 推送升级时才标记完成, 防止推送后Agent未升级但已完成标记
-			if agentCfg.LatestVersion == "" || agentCfg.LatestVersion == req.Status.AgentVersion {
+			// v1.6.33 P7: 使用 CompareSemVer 替代字符串直接判等
+			// 修复 Manager存"1.6.33" vs Agent报"v1.6.33" 导致的升级完成永不触发
+			if agentCfg.LatestVersion == "" || model.CompareSemVer(agentCfg.LatestVersion, req.Status.AgentVersion) == 0 {
 				// 版本相同 → 标记完成 (如果之前有升级任务)
 				if agentCfg.UpgradeState != nil {
 					if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-						if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+						if job.Completed == "" && model.CompareSemVer(job.TargetVer, req.Status.AgentVersion) == 0 {
 							job.Completed = now.Format(time.RFC3339)
 							agentCfg.UpgradeState[nodeID] = job
 							s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,
@@ -191,7 +193,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			// 若 shouldPush=true (即将推送), 则等 Agent 真正升级后下个心跳再标记
 			if !shouldPush {
 				if job, ok := agentCfg.UpgradeState[nodeID]; ok {
-					if job.Completed == "" && job.TargetVer == req.Status.AgentVersion {
+					// v1.6.33 P7: CompareSemVer 替代字符串判等 (Manager无v前缀 vs Agent带v前缀)
+					if job.Completed == "" && model.CompareSemVer(job.TargetVer, req.Status.AgentVersion) == 0 {
 						job.Completed = now.Format(time.RFC3339)
 						agentCfg.UpgradeState[nodeID] = job
 						s.logMgr.LogWithNode("upgrade", "升级已完成", nodeID,

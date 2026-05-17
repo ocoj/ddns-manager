@@ -774,12 +774,17 @@ func (s *Server) handleDownloadInstaller(w http.ResponseWriter, r *http.Request)
 
 // install.bat 模板 — 与 build/install.bat.in 内容一致。
 // __VERSION__ 运行时替换为实际版本号。
+// v1.6.33 P11: pushd + setlocal 防括号路径(如 "(1)")导致的 cmd 解析错误
 const installBatTemplate = `@echo off
 REM ddns-manager Windows 安装启动器
 REM 用途: 提升管理员权限 → 启动 Go 安装向导
 
+setlocal enabledelayedexpansion
 chcp 65001 >nul
 title ddns-manager v__VERSION__ 安装向导
+
+REM ── 切换到脚本所在目录 (防止括号路径解析错误) ──
+pushd "%~dp0"
 
 echo ============================================
 echo   ddns-manager Windows 节点安装
@@ -789,39 +794,42 @@ echo.
 
 REM ── 检查管理员权限 ──
 net session >nul 2>&1
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo [错误] 请右键以管理员身份运行 install.bat
     echo.
     pause
+    popd
     exit /b 1
 )
 
-REM ── 定位安装器 (同目录) ──
-set "INSTALLER=%~dp0ddns-installer.exe"
-if not exist "%INSTALLER%" (
+REM ── 定位安装器 (当前目录) ──
+if not exist "ddns-installer.exe" (
     echo [错误] 未找到 ddns-installer.exe
     echo        请确保所有文件在同一目录
-    echo        当前目录: %~dp0
+    echo        当前目录: %CD%
     echo.
     pause
+    popd
     exit /b 1
 )
 
 REM ── 启动安装向导 ──
 echo 启动安装向导...
 echo.
-"%INSTALLER%" %*
+"ddns-installer.exe" %*
 
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo.
-    echo [错误] 安装未完成 (错误码: %errorlevel%)
+    echo [错误] 安装未完成 (错误码: !errorlevel!)
     pause
-    exit /b %errorlevel%
+    popd
+    exit /b !errorlevel!
 )
 
 echo.
 echo 安装完成！
 pause
+popd
 `
 
 // README.txt 模板 — __VERSION__ 运行时替换

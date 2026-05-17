@@ -74,12 +74,17 @@ func FindLocalAgent(dir string) string {
 }
 
 // CopyFile copies src to dst with fsync.
+// v1.6.33 P9: 自动创建目标父目录, 防止"目录不存在"错误
 func CopyFile(src, dst string) error {
 	s, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("创建目录 %s: %w", filepath.Dir(dst), err)
+	}
 
 	d, err := os.Create(dst)
 	if err != nil {

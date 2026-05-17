@@ -52,6 +52,15 @@ func runInstall() {
 	}
 
 	hostname, _ := os.Hostname()
+
+	// v1.6.33 P9: 提前创建安装目录，防止 CopyFile 因父目录不存在而报错
+	if err := os.MkdirAll(defaultBaseDir, 0755); err != nil {
+		fmt.Printf("[错误] 无法创建安装目录 %s: %v\n", defaultBaseDir, err)
+		fmt.Print("按任意键退出...")
+		installer.ReadLine(reader)
+		os.Exit(1)
+	}
+
 	fmt.Println("+==========================================+")
 	fmt.Println("|     ddns-manager v2 安装向导 (Windows)    |")
 	fmt.Printf("|     v%-35s|\n", version)

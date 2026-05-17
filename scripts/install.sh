@@ -1,10 +1,10 @@
 #!/bin/sh
 # ddns-manager Linux 一键安装
-#   VERSION=1.6.30 MANAGER_URL=https://your-server.com:30443 bash -c "$(curl -fsSL https://your-server.com:30443/bin/install.sh)"
-#   MANAGER_URL=https://your-server.com:30443 bash -c "$(curl -fsSL https://your-server.com:30443/bin/install.sh)"  # 自动选最新版
+#   VERSION=1.6.30 bash -c "\$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
+#   bash -c "\$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"       # 自动选最新版
 set -e
 
-MANAGER="${MANAGER_URL:-https://your-server.com:30443}"
+MANAGER="${MANAGER_URL:-https://manager.example.com:30443}"
 MANAGER="${MANAGER%/}"
 
 # ── 平台检测 ──

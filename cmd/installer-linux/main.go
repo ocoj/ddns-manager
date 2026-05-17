@@ -261,13 +261,13 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	fmt.Println()
 	fmt.Println("  [4/4] 安装服务")
 
-	// v1.6.33 P10: 始终注册(新装或旧机重装), 旧密码已丢失使用新密码
-	// 409表示节点仍在管理端→需手动删除后重试
+	// v1.6.33 P10: 始终调用注册API
+	// Manager端指纹匹配时只更新密码,不重建节点(审批/配置/证书均保留)
 	var password string
 	password = installer.GeneratePassword()
 	if err := registerNode(baseURL, nodeName, fingerprint, password, insecure); err != nil {
 		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "已注册") {
-			fmt.Printf("  [!] 节点已在管理端注册, 请先登录WebUI删除旧节点后重装\n")
+			fmt.Printf("  [!] 节点名被其他机器占用, 请换名或联系管理员\n")
 			os.Exit(1)
 		}
 		fmt.Printf("  [!] 注册失败: %v\n", err)

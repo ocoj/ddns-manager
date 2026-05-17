@@ -82,7 +82,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodes, _ := s.store.LoadNodes()
-	if _, exists := nodes[req.NodeID]; exists {
+	if existing, exists := nodes[req.NodeID]; exists {
+		// v1.6.33 P10: 同节点+同指纹=旧机重装, 允许更新密码
+		if existing.Fingerprint == req.Fingerprint {
+			hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+			if err != nil {
+				s.logMgr.LogWithNode("节点", "重装-密码更新失败", req.NodeID, "bcrypt 处理失败", "error")
+				jsonErr(w, http.StatusInternalServerError, "服务器内部错误")
+				return
+			}
+			existing.PasswordHash = string(hash)
+			s.store.PutNode(req.NodeID, existing)
+			s.logMgr.LogWithNode("节点", "旧机重装(密码已更新)", req.NodeID, "指纹匹配, 已更新密码", "info")
+			jsonOK(w, map[string]string{"node_id": req.NodeID, "status": "reinstalled"})
+			return
+		}
 		jsonErr(w, http.StatusConflict, "节点已注册")
 		return
 	}

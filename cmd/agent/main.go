@@ -664,12 +664,30 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			continue
 		}
 		// v1.6.28 H6: Agent 端二次校验部署路径, 拒绝路径穿越 (Manager TLS 被绕过时的纵深防御)
-		if filepath.IsAbs(path) || strings.Contains(path, "..") {
-			errMsg := fmt.Sprintf("%s: 拒绝非法部署路径 %q", cu.BundleName, path)
+		// v1.5.xx: 宽鬆處理絕對路徑 — 若在 agentBaseDir 子樹內則接受, 解決 Manager 下發
+		// Agent 自身 CertPath (如 C:\ddns-agent\certs) 被 IsAbs 誤判為非法的問題。
+		if strings.Contains(path, "..") {
+			errMsg := fmt.Sprintf("%s: 拒绝非法部署路径(含..) %q", cu.BundleName, path)
 			log.Printf("[cert] %s", errMsg)
 			agentLog("证书部署: %s", errMsg)
 			certErrors = append(certErrors, errMsg)
 			continue
+		}
+		if filepath.IsAbs(path) {
+			absBase, _ := filepath.Abs(agentBaseDir)
+			cleaned := filepath.Clean(path)
+			rel, err := filepath.Rel(absBase, cleaned)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				errMsg := fmt.Sprintf("%s: 拒绝非法部署路径(越界) %q", cu.BundleName, path)
+				log.Printf("[cert] %s", errMsg)
+				agentLog("证书部署: %s", errMsg)
+				certErrors = append(certErrors, errMsg)
+				continue
+			}
+			path = cleaned
+		} else {
+			// 相对路径基于 agentBaseDir 解析, 避免 Windows Service cwd 不确定
+			path = filepath.Join(agentBaseDir, path)
 		}
 		os.MkdirAll(path, 0o700)
 		hasModernPFX := false

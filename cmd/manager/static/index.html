@@ -1725,9 +1725,9 @@ function certBindingRow(i, b, certs) {
 function addCertBinding() {
   var ct = document.getElementById('ncfg-certs');
   var div = document.createElement('div');
-  // v1.5.20: 自动填入 Agent 上报的证书路径
+  // v1.6.34: 不自动填入完整 CertPath — Manager 会自动拼接 {CertPath}/{BundleName}
+  // 用户留空即可, Agent 上报的 cert_path 仅作提示参考
   var prefill = {};
-  if (window._ncfgCertPath) { prefill.deploy_path = window._ncfgCertPath; }
   div.innerHTML = certBindingRow(Date.now(), prefill, window._ncfgCerts || []);
   ct.appendChild(div.firstElementChild);
 }
@@ -1832,7 +1832,7 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td class="col-prov">' + he(prov) + '</td>';
       h += '<td class="col-ak">' + he(akMasked) + '</td>';
       h += '<td class="col-dom" title="' + he(k.nodes) + '">' + he(k.nodes) + '</td>';
-      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="testDNSKey(\'' + jsStr(k.key) + '\')">测试</button><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
+      h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table></div>';
   }
@@ -1896,15 +1896,6 @@ async function addDNSKey() {
   document.getElementById('dnskey-sk').style.fontStyle = '';
   document.querySelector('#modal-dnskey-add .btn-primary').textContent = '保存';
   openModal('modal-dnskey-add');
-}
-async function testDNSKey(keyName) {
-  toast('正在测试 ' + keyName + '...');
-  var r = await apiJSON('/api/admin/dns-keys/' + encodeURIComponent(keyName) + '/test', {method: 'POST'});
-  if (r.ok) {
-    var d = r.data || {};
-    if (d.valid) { toast(keyName + ': ' + (d.detail || '有效'), 'success'); }
-    else { toast(keyName + ': ' + (d.detail || '无效'), 'error'); }
-  } else { toast('测试失败', 'error'); }
 }
 
 async function editDNSKey(keyName) {

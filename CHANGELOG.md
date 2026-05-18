@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v1.6.34 — 2026-05-18
+
+### 🐛 紧急修复 — Windows Agent 证书部署路径三层联动修复
+
+#### 根因链
+WebUI 自动填入 Agent 完整 CertPath (`C:\ddns-agent\certs`) → Manager 下发绝对路径 → Agent `IsAbs` 拒绝 → 证书部署永久失败
+
+#### Critical (3项)
+- **P0-A**: cmd/agent/main.go — `applyCertUpdates` 路径校验从刚性 `IsAbs` 拒绝改为包容性 `agentBaseDir` 子树校验
+  - 绝对路径解析后校验在 `agentBaseDir` 内则接受
+  - 相对路径基于 `agentBaseDir` 解析（修复 Windows Service cwd 不确定）
+  - 路径穿越 `..` 拦截不变
+- **P0-B**: internal/server/handlers_nodes.go — DeployPath 为空时 Manager 自动构造 `{CertPath}/{BundleName}`
+  - 替代原 v1.5.32 的回退逻辑（回退只发 CertPath 不拼 BundleName → 扁平写入绕过 v1.5.41 子目录隔离）
+  - 每个证书独立子目录, 多证书不覆盖, 路径在 Manager 端可控可审计
+- **P0-C**: cmd/manager/static/index.html — 新建证书绑定时不再自动填入完整 CertPath
+  - 用户留空 → Manager 自动构造 → 最可控
+  - Agent 上报的 cert_path 仅作 placeholder 提示
+
+
 ## v1.6.33 — 2026-05-17
 
 ### 🔴 第十三次审计修复 (13项) — 客户端升级/日志完整性/代码一致性/安装器

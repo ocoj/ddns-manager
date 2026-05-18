@@ -303,10 +303,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s 所有文件加密失败", binding.BundleName), "warning")
 			continue
 		}
-		// v1.5.32: DeployPath 为空时取 Agent 上报的真实 CertPath, 保证 Manager/Agent 路径一致
+		// v1.6.34: DeployPath 为空时 Manager 自动构造 {CertPath}/{BundleName}
+		// 每个证书独立子目录, 避免多证书覆盖; Agent 端二次校验在 agentBaseDir 内
 		targetPath := binding.DeployPath
-		if targetPath == "" {
-			targetPath = req.Status.CertPath
+		if targetPath == "" && req.Status.CertPath != "" && binding.BundleName != "" {
+			targetPath = req.Status.CertPath + "/" + binding.BundleName
 		}
 		resp.CertUpdates = append(resp.CertUpdates, &model.CertUpdate{
 			CertHash: bundle.Hash, BundleName: binding.BundleName,

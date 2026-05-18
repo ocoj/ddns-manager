@@ -1,6 +1,16 @@
 # CHANGELOG
 
 
+## v1.6.35 — 2026-05-19
+
+### ✨ WebUI 增强 — 证书绑定路径预览
+
+- **P0-A**: cmd/manager/static/index.html — DeployPath 留空时显示 Manager 自动拼接的实际路径预览
+  - 切换证书下拉 → 预览实时更新
+  - 手动填写 DeployPath → 预览自动隐藏（以用户输入为准）
+  - `updateCertPathPreview()` 联动 select + input 双向触发
+
+
 ## v1.6.34 — 2026-05-18
 
 ### 🐛 紧急修复 — Windows Agent 证书部署路径三层联动修复

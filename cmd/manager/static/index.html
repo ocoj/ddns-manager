@@ -1709,7 +1709,7 @@ function addDomain(prefix) {
 }
 function certBindingRow(i, b, certs) {
   var arr = certs || window._ncfgCerts || [];
-  var h = '<div class="form-inline" style="margin-bottom:6px"><select class="ncfg-cert-name" style="flex:1">';
+  var h = '<div class="form-inline" style="margin-bottom:6px;flex-wrap:wrap"><select class="ncfg-cert-name" style="flex:1" onchange="updateCertPathPreview(this)">';
   var cur = b.bundle_name || '';
   arr.forEach(function(c) {
     var n = c.bundle_name || c.name || '';
@@ -1718,9 +1718,32 @@ function certBindingRow(i, b, certs) {
   if (arr.length === 0) h += '<option value="">-- 无 --</option>';
   h += '</select>';
   var cpPlaceholder = window._ncfgCertPath ? '客户端路径: ' + window._ncfgCertPath : '部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)';
-  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(cpPlaceholder) + '" style="flex:1">';
+  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(cpPlaceholder) + '" style="flex:1" oninput="updateCertPathPreview(this)">';
+  // v1.6.34: DeployPath 留空时显示 Manager 自动拼接的实际路径预览
+  var preview = '';
+  if (!b.deploy_path && window._ncfgCertPath && cur) {
+    preview = window._ncfgCertPath + '/' + cur;
+  }
+  h += '<small class="ncfg-cert-preview" style="display:' + (preview ? 'block' : 'none') + ';color:#888;font-size:11px;margin-top:2px;flex-basis:100%">↳ 实际路径: ' + he(preview) + '</small>';
   h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   return h;
+}
+// v1.6.34: 实时更新证书路径预览 — 切换证书或修改部署路径时联动
+function updateCertPathPreview(el) {
+  var row = el.closest('.form-inline');
+  if (!row) return;
+  var sel = row.querySelector('.ncfg-cert-name');
+  var inp = row.querySelector('.ncfg-cert-path');
+  var preview = row.querySelector('.ncfg-cert-preview');
+  if (!preview) return;
+  var bundle = sel ? sel.value : '';
+  var deployPath = inp ? inp.value.trim() : '';
+  if (!deployPath && window._ncfgCertPath && bundle) {
+    preview.textContent = '↳ 实际路径: ' + window._ncfgCertPath + '/' + bundle;
+    preview.style.display = 'block';
+  } else {
+    preview.style.display = 'none';
+  }
 }
 function addCertBinding() {
   var ct = document.getElementById('ncfg-certs');

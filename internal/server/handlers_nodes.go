@@ -82,9 +82,16 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	case h.Running && h.LastOK:
 		// 成功: 立即清零失败计数器, 状态恢复 OK
 		rec.DNSConsecutiveFailures = 0
-		// v1.6.11 B3: IP全空但DDNS=OK → 标记WARN (配置可能有问题)
-		if req.Status.IPv4 == "" && req.Status.IPv6 == "" && (h.IPv4Msg == "获取失败" || h.IPv6Msg == "获取失败") {
-			h.Status, h.StatusMsg = "WARN", "IP获取失败(检查接口名/获取方式)"
+		// v1.6.46: 协议级独立判定 — IPv4/IPv6 各自检查, 一个好一个坏不隐藏故障
+		var warnParts []string
+		if h.IPv4Enabled && h.IPv4Msg == "获取失败" {
+			warnParts = append(warnParts, "IPv4获取失败")
+		}
+		if h.IPv6Enabled && h.IPv6Msg == "获取失败" {
+			warnParts = append(warnParts, "IPv6获取失败")
+		}
+		if len(warnParts) > 0 {
+			h.Status, h.StatusMsg = "WARN", strings.Join(warnParts, ", ")+"(检查接口名/获取方式)"
 		} else {
 			h.Status, h.StatusMsg = "OK", ""
 		}
@@ -97,8 +104,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.Status, h.StatusMsg = "WARN", fmt.Sprintf("上次更新失败(第%d次): %s", rec.DNSConsecutiveFailures, h.LastError)
 		}
+	// v1.6.46: Running 永不置 false (DNSUpdater 对象存在即 Running=true),
+	// 此分支为防御性代码 — 仅在数据结构异常时触发
+	// 真实"DOWN"由心跳超时检测 (now.Sub(n.LastSeen) > 10min) 判定
 	default:
-		h.Status, h.StatusMsg = "DOWN", "updater not running"
+		h.Status, h.StatusMsg = "UNKNOWN", "unexpected state"
 	}
 	if req.Hardware != nil {
 		rec.Hardware = req.Hardware

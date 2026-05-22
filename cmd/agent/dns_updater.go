@@ -73,20 +73,26 @@ func (u *DNSUpdater) Run() DNSStatus {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	// v1.6.46: 所有 IPv4/IPv6 状态字段在函数入口统一重置, 避免 DnsConf 空时
+	// 早期返回携带上次运行残留值 (如 IPv4Enabled=true 但实际已无配置)
+	u.status.IPv4OK = false
+	u.status.IPv6OK = false
+	u.status.IPv4Msg = ""
+	u.status.IPv6Msg = ""
+	u.status.IPv4Enabled = false
+	u.status.IPv6Enabled = false
+
 	if u.cfg == nil || len(u.cfg.DnsConf) == 0 {
 		u.status.LastRun = time.Now()
 		u.status.LastOK = false
 		u.status.LastError = "等待管理端下发DNS配置（节点可能未审批）"
+		// v1.6.46: IPv4/IPv6 字段已在入口重置, 早期返回携带零值而非过期数据
 		return u.status
 	}
 
 	u.status.LastOK = true
 	u.status.LastError = ""
 	u.status.FailedDomains = nil
-	u.status.IPv4OK = false
-	u.status.IPv6OK = false
-	u.status.IPv4Msg = ""
-	u.status.IPv6Msg = ""
 
 	// v1.6.11 B2: 在循环前检测配置中是否启用了IPv4/IPv6
 	for _, dc := range u.cfg.DnsConf {

@@ -2,13 +2,17 @@
 
 ## v1.6.46 — 2026-05-22
 
-### 🟠 DNS 健康状态防抖
-- **连续失败计数**: `NodeRecord` 新增 `dns_consecutive_failures` 字段 — DNS 更新失败时 +1, 成功时清零
-- **ERR 升级阈值**: 单次失败→WARN（"上次更新失败(第1次)"）, 连续 ≥2 次失败→ERR（"连续2次更新失败"）
-- **效果**: DNS API 偶发限流/超时不再触发红色 ERR, 消除 Web UI 上 OK→ERR→OK 抖动
+### 🔴 DDNS健康判定机制重构 (全链路追踪)
+
+**#1 Running死代码**: `default` 分支"DOWN/updater not running"改为防御性"UNKNOWN"注释 — Running 永不置 false
+**#2 假超时修复**: `runDNSUpdateWithTimeout` 用 `prevStatus` 快照替代阻塞 `u.Status()`, 真正返回旧状态而非等锁
+**#3 早期返回残留值**: `DNSUpdater.Run()` IPv4/IPv6 字段重置前置到入口, 消除 DnsConf 空时过期数据污染
+**#4 IPv4Enabled/IPv6Enabled 上报**: `DDNSHealthInfo` 新增 `ipv4_enabled`/`ipv6_enabled` 字段, Manager 据此区分"主动关"和"意外失败"
+**#5 协议级独立WARN**: IPv4/IPv6 各自独立检查, 一个好一个坏不再隐藏故障
+**#6 防抖增强**: 连续失败计数器 (v1.6.45引入) 保持不变 — 单次失败→WARN, ≥2次→ERR
 
 ### 📁 涉及文件
-`internal/model/model.go`, `internal/server/handlers_nodes.go` — 共 2 文件 (仅 Manager 端变更, Agent 无需升级)
+`cmd/agent/dns_updater.go`, `cmd/agent/main.go`, `internal/model/model.go`, `internal/server/handlers_nodes.go` — 共 4 文件
 
 ---
 

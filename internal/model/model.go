@@ -19,10 +19,13 @@ type DDNSHealthInfo struct {
 	Status          string   `json:"status,omitempty"`
 	StatusMsg       string   `json:"status_msg,omitempty"`
 	// v1.6.11 B2: IP获取状态
-	IPv4OK          bool     `json:"ipv4_ok,omitempty"`
-	IPv6OK          bool     `json:"ipv6_ok,omitempty"`
-	IPv4Msg         string   `json:"ipv4_msg,omitempty"`
-	IPv6Msg         string   `json:"ipv6_msg,omitempty"`
+	IPv4OK      bool   `json:"ipv4_ok,omitempty"`
+	IPv6OK      bool   `json:"ipv6_ok,omitempty"`
+	IPv4Msg     string `json:"ipv4_msg,omitempty"`
+	IPv6Msg     string `json:"ipv6_msg,omitempty"`
+	// v1.6.46: IPv4/IPv6 启用标志 — Manager 据此区分"主动关"和"意外失败"
+	IPv4Enabled bool   `json:"ipv4_enabled,omitempty"`
+	IPv6Enabled bool   `json:"ipv6_enabled,omitempty"`
 }
 
 type HeartbeatReq struct {

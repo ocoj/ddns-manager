@@ -316,6 +316,9 @@ func getConfigCacheKey(password, fingerprint string) []byte {
 // by DNSUpdater's mutex), and the next heartbeat's Run() will block until
 // it completes — ensuring no concurrent executions.
 func runDNSUpdateWithTimeout(u *DNSUpdater, timeout time.Duration) DNSStatus {
+	// v1.6.46: 启动 Run() 前保存快照 — 超时后返回真·旧状态, 不阻塞等 u.mu 锁
+	// 旧实现 u.Status() 在 Run() 持锁时阻塞, 2分钟超时形同虚设
+	prevStatus := u.Status()
 	done := make(chan DNSStatus, 1)
 	go func() {
 		done <- u.Run()
@@ -325,8 +328,9 @@ func runDNSUpdateWithTimeout(u *DNSUpdater, timeout time.Duration) DNSStatus {
 	case status := <-done:
 		return status
 	case <-time.After(timeout):
-		log.Printf("[dns] DNS更新超时 (%v), 使用上次已知状态", timeout)
-		return u.Status()
+		log.Printf("[dns] DNS更新超时 (%v), 使用本次运行前状态 (ipv4=%s ipv6=%s lastOK=%v)",
+			timeout, prevStatus.IPv4, prevStatus.IPv6, prevStatus.LastOK)
+		return prevStatus
 	}
 }
 
@@ -473,6 +477,9 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				IPv6OK:          status.IPv6OK,
 				IPv4Msg:         status.IPv4Msg,
 				IPv6Msg:         status.IPv6Msg,
+				// v1.6.46: Manager 据此区分"主动关"和"意外失败"
+				IPv4Enabled:     status.IPv4Enabled,
+				IPv6Enabled:     status.IPv6Enabled,
 			},
 		},
 		ConfigHash: lastConfigHash,  // v1.5.23+v1.6.36 C4: 回传Manager权威hash, 避免yaml往返不稳定导致每心跳重推
@@ -672,6 +679,8 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 				IPv6OK:          status.IPv6OK,
 				IPv4Msg:         buildIPMsg(status.IPv4, status.IPv4Enabled),
 				IPv6Msg:         buildIPMsg(status.IPv6, status.IPv6Enabled),
+				IPv4Enabled:     status.IPv4Enabled,
+				IPv6Enabled:     status.IPv6Enabled,
 				Status:          "ERR",
 				StatusMsg:       fmt.Sprintf("配置变更后DNS更新失败: %s", status.LastError),
 			},

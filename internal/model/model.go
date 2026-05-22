@@ -85,6 +85,10 @@ type NodeRecord struct {
 	Notes        string        `json:"notes,omitempty"`
 	Status       NodeStatus    `json:"status,omitempty"`
 	Hardware     *HardwareInfo `json:"hardware,omitempty"`
+	// v1.6.46: DNS 连续失败计数器 — 防 DNS API 瞬态故障误标 ERR
+	// 心跳中 LastOK=false 时 +1, LastOK=true 时清零
+	// 连续 ≥2 次失败才标记 ERR, 单次失败标记 WARN
+	DNSConsecutiveFailures int `json:"dns_consecutive_failures,omitempty"`
 }
 
 type DNSKeyRecord struct {

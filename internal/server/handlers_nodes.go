@@ -80,6 +80,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		h = &model.DDNSHealthInfo{Status: "DOWN", StatusMsg: "no health data"}
 		rec.Status.DDNSHealth = h
 	case h.Running && h.LastOK:
+		// 成功: 立即清零失败计数器, 状态恢复 OK
+		rec.DNSConsecutiveFailures = 0
 		// v1.6.11 B3: IP全空但DDNS=OK → 标记WARN (配置可能有问题)
 		if req.Status.IPv4 == "" && req.Status.IPv6 == "" && (h.IPv4Msg == "获取失败" || h.IPv6Msg == "获取失败") {
 			h.Status, h.StatusMsg = "WARN", "IP获取失败(检查接口名/获取方式)"
@@ -87,7 +89,14 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			h.Status, h.StatusMsg = "OK", ""
 		}
 	case h.Running && !h.LastOK:
-		h.Status, h.StatusMsg = "ERR", h.LastError
+		// v1.6.46: 连续失败防抖 — 单次失败→WARN, 连续≥2次→ERR
+		// DNS API 偶发限流/超时不应立即标红, 给一次重试机会
+		rec.DNSConsecutiveFailures++
+		if rec.DNSConsecutiveFailures >= 2 {
+			h.Status, h.StatusMsg = "ERR", fmt.Sprintf("连续%d次更新失败: %s", rec.DNSConsecutiveFailures, h.LastError)
+		} else {
+			h.Status, h.StatusMsg = "WARN", fmt.Sprintf("上次更新失败(第%d次): %s", rec.DNSConsecutiveFailures, h.LastError)
+		}
 	default:
 		h.Status, h.StatusMsg = "DOWN", "updater not running"
 	}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,29 @@ type DNSKeyRecord struct {
 	UsedByNodes     []string `json:"used_by_nodes"`
 }
 
+type DomainConfig struct {
+	Domain     string `json:"domain"`
+	DNSKeyName string `json:"dns_key_name,omitempty"` // 空=继承顶层默认
+}
+
+// UnmarshalJSON 兼容旧格式（字符串数组）和新格式（对象数组）。
+func (d *DomainConfig) UnmarshalJSON(data []byte) error {
+	// 旧格式: "example.com" → {domain:"example.com"}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		d.Domain = s
+		return nil
+	}
+	// 新格式: {"domain":"example.com","dns_key_name":"阿里云-生产"}
+	type alias DomainConfig
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*d = DomainConfig(a)
+	return nil
+}
+
 type CertBinding struct {
 	BundleName     string   `json:"bundle_name"`
 	DeployPath     string   `json:"deploy_path"`
@@ -116,6 +140,10 @@ type AgentUpdate struct {
 	Checksum string `json:"checksum"`
 }
 
+// HardwareInfo v1.6.45 C1/M3: 结构体定义包含身份信息(主机名/OS/网卡)和资源指标。
+// Agent 侧 collectHardware() 仅填充身份信息+网卡 — CPU/内存/磁盘字段为管理端专用,
+// 由 internal/server/access_stats.go 通过 sysinfo 包采集 (仅 Linux 管理端部署)。
+// Agent 心跳上报的 hardware 对象中这些资源字段保持零值。
 type HardwareInfo struct {
 	Hostname    string         `json:"hostname"`
 	OS          string         `json:"os"`
@@ -145,22 +173,22 @@ type NodeConfigRequest struct {
 }
 
 type IPv4Config struct {
-	Enable       bool     `json:"enable"`
-	GetType      string   `json:"gettype"`
-	URL          string   `json:"url"`
-	NetInterface string   `json:"netinterface"`
-	Cmd          string   `json:"cmd"`
-	Domains      []string `json:"domains"`
+	Enable       bool           `json:"enable"`
+	GetType      string         `json:"gettype"`
+	URL          string         `json:"url"`
+	NetInterface string         `json:"netinterface"`
+	Cmd          string         `json:"cmd"`
+	Domains      []DomainConfig `json:"domains"`
 }
 
 type IPv6Config struct {
-	Enable       bool     `json:"enable"`
-	GetType      string   `json:"gettype"`
-	URL          string   `json:"url"`
-	NetInterface string   `json:"netinterface"`
-	Cmd          string   `json:"cmd"`
-	IPv6Reg      string   `json:"ipv6reg"`
-	Domains      []string `json:"domains"`
+	Enable       bool           `json:"enable"`
+	GetType      string         `json:"gettype"`
+	URL          string         `json:"url"`
+	NetInterface string         `json:"netinterface"`
+	Cmd          string         `json:"cmd"`
+	IPv6Reg      string         `json:"ipv6reg"`
+	Domains      []DomainConfig `json:"domains"`
 }
 
 // CertToIISBinding maps a cert bundle to an IIS HTTPS binding (Windows only).

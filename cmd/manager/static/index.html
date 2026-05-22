@@ -7,7 +7,8 @@
 <link rel="icon" type="image/png" href="/favicon.png">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<meta name="theme-color" content="#1677ff">
+<meta name="theme-color" content="#1677ff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1a2e" media="(prefers-color-scheme: dark)">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -29,6 +30,8 @@ body.dark input,body.dark select,body.dark textarea{color:#e0e0e0;background:#2a
 body.dark input::placeholder,body.dark textarea::placeholder{color:#666}
 body.dark .btn{background:#3a3a50;color:#d0d0d0;border-color:#555}
 body.dark .btn-primary{background:var(--c-primary);color:#fff}
+body.dark .login-wrap{background:linear-gradient(135deg,#1a1a2e,#16213e)}
+body.dark .login-card{box-shadow:0 4px 24px rgba(0,0,0,.3)}
 @media(prefers-color-scheme:dark){
   body.auto{--c-primary:#4d94ff;--c-primary-bg:#1a2744;--c-primary-hover:#243356;
   --c-bg:#141420;--c-card:#1e1e30;--c-text:#e0e0e0;--c-text2:#9090a0;
@@ -38,6 +41,8 @@ body.dark .btn-primary{background:var(--c-primary);color:#fff}
   body.auto input::placeholder,body.auto textarea::placeholder{color:#666}
   body.auto .btn{background:#3a3a50;color:#d0d0d0;border-color:#555}
   body.auto .btn-primary{background:var(--c-primary);color:#fff}
+  body.auto .login-wrap{background:linear-gradient(135deg,#1a1a2e,#16213e)}
+  body.auto .login-card{box-shadow:0 4px 24px rgba(0,0,0,.3)}
 }
 html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--c-text);background:var(--c-bg)}
 #app{display:flex;height:100vh;overflow:hidden}
@@ -136,7 +141,7 @@ th.sortable{transition:background .15s,color .15s}
 td{padding:10px 12px;border-bottom:1px solid var(--c-border);overflow:hidden;text-overflow:ellipsis}
 tr:hover td{background:var(--c-bg)}
 th{text-align:left}
-/* 操作列 — 统一188px，左对齐，overflow:visible保证下拉菜单 */
+.desk-only{display:block}.mob-only{display:none}
 .col-act{text-align:left;white-space:nowrap;width:188px;overflow:visible}
 /* 徽章列 — 居中窄列 */
 .col-badge{text-align:center;width:70px}
@@ -146,7 +151,7 @@ th{text-align:left}
 /* AccessKey列 — 固定窄列，只显示前6位 */
 .col-ak{width:100px;font-family:Consolas,Monaco,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* DNS Key名称列 */
-.col-dns-name{width:100px;overflow:hidden;text-overflow:ellipsis}
+.col-dns-name{width:188px;overflow:hidden;text-overflow:ellipsis}
 /* DNS提供商列 */
 .col-prov{width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 证书名称列 / ACME email列 */
@@ -210,7 +215,7 @@ th{text-align:left}
 .event-list{max-height:none;overflow-y:auto;font-size:12px}
 .event-item{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid var(--c-border)}
 .event-item:last-child{border-bottom:none}
-.event-time{color:var(--c-text2);white-space:nowrap;min-width:60px;font-family:Consolas,Monaco,monospace}
+.event-time{color:var(--c-text2);white-space:nowrap;width:100px;font-family:Consolas,Monaco,monospace}
 .event-node{color:var(--c-primary);min-width:80px;font-weight:500}
 .event-msg{flex:1;word-break:break-all}
 .event-cat{flex-shrink:0}
@@ -359,18 +364,30 @@ th{text-align:left}
   .ver-table,.bin-table,.ver-table tbody,.bin-table tbody,.ver-table tr,.bin-table tr{display:block;width:100%}
   .ver-table tr,.bin-table tr{padding:8px 0;border-bottom:1px solid var(--c-border)}
   .ver-table td,.bin-table td{padding:2px 0}
-  /* 版本: 节点+系统+状态 一行 */
-  .ver-table .col-up-node,.ver-table .col-up-os,.ver-table .col-up-stat{display:inline-block!important;margin-right:6px;width:auto!important}
-  .col-up-node{font-size:13px!important;font-weight:600}
-  .col-up-os{font-size:11px!important;color:var(--c-text2)}
-  /* 版本: 其余二行 inline */
-  .ver-table td:nth-child(5),.ver-table td:nth-child(6),.ver-table td:nth-child(7){display:inline-block!important;margin-right:6px;font-size:11px;width:auto!important}
-  .ver-table td:nth-child(6) select{height:26px;font-size:11px}
-  /* 二进制: 文件名 block, 大小跟在后面 inline */
-  .bin-table .mono{display:block!important;font-size:12px;font-family:Consolas,Monaco,monospace}
-  .col-bin-size{display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:10px;}
-  .col-bin-ver,.col-bin-time,.bin-table .col-act{display:inline-block!important;margin-right:10px;font-size:11px;width:auto!important}
-  .bin-table .col-act{float:right;margin-right:0}
+  /* 版本: 卡片布局 */
+  .ver-table-wrap{display:none!important}
+  .ver-cards{display:block!important}
+  .ver-card{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .ver-card-r1{display:flex;align-items:center;gap:6px;margin-bottom:4px;min-width:0}
+  .ver-card-name{font-weight:600;font-size:13px;white-space:nowrap}
+  .ver-card-os{color:var(--c-text2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .ver-card-r2{display:flex;align-items:center;gap:4px;font-size:11px}
+  .ver-card-r2 .badge:first-child,.ver-card-r2>:first-child{margin-left:auto}
+  .ver-card-r2 select{height:22px;font-size:11px;max-width:100px;border:1px solid var(--c-input-border)}
+  .ver-card-ver{white-space:nowrap}
+  .ver-card-sep{color:#ccc;font-size:11px}
+  /* 二进制: 卡片布局 */
+  .bin-table-wrap{display:none!important}
+  .bin-cards{display:block!important}
+  .bin-card{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .bin-card-r1{margin-bottom:4px}
+  .bin-card-name{font-size:12px;font-family:Consolas,Monaco,monospace;word-break:break-all}
+  .bin-card-r2{display:flex;align-items:center;gap:4px}
+  .bin-card-size{font-size:11px;color:var(--c-text2);white-space:nowrap}
+  .bin-card-ver{font-size:11px;white-space:nowrap}
+  .bin-card-time{font-size:11px;color:var(--c-text2);white-space:nowrap}
+  .bin-card-sep{font-size:11px;color:var(--c-border)}
+  .bin-card-act{margin-left:auto;display:flex;white-space:nowrap}
   /* DNS/证书/ACME卡片 */
   .dns-table thead,.cert-table thead,.acme-table thead{display:none}
   .dns-table,.cert-table,.acme-table,.dns-table tbody,.cert-table tbody,.acme-table tbody,.dns-table tr,.cert-table tr,.acme-table tr{display:block;width:100%}
@@ -380,20 +397,43 @@ th{text-align:left}
   .dns-table .col-dns-name,.dns-table .col-prov,.col-ak{display:inline-block!important;margin-right:6px;font-size:12px;width:auto!important}
   .dns-table .col-dns-name{font-weight:600}
   .dns-table .col-prov{color:var(--c-primary)}
-  .dns-table .col-dom{display:block!important;font-size:11px;color:var(--c-text2);margin:2px 0;width:100%!important}
-  .dns-table .col-act{display:block!important;width:auto!important;text-align:right}
-  /* 证书: 名称+剩余 行1, SAN+到期+操作 行2 */
-  .cert-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
-  .cert-table .col-badge-sm{display:inline-block!important;width:auto!important}
-  .col-cert-san{display:none!important}
-  .cert-table .col-exp{display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
-  .cert-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  /* DNS: 卡片布局 */
+  .dns-table-wrap{display:none!important}
+  .dns-cards{display:block!important}
+  .dns-card{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .dns-card-r1{display:flex;align-items:baseline;gap:4px;margin-bottom:4px}
+  .dns-card-name{font-weight:600;font-size:13px;white-space:nowrap}
+  .dns-card-prov{font-size:11px;color:var(--c-primary);white-space:nowrap}
+  .dns-card-ak{font-size:10px;color:var(--c-text2);font-family:Consolas,monospace;white-space:nowrap}
+  .dns-card-sep{font-size:11px;color:var(--c-border)}
+  .dns-card-r2{display:flex;align-items:flex-start;gap:6px}
+  .dns-card-nodes{flex:1 1 auto;min-width:0;font-size:11px;color:var(--c-text2);white-space:normal;word-break:break-word;line-height:1.5}
+  .dns-card-act{flex:0 0 auto;display:flex;gap:4px;white-space:nowrap}
+  .desk-only{display:none!important}
+  .mob-only{display:block!important}
+  /* 证书: 卡片布局 */
+  .cert-table-wrap{display:none!important}
+  .cert-cards{display:block!important}
+  .cert-card{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .cert-card-r1{display:flex;align-items:baseline;margin-bottom:4px}
+  .cert-card-name{font-weight:600;font-size:13px;margin-right:6px;white-space:nowrap}
+  .cert-card-san{font-size:11px;color:var(--c-text2);flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .cert-card-r2{display:flex;align-items:center;gap:6px}
+  .cert-card-exp{font-size:11px;color:var(--c-text2)}
+  .cert-card-days{font-size:11px}
+  .cert-card-act{margin-left:auto;display:flex;gap:4px;white-space:nowrap}
   /* ACME: Email+状态 行1, CA+操作 行2 */
-  .acme-table .col-cert-name{display:inline-block!important;font-weight:600;font-size:13px;margin-right:8px;width:auto!important}
-  .acme-table .col-badge-sm{display:inline-block!important;width:auto!important}
-  .acme-table .col-exp{display:none!important}
-  .acme-table td:nth-child(2){display:inline-block!important;font-size:11px;color:var(--c-text2);margin-right:8px;width:auto!important}
-  .acme-table .col-act{display:inline-block!important;width:auto!important;float:right}
+  /* ACME: 卡片布局 */
+  .acme-table-wrap{display:none!important}
+  .acme-cards{display:block!important}
+  .acme-card{padding:8px 0;border-bottom:1px solid var(--c-border)}
+  .acme-card-r1{display:flex;align-items:baseline;gap:4px;margin-bottom:4px}
+  .acme-card-email{font-weight:600;font-size:13px}
+  .acme-card-ca{font-size:11px;color:var(--c-primary)}
+  .acme-card-key{font-size:10px;color:var(--c-text2);font-family:Consolas,monospace}
+  .acme-card-sep{font-size:11px;color:var(--c-border)}
+  .acme-card-r2{display:flex;align-items:center;gap:6px}
+  .acme-card-act{margin-left:auto;display:flex;gap:4px;white-space:nowrap}
   /* 节点卡片: 行1节点名, 行2IP, 行3域名+健康/版本/状态/操作右对齐 */
   .node-table thead{display:none}
   .node-table,.node-table tbody{display:block;width:100%}
@@ -522,8 +562,13 @@ th{text-align:left}
     <img src="/logo.png" width="48" height="48" alt="logo" style="display:block;margin:0 auto 8px">
     <h1>DDNS-Manager</h1>
     <p class="sub">分布式 DDNS 节点管理平台</p>
-    <form id="login-form">
-    <div class="field"><label>管理员密码</label><input type="password" id="login-pwd" placeholder="输入密码" autofocus autocomplete="new-password"></div>
+    <form id="login-form" onsubmit="document.getElementById('login-pwd-real').value=document.getElementById('login-pwd').value">
+    <!-- 隐藏凭据区: Chrome 密码管理器在此保存/填充, username=ddns-manager 确保不和 vw.example.com 混淆 -->
+    <div style="display:none" aria-hidden="true">
+      <input type="text" name="username" value="ddns-manager" autocomplete="username">
+      <input type="password" name="password" id="login-pwd-real" autocomplete="current-password" onchange="var v=document.getElementById('login-pwd');if(v&&!v.value)v.value=this.value">
+    </div>
+    <div class="field"><label>管理员密码</label><input type="password" id="login-pwd" placeholder="输入密码" autofocus autocomplete="off"></div>
     <div class="err" id="login-err"></div>
     <button class="btn-login" id="login-btn" type="submit">登 录</button>
     </form>
@@ -630,8 +675,16 @@ function normalizeNode(id, n) {
   // 提取域名列表: ipv4.domains + ipv6.domains 去重合并
   var domains = [];
   if (cfg) {
-    if (cfg.ipv4 && cfg.ipv4.domains) domains = domains.concat(cfg.ipv4.domains);
-    if (cfg.ipv6 && cfg.ipv6.domains) domains = domains.concat(cfg.ipv6.domains);
+    if (cfg.ipv4 && cfg.ipv4.domains) {
+      cfg.ipv4.domains.forEach(function(d) { 
+        domains.push(typeof d === 'object' ? (d.domain || '') : d);
+      });
+    }
+    if (cfg.ipv6 && cfg.ipv6.domains) {
+      cfg.ipv6.domains.forEach(function(d) {
+        domains.push(typeof d === 'object' ? (d.domain || '') : d);
+      });
+    }
   }
   return {
     id: id,
@@ -773,7 +826,13 @@ function applyTheme(mode) {
   document.body.classList.remove('auto', 'dark');
   if (mode === 'dark') { document.body.classList.add('dark'); }
   else if (mode === 'auto') { document.body.classList.add('auto'); }
-  // light: no class
+  // v1.6.42: 同步更新浏览器顶栏 theme-color
+  var mc = document.querySelector('meta[name="theme-color"]');
+  if (mc) {
+    if (mode === 'dark') { mc.setAttribute('content', '#1a1a2e'); }
+    else if (mode === 'light') { mc.setAttribute('content', '#1677ff'); }
+    else { mc.setAttribute('content', window.matchMedia('(prefers-color-scheme:dark)').matches ? '#1a1a2e' : '#1677ff'); }
+  }
 }
 function setTheme(mode) {
   localStorage.setItem('theme', mode);
@@ -1228,16 +1287,25 @@ function renderDashboard(stats, nodes, events, access) {
     h += '<tr><td colspan="6" class="empty">暂无节点</td></tr>';
   } else {
     nodes.forEach(function(n) {
-      var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 3).join(', ') + (n.domains.length > 3 ? ' +' + (n.domains.length-3) : '') : '-';
+      // v1.6.36: 每个域名一行
+      var domsArr = n.domains || [];
       // sort-friendly computed fields
-      n.domainsStr = (n.domains && n.domains.length) ? n.domains[0] : '\uffff'; // first domain for sort (fallback high)
-      n.status = n.online ? '\u0001在线' : '\u0002离线'; // prefix ensures consistent sort order
+      n.domainsStr = domsArr.length > 0 ? domsArr[0] : '\uffff';
+      n.status = n.online ? '\u0001在线' : '\u0002离线';
       n.healthSort = {OK:'\u0001',ERR:'\u0002',DOWN:'\u0003','-':'\u0004'}[n.health] || '\u0005';
       var ipHtml = he(n.ip || '-');
       if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
       h += '<tr><td class="col-dash-node"><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
       h += '<td class="mono">' + ipHtml + '</td>';
-      h += '<td class="col-dom"><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      h += '<td class="col-dom">';
+      if (domsArr.length > 0) {
+        domsArr.forEach(function(d) {
+          h += '<div style="white-space:normal;line-height:1.5;font-size:11px">' + he(d) + '</div>';
+        });
+      } else {
+        h += '-';
+      }
+      h += '</td>';
       h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
       h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + '</td></tr>';
@@ -1554,7 +1622,6 @@ function renderNodes(nodes) {
       n.healthSort = {'OK':'\u0001','ERR':'\u0002','DOWN':'\u0003','-':'\u0004'}[n.health] || '\u0005';
     });
     nodes.forEach(function(n) {
-      var doms = (n.domains && n.domains.length) ? n.domains.slice(0, 2).join(', ') + (n.domains.length > 2 ? ' +' + (n.domains.length-2) : '') : '-';
       var ipHtml = he(n.ip || '-');
       if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
       h += '<tr>';
@@ -1562,7 +1629,17 @@ function renderNodes(nodes) {
       h += '<td class="mono">' + ipHtml + '</td>';
       var sysInfo = (n.hostname ? he(n.hostname) + ' · ' : '') + he(n.os) + ' / ' + he(n.arch);
       h += '<td class="mono">' + sysInfo + '</td>';
-      h += '<td class="col-dom"><span title="' + he((n.domains||[]).join(', ')) + '">' + he(doms) + '</span></td>';
+      // v1.6.36: 每个域名一行，多域名时提升可读性，操作按键右对齐不受影响
+      h += '<td class="col-dom">';
+      var domsArr = n.domains || [];
+      if (domsArr.length > 0) {
+        domsArr.forEach(function(d) {
+          h += '<div style="white-space:normal;line-height:1.5;font-size:11px">' + he(d) + '</div>';
+        });
+      } else {
+        h += '-';
+      }
+      h += '</td>';
       h += '<td class="col-badge">' + healthBadge(n.health) + '</td>';
       h += '<td class="col-ver mono">' + he(n.version || '-') + '</td>';
       h += '<td class="col-badge">' + statusBadge(n.online) + (n.pending ? ' <span class="badge badge-orange">待审批</span>' : '') + '</td>';
@@ -1660,7 +1737,7 @@ async function openNodeConfig(id) {
   toggleIPSection('ipv6');
   openModal('modal-node-config');
   window._ncfgNode = node;
-  window._ncfgCerts = certs;
+  window._ncfgCerts = certs; window._ncfgProviders = providers; window._ncfgKeys = keys;
 }
 
 function ipSection(title, prefix, cfg, node) {
@@ -1692,19 +1769,28 @@ function ipSection(title, prefix, cfg, node) {
   h += '<div class="form-group" id="ncfg-' + prefix + '-cmd"><label>命令</label><input id="ncfg-' + prefix + '-cmdval" value="' + he(cfg.cmd || '') + '" placeholder="curl -s ifconfig.me"></div>';
   var domains = cfg.domains || [];
   h += '<div class="form-group"><label>域名</label><div id="ncfg-' + prefix + '-domains">';
-  domains.forEach(function(d, i) { h += domainRow(prefix, i, d); });
+  domains.forEach(function(d, i) { h += domainRow(prefix, i, (typeof d==='object'?d:{domain:d,dns_key_name:''})); });
   h += '</div><button class="btn" style="margin-top:4px" onclick="addDomain(\'' + prefix + '\')">+ 添加</button></div>';
   h += '</div>';
   return h;
 }
 
 function domainRow(prefix, i, val) {
-  return '<div class="form-inline" style="margin-bottom:4px"><input value="' + he(val || '') + '" data-prefix="' + prefix + '" data-idx="' + i + '" class="domain-input" style="flex:1" placeholder="example.com"><button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
+  var domain = (typeof val === 'object') ? (val.domain || '') : (val || '');
+  var dnsKey = (typeof val === 'object') ? (val.dns_key_name || '') : '';
+  var providers = window._ncfgProviders || [], keys = window._ncfgKeys || {};
+  var sel = '<select class="domain-dns-select" style="width:120px;margin:0 4px;font-size:12px" data-prefix="' + prefix + '" data-idx="' + i + '"><option value="">默认</option>';
+  providers.forEach(function(p) {
+    var k = keys[p]; var label = (k && k.name) || p;
+    sel += '<option value="' + he(p) + '"' + (p === dnsKey ? ' selected' : '') + '>' + he(label) + '</option>';
+  });
+  sel += '</select>';
+  return '<div class="form-inline" style="margin-bottom:4px"><input value="' + he(domain) + '" data-prefix="' + prefix + '" data-idx="' + i + '" class="domain-input" style="flex:1" placeholder="example.com">' + sel + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
 }
 function addDomain(prefix) {
   var ct = document.getElementById('ncfg-' + prefix + '-domains');
   var div = document.createElement('div');
-  div.innerHTML = domainRow(prefix, Date.now(), '');
+  div.innerHTML = domainRow(prefix, Date.now(), {domain: '', dns_key_name: ''});
   ct.appendChild(div.firstElementChild);
 }
 function certBindingRow(i, b, certs) {
@@ -1717,32 +1803,30 @@ function certBindingRow(i, b, certs) {
   });
   if (arr.length === 0) h += '<option value="">-- 无 --</option>';
   h += '</select>';
-  var cpPlaceholder = window._ncfgCertPath ? '客户端路径: ' + window._ncfgCertPath : '部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)';
-  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(cpPlaceholder) + '" style="flex:1" oninput="updateCertPathPreview(this)">';
-  // v1.6.34: DeployPath 留空时显示 Manager 自动拼接的实际路径预览
-  var preview = '';
+  // v1.6.36: placeholder 动态显示自动路径，省掉独立的预览行；title 悬停显示完整路径
+  var autoPath = '';
   if (!b.deploy_path && window._ncfgCertPath && cur) {
-    preview = window._ncfgCertPath + '/' + cur;
+    autoPath = window._ncfgCertPath + '/' + cur;
   }
-  h += '<small class="ncfg-cert-preview" style="display:' + (preview ? 'block' : 'none') + ';color:#888;font-size:11px;margin-top:2px;flex-basis:100%">↳ 实际路径: ' + he(preview) + '</small>';
+  var ph = autoPath ? '自动路径: ' + autoPath : (window._ncfgCertPath ? '客户端路径: ' + window._ncfgCertPath : '部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)');
+  var titleAttr = autoPath ? ' title="' + he(autoPath) + '"' : '';
+  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(ph) + '"' + titleAttr + ' style="flex:1" oninput="updateCertPathPreview(this)">';
   h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   return h;
 }
-// v1.6.34: 实时更新证书路径预览 — 切换证书或修改部署路径时联动
+// v1.6.36: 实时更新 placeholder + title — 切换证书或修改部署路径时联动
 function updateCertPathPreview(el) {
   var row = el.closest('.form-inline');
   if (!row) return;
   var sel = row.querySelector('.ncfg-cert-name');
   var inp = row.querySelector('.ncfg-cert-path');
-  var preview = row.querySelector('.ncfg-cert-preview');
-  if (!preview) return;
+  if (!inp) return;
   var bundle = sel ? sel.value : '';
-  var deployPath = inp ? inp.value.trim() : '';
+  var deployPath = inp.value.trim();
   if (!deployPath && window._ncfgCertPath && bundle) {
-    preview.textContent = '↳ 实际路径: ' + window._ncfgCertPath + '/' + bundle;
-    preview.style.display = 'block';
-  } else {
-    preview.style.display = 'none';
+    var fullPath = window._ncfgCertPath + '/' + bundle;
+    inp.placeholder = '自动路径: ' + fullPath;
+    inp.title = fullPath;
   }
 }
 function addCertBinding() {
@@ -1769,7 +1853,7 @@ function toggleIPSection(prefix) {
     var el = document.getElementById('ncfg-' + prefix + '-' + t);
     if (el) el.style.display = (en && tp === t) ? '' : 'none';
   });
-  if (ifaceEl) ifaceEl.style.display = (en && hasIfaces) ? '' : 'none';
+  if (ifaceEl) ifaceEl.style.display = (en && hasIfaces && tp === 'netInterface') ? '' : 'none';
   if (prefix === 'ipv6') {
     var re = document.getElementById('ncfg-ipv6-regex');
     if (re) re.style.display = (en && tp === 'netInterface') ? '' : 'none';
@@ -1796,8 +1880,12 @@ function readIPConfig(prefix) {
   var type = document.getElementById('ncfg-' + prefix + '-type');
   var en = enable ? enable.checked : true, tp = type ? type.value : 'url';
   var domains = [];
-  document.querySelectorAll('#ncfg-' + prefix + '-domains .domain-input').forEach(function(inp) {
-    if (inp.value.trim()) domains.push(inp.value.trim());
+  document.querySelectorAll('#ncfg-' + prefix + '-domains .form-inline').forEach(function(row) {
+    var inp = row.querySelector('.domain-input');
+    var sel = row.querySelector('.domain-dns-select');
+    if (inp && inp.value.trim()) {
+      domains.push({domain: inp.value.trim(), dns_key_name: sel ? sel.value : ''});
+    }
   });
   var cfg = {
     enable: en, gettype: tp,
@@ -1844,7 +1932,8 @@ function renderDNS(keysMap, certData, acData) {
   if (keyArr.length === 0) {
     h += '<div class="empty">暂无 DNS Key</div>';
   } else {
-    h += '<div class="dns-table-wrap"><table class="dns-table"><thead><tr><th class="col-dns-name" data-sort="name">名称</th><th class="col-prov" data-sort="provider">提供商</th><th class="col-ak">Access Key</th><th class="col-dom" data-sort="nodes">使用节点</th><th class="col-act">操作</th></tr></thead><tbody>';
+    // ── 桌面: 表格 ──
+    h += '<div class="dns-table-wrap desk-only"><table class="dns-table"><thead><tr><th class="col-dns-name" data-sort="name">名称</th><th class="col-prov" data-sort="provider">提供商</th><th class="col-ak">Access Key</th><th class="col-dom" data-sort="nodes">使用节点</th><th class="col-act">操作</th></tr></thead><tbody>';
     keyArr.forEach(function(item) {
       var k = item;
       var name = k.name;
@@ -1858,6 +1947,20 @@ function renderDNS(keysMap, certData, acData) {
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table></div>';
+    // ── 移动: 卡片布局 ──
+    h += '<div class="dns-cards mob-only">';
+    keyArr.forEach(function(item) {
+      var k = item;
+      var name = k.name;
+      var prov = k.provider;
+      var ak = k.ak || '';
+      var akMasked = ak.length > 6 ? ak.substring(0,6) + '***' : ak;
+      h += '<div class="dns-card">';
+      h += '<div class="dns-card-r1"><b class="dns-card-name">' + he(name) + '</b><span class="dns-card-sep">|</span><span class="dns-card-prov">' + he(prov) + '</span><span class="dns-card-sep">|</span><span class="dns-card-ak">' + he(akMasked) + '</span></div>';
+      h += '<div class="dns-card-r2"><span class="dns-card-nodes">' + he(k.nodes) + '</span><span class="dns-card-act"><button class="btn btn-sm" onclick="editDNSKey(\'' + jsStr(k.key) + '\')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteDNSKey(\'' + jsStr(k.key) + '\')">删除</button></span></div>';
+      h += '</div>';
+    });
+    h += '</div>';
   }
   h += '</div>';
 
@@ -1865,21 +1968,39 @@ function renderDNS(keysMap, certData, acData) {
   if (certs.length === 0) {
     h += '<div class="empty">暂无证书</div>';
   } else {
-    h += '<div class="cert-table-wrap"><table class="cert-table"><thead><tr><th class="col-cert-name" data-sort="name">名称</th><th class="col-cert-san">SAN</th><th class="col-exp" data-sort="expiry">到期</th><th class="col-badge-sm" data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
+    // ── 桌面: 表格 ──
+    h += '<div class="cert-table-wrap desk-only"><table class="cert-table"><thead><tr><th class="col-cert-name" data-sort="name">名称</th><th class="col-cert-san">SAN</th><th class="col-exp" data-sort="expiry">到期</th><th class="col-badge-sm" data-sort="daysLeft">剩余</th><th class="col-act">操作</th></tr></thead><tbody>';
     certs.forEach(function(c) {
       var name = c.bundle_name || c.name || '';
       var exp = c.expiry || '';
       var expDate = exp ? new Date(exp) : null;
       var isValidDate = expDate && !isNaN(expDate.getTime());
       var days = isValidDate ? Math.floor((expDate - Date.now()) / 86400000) : '-';
-      c.daysLeft = days === '-' ? 99999 : days; // sort-friendly: far-future for no-expiry
+      c.daysLeft = days === '-' ? 99999 : days;
       c.name = c.bundle_name || c.name || '';
       var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
-      h += '<tr><td class="col-cert-name"><b>' + he(name) + '</b></td><td>' + he((c.sans || c.dns_names || [name]).join(', ')) + '</td><td>' + he(exp) + '</td>';
+      h += '<tr><td class="col-cert-name"><b>' + he(name) + '</b></td><td class="col-cert-san">' + he((c.domains || c.sans || c.dns_names || [name]).join(', ')) + '</td><td class="col-exp">' + he(exp) + '</td>';
       h += '<td class="col-badge-sm"><span class="badge ' + dayBadge + '">' + days + '天</span></td>';
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button><span class="more-wrap"><button class="btn btn-sm" onclick="toggleMore(event)">更多 ▾</button><div class="more-menu"><button onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button onclick="downloadPFX(\'' + jsStr(name) + '\')">PFX</button>' + (c.acme ? '<button onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '</div></span></div></td></tr>';
     });
     h += '</tbody></table></div>';
+    // ── 移动: 卡片布局 ──
+    h += '<div class="cert-cards mob-only">';
+    certs.forEach(function(c) {
+      var name = c.bundle_name || c.name || '';
+      var exp = c.expiry || '';
+      var expDate = exp ? new Date(exp) : null;
+      var isValidDate = expDate && !isNaN(expDate.getTime());
+      var days = isValidDate ? Math.floor((expDate - Date.now()) / 86400000) : '-';
+      var dayBadge = days === '-' ? '' : (days < 0 ? 'badge-red' : (days < 30 ? 'badge-orange' : 'badge-green'));
+      var sanText = (c.domains || c.sans || c.dns_names || [name]).join(', ');
+      h += '<div class="cert-card">';
+      h += '<div class="cert-card-r1"><b class="cert-card-name">' + he(name) + '</b><span class="cert-card-san">' + he(sanText) + '</span></div>';
+      h += '<div class="cert-card-r2"><span class="cert-card-exp">' + he(exp) + '</span><span class="badge ' + dayBadge + ' cert-card-days">' + days + '天</span>';
+      h += '<span class="cert-card-act"><button class="btn btn-sm" onclick="showCertDetail(\'' + jsStr(name) + '\')">详情</button><button class="btn btn-sm btn-danger" onclick="deleteCert(\'' + jsStr(name) + '\')">删除</button><span class="more-wrap"><button class="btn btn-sm" onclick="toggleMore(event)">更多 ▾</button><div class="more-menu"><button onclick="downloadCert(\'' + jsStr(name) + '\')">下载</button><button onclick="downloadPFX(\'' + jsStr(name) + '\')">PFX</button>' + (c.acme ? '<button onclick="renewCert(\'' + jsStr(name) + '\')">续订</button>' : '') + '</div></span></span></div>';
+      h += '</div>';
+    });
+    h += '</div>';
   }
   h += '</div>';
 
@@ -1887,13 +2008,23 @@ function renderDNS(keysMap, certData, acData) {
   if (accts.length === 0) {
     h += '<div class="empty">暂无 ACME 帐号</div>';
   } else {
-    h += '<div class="acme-table-wrap"><table class="acme-table"><thead><tr><th class="col-cert-name" data-sort="email">Email</th><th data-sort="ca">CA</th><th class="col-exp">Key</th><th class="col-badge-sm" data-sort="registered">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
+    // ── 桌面: 表格 ──
+    h += '<div class="acme-table-wrap desk-only"><table class="acme-table"><thead><tr><th class="col-cert-name" data-sort="email">Email</th><th data-sort="ca">CA</th><th class="col-exp">Key</th><th class="col-badge-sm" data-sort="registered">状态</th><th class="col-act">操作</th></tr></thead><tbody>';
     accts.forEach(function(a, i) {
       h += '<tr><td class="col-cert-name">' + he(a.email) + '</td><td>' + he(a.ca) + '</td><td>' + he(a.key_type || '-') + '</td>';
       h += '<td class="col-badge-sm">' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '</td>';
       h += '<td class="col-act"><div class="btn-wrap"><button class="btn btn-sm" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></div></td></tr>';
     });
     h += '</tbody></table></div>';
+    // ── 移动: 卡片布局 ──
+    h += '<div class="acme-cards mob-only">';
+    accts.forEach(function(a, i) {
+      h += '<div class="acme-card">';
+      h += '<div class="acme-card-r1"><span class="acme-card-email">' + he(a.email) + '</span><span class="acme-card-sep">|</span><span class="acme-card-ca">' + he(a.ca) + '</span><span class="acme-card-sep">|</span><span class="acme-card-key">' + he(a.key_type || '-') + '</span></div>';
+      h += '<div class="acme-card-r2">' + (a.registered ? '<span class="badge badge-green">已注册</span>' : '<span class="badge badge-orange">未注册</span>') + '<span class="acme-card-act"><button class="btn btn-sm" onclick="openACMEAccount(' + i + ')">编辑</button><button class="btn btn-sm btn-danger" onclick="deleteACMEAccount(' + i + ',\'' + jsStr(a.email) + '\')">删除</button></span></div>';
+      h += '</div>';
+    });
+    h += '</div>';
   }
   h += '</div>';
 
@@ -2032,7 +2163,9 @@ async function showCertDetail(name) {
   if (d.issuer) rows.push(['颁发组织', he(d.issuer)]);
   if (d.not_before) rows.push(['生效时间', he(d.not_before)]);
   if (d.not_after) rows.push(['过期时间', he(d.not_after)]);
-  if (d.dns_names && d.dns_names.length) rows.push(['SAN 域名', he(d.dns_names.join(', '))]);
+  if (d.domains && d.domains.length) rows.push(['SAN 域名', he(d.domains.join(', '))]);
+  else if (d.dns_names && d.dns_names.length) rows.push(['SAN 域名', he(d.dns_names.join(', '))]);
+  else if (d.sans && d.sans.length) rows.push(['SAN 域名', he(d.sans.join(', '))]);
   rows.push(['申请方式', isACME ? '<span class="badge badge-blue">ACME</span>' : '<span class="badge badge-green">手动上传</span>']);
   if (isACME && d.dns_provider) rows.push(['DNS 账号', he(d.dns_provider)]);
   if (isACME && d.ca) rows.push(['CA', he(d.ca)]);
@@ -2245,19 +2378,30 @@ function renderVersions(verData, binData, nodes) {
   if (bins.length === 0) {
     h += '<div class="empty">暂无</div>';
   } else {
-    h += '<div class="bin-table-wrap"><table class="bin-table"><thead><tr><th data-sort="name">文件名</th><th class="col-bin-size" data-sort="size">大小</th><th class="col-bin-ver" data-sort="version">版本</th><th class="col-bin-time" data-sort="mod_time">时间</th><th class="col-act">操作</th></tr></thead><tbody>';
+    // ── 桌面: 表格 ──
+    h += '<div class="bin-table-wrap desk-only"><table class="bin-table"><thead><tr><th data-sort="name">文件名</th><th class="col-bin-size" data-sort="size">大小</th><th class="col-bin-ver" data-sort="version">版本</th><th class="col-bin-time" data-sort="mod_time">时间</th><th class="col-act">操作</th></tr></thead><tbody>';
     bins.forEach(function(b) {
       var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
       h += '<tr><td class="mono">' + he(b.name || '') + '</td><td class="col-bin-size">' + sizeStr + '</td><td class="col-bin-ver">' + he(b.version || '-') + '</td><td class="col-bin-time">' + he(b.mod_time || '-') + '</td>';
       h += '<td class="col-act"><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></td></tr>';
     });
     h += '</tbody></table></div>';
+    // ── 移动: 卡片布局 ──
+    h += '<div class="bin-cards mob-only">';
+    bins.forEach(function(b) {
+      var sizeStr = b.size ? (b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : (b.size / 1024).toFixed(0) + ' KB') : '-';
+      h += '<div class="bin-card">';
+      h += '<div class="bin-card-r1"><span class="bin-card-name mono">' + he(b.name || '') + '</span></div>';
+      h += '<div class="bin-card-r2"><span class="bin-card-size">' + sizeStr + '</span><span class="bin-card-sep">|</span><span class="bin-card-ver">' + he(b.version || '-') + '</span><span class="bin-card-sep">|</span><span class="bin-card-time">' + he(b.mod_time || '-') + '</span><span class="bin-card-act"><button class="btn btn-sm btn-danger" onclick="deleteBinary(\'' + jsStr(b.name || '') + '\')">删除</button></span></div>';
+      h += '</div>';
+    });
+    h += '</div>';
   }
   h += '</div>';
 
   if (nodes.length > 0) {
     h += '<div class="card"><div class="card-header"><h3>节点版本</h3></div>';
-    h += '<div class="ver-table-wrap"><table class="ver-table"><thead><tr><th style="width:38px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th class="col-up-os" data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
+    h += '<div class="ver-table-wrap desk-only"><table class="ver-table"><thead><tr><th style="width:38px"><input type="checkbox" id="select-all-nodes" onchange="var cbs=document.querySelectorAll(\'.node-upgrade-cb\');for(var i=0;i<cbs.length;i++)cbs[i].checked=this.checked"></th><th class="col-up-node" data-sort="name">节点</th><th class="col-up-os" data-sort="os">系统</th><th class="col-up-stat" data-sort="online">状态</th><th class="col-up-ver" data-sort="version">当前版本</th><th class="col-up-ver">目标版本</th><th class="col-up-status">升级状态</th></tr></thead><tbody>';
     // 从服务端读取升级状态 (替代 localStorage，跨设备一致)
     var trigData = window._upgState || {};
     nodes.forEach(function(n) {
@@ -2268,20 +2412,34 @@ function renderVersions(verData, binData, nodes) {
       var job = trigData[n.id] || null;
       var upgStatus = '';
       var etaText = '';
+      var curVerClean = (curVer||'').replace(/^v/, '');
+      var forcedClean = (forced||'').replace(/^v/, '');
+      // v1.6.37: 6种升级状态 — 无记录时根据版本比对判断, 不再统一显示 "-"
       if (job) {
-        if (job.completed) { upgStatus = 'ok'; }
+        if (job.retry_count >= 5) { upgStatus = 'abandon'; }
+        else if (job.completed) { upgStatus = 'ok'; }
         else if (job.triggered) {
           var trigTs = Date.parse(job.triggered);
           var elapsed = Date.now() - trigTs;
           if (elapsed > 1800000) { upgStatus = 'fail'; }
           else {
             upgStatus = 'pending';
-            var remain = Math.max(0, Math.ceil((300000 - (elapsed % 300000)) / 1000)); // 剩余秒到下次心跳
+            var remain = Math.max(0, Math.ceil((300000 - (elapsed % 300000)) / 1000));
             etaText = ' ~' + remain + 's';
           }
         }
+      } else if (curVerClean && forcedClean && curVerClean === forcedClean) {
+        upgStatus = 'current'; // 已到达目标版本, 但无升级记录 (新装/状态被清空)
       }
-      var statusCell = !upgStatus ? '-' : (upgStatus === 'ok' ? '<span class="badge badge-green">完成</span>' : (upgStatus === 'fail' ? '<span class="badge badge-red">超时</span>' : ('<span class="badge badge-orange">等待中' + etaText + '</span>')));
+      var statusCell = '';
+      switch (upgStatus) {
+        case 'ok':       statusCell = '<span class="badge badge-green">已完成</span>'; break;
+        case 'pending':   statusCell = '<span class="badge badge-orange">升级中' + etaText + '</span>'; break;
+        case 'fail':     statusCell = '<span class="badge badge-red">超时</span>'; break;
+        case 'abandon':  statusCell = '<span class="badge badge-red">已放弃</span>'; break;
+        case 'current':  statusCell = '<span class="badge badge-green">当前</span>'; break;
+        default:         statusCell = '-'; break;
+      }
       var trigVer = job ? job.target_ver : '';
       h += '<tr><td><input type="checkbox" class="node-upgrade-cb" value="' + he(n.id) + '"' + (!online ? ' disabled' : '') + '></td>';
       h += '<td class="col-up-node"><b>' + he(n.name) + '</b></td>';
@@ -2296,6 +2454,49 @@ function renderVersions(verData, binData, nodes) {
       h += '<td class="col-up-status">' + statusCell + '</td></tr>';
     });
     h += '</tbody></table></div>';
+    // ── 移动: 卡片布局 ──
+    h += '<div class="ver-cards mob-only">';
+    nodes.forEach(function(n) {
+      var osName = n.os || '-';
+      var online = n.online;
+      var curVer = n.version || '-';
+      var job = trigData[n.id] || null;
+      var upgStatus2 = '';
+      var etaText2 = '';
+      var curVerClean2 = (curVer||'').replace(/^v/, '');
+      var forcedClean2 = (forced||'').replace(/^v/, '');
+      if (job) {
+        if (job.retry_count >= 5) { upgStatus2 = 'abandon'; }
+        else if (job.completed) { upgStatus2 = 'ok'; }
+        else if (job.triggered) {
+          var trigTs2 = Date.parse(job.triggered);
+          var elapsed2 = Date.now() - trigTs2;
+          if (elapsed2 > 1800000) { upgStatus2 = 'fail'; }
+          else { upgStatus2 = 'pending'; var remain2 = Math.max(0, Math.ceil((300000 - (elapsed2 % 300000)) / 1000)); etaText2 = ' ~' + remain2 + 's'; }
+        }
+      } else if (curVerClean2 && forcedClean2 && curVerClean2 === forcedClean2) {
+        upgStatus2 = 'current';
+      }
+      var statusCell2 = '';
+      switch (upgStatus2) {
+        case 'ok':       statusCell2 = '<span class="badge badge-green">已完成</span>'; break;
+        case 'pending':   statusCell2 = '<span class="badge badge-orange">升级中' + etaText2 + '</span>'; break;
+        case 'fail':     statusCell2 = '<span class="badge badge-red">超时</span>'; break;
+        case 'abandon':  statusCell2 = '<span class="badge badge-red">已放弃</span>'; break;
+        case 'current':  statusCell2 = '<span class="badge badge-green">当前</span>'; break;
+        default:         statusCell2 = '-'; break;
+      }
+      var trigVer2 = job ? job.target_ver : '';
+      h += '<div class="ver-card">';
+      h += '<div class="ver-card-r1"><input type="checkbox" class="node-upgrade-cb" value="' + he(n.id) + '"' + (!online ? ' disabled' : '') + '><b class="ver-card-name">' + he(n.name) + '</b><span class="ver-card-sep">|</span><span class="ver-card-os">' + he(osName) + '</span></div>';
+      h += '<div class="ver-card-r2">' + (online ? '<span class="badge badge-green">在线</span>' : '<span class="badge badge-red">离线</span>') + '<span class="ver-card-sep">|</span><span class="ver-card-ver mono">' + he(curVer) + '</span><span class="ver-card-sep">|</span><select class="upgrade-target" data-node="' + he(n.id) + '" style="height:22px;font-size:11px"><option value="">-</option>';
+      availVers.forEach(function(v) {
+        h += '<option value="' + he(v) + '"' + (trigVer2 === v ? ' selected' : '') + '>' + he(v) + '</option>';
+      });
+      h += '</select><span class="ver-card-sep">|</span>' + statusCell2 + '</div>';  // closes ver-card-r3
+      h += '</div>';
+    });
+    h += '</div>';
     h += '<div class="btn-wrap" style="margin-top:8px"><button class="btn btn-primary" onclick="batchUpgrade()">批量升级</button></div></div>';
   }
 
@@ -2468,7 +2669,7 @@ async function loadLogsIncremental() {
       var ts2 = ts.length > 10 ? ts.substring(11,16) : ts;
       if (ts === firstTime) break;
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
-      newRows.push('<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + ts + '</span><span class="log-time-short">' + ts2 + '</span></td><td class="col-log-node">' + he(l.node || '-') + '</td>');
+      newRows.push('<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + ts + '</span><span class="log-time-short">' + ts2 + '</span></td><td class="col-log-node">' + he(l.node || '管理端') + '</td>');
       newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
       newRows.push('<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>');
     }
@@ -2517,7 +2718,7 @@ function renderLogs(data, filter) {
   var h = '';
   h += '<div class="card"><div class="card-header"><h3>系统日志 <span style="font-size:11px;color:var(--c-text2);font-weight:400">(' + (window._tzLabel || '') + ')</span></h3><button class="btn btn-sm log-filter-toggle" onclick="toggleLogFilter()">筛选 ▾</button></div>';
   h += '<div class="form-inline log-filter-bar" style="margin-bottom:12px;gap:6px;align-items:flex-end">';
-  h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node"><option value="">全部</option>';
+  h += '<div class="form-group" style="flex:0 1 130px"><label>节点</label><select id="log-filter-node"><option value="">全部</option><option value="管理端"' + (f.node === '管理端' ? ' selected' : '') + '>管理端</option>';
   nodeNames.forEach(function(n) {
     h += '<option value="' + he(n.id) + '"' + (f.node === n.id ? ' selected' : '') + '>' + he(n.label) + '</option>';
   });
@@ -2542,7 +2743,7 @@ function renderLogs(data, filter) {
       var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
       var timeFull = fmtTime(l.time);
       var timeShort = timeFull.length > 10 ? timeFull.substring(11,16) : timeFull;
-      h += '<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + timeFull + '</span><span class="log-time-short">' + timeShort + '</span></td><td class="col-log-node">' + he(l.node || '-') + '</td>';
+      h += '<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + timeFull + '</span><span class="log-time-short">' + timeShort + '</span></td><td class="col-log-node">' + he(l.node || '管理端') + '</td>';
       h += '<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>';
       h += '<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });
@@ -2830,7 +3031,11 @@ document.addEventListener('click', function() {
 });
 
 // 登录按钮三重保险: onclick + addEventListener on both button and form
+// v1.6.36: Chrome autofill 隐藏框→可见框同步 (poll 3s)
+(function(){var r=document.getElementById('login-pwd-real'),v=document.getElementById('login-pwd');if(r&&v){var t=setInterval(function(){if(r.value&&!v.value){v.value=r.value;clearInterval(t)}},200);setTimeout(function(){clearInterval(t)},3000)}})();
 (function() {
+  // v1.6.42: 页面加载时初始化主题, 登录页即可响应暗色模式
+  if (typeof initTheme === 'function') initTheme();
   var form = document.getElementById('login-form');
   if (form) {
     form.addEventListener('submit', doLogin);

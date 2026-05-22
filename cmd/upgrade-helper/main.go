@@ -21,7 +21,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -211,6 +210,3 @@ func selfDelete() {
 	os.WriteFile(tmp, []byte(script), 0700)
 	exec.Command("cmd", "/c", tmp).Start()
 }
-
-// unused import cleanup
-var _ = unsafe.Sizeof(0)

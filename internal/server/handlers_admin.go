@@ -3,7 +3,6 @@ package server
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -29,8 +28,9 @@ import (
 )
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
-	agentVer := ""
-	if cfg, _ := s.store.LoadAgentConfig(); cfg != nil {
+	// v1.6.36 M6: 未设置 Agent 版本时返回 "-" 占位, 避免前端显示空字符串
+	agentVer := "-"
+	if cfg, _ := s.store.LoadAgentConfig(); cfg != nil && cfg.LatestVersion != "" {
 		agentVer = cfg.LatestVersion
 	}
 	jsonOK(w, map[string]interface{}{"status": "ok", "version": s.version, "agent_version": agentVer, "timezone": s.GetTimezone().String()})
@@ -392,10 +392,12 @@ func (s *Server) handleUploadAgentBinary(w http.ResponseWriter, r *http.Request)
 			s.store.SaveAgentBinary(h.Filename, data)
 			s.logMgr.Log("agent", "已上传", fmt.Sprintf("%s (%d bytes)", h.Filename, len(data)), "success")
 
-			// v1.5.29: 从文件名提取版本号
-			if m := reVersionedBinary.FindStringSubmatch(h.Filename); m != nil && detectedVer == "" {
+		// v1.6.42 M6: 取所有上传文件中版本号最高者 (CompareSemVer), 避免只取首个文件版本
+		if m := reVersionedBinary.FindStringSubmatch(h.Filename); m != nil {
+			if detectedVer == "" || model.CompareSemVer(m[1], detectedVer) > 0 {
 				detectedVer = m[1]
 			}
+		}
 			// 检测是否为 Manager 二进制
 			if strings.HasPrefix(h.Filename, "ddns-manager-v") {
 				hasManagerBinary = true
@@ -445,7 +447,9 @@ func (s *Server) handleDeleteAgentBinary(w http.ResponseWriter, r *http.Request)
 // scheduleManagerRestart 在后台异步替换 Manager 自身二进制并重启服务。
 // v1.5.29: 用户上传 ddns-manager-vX.Y.Z-linux-amd64 后自动触发。
 // 原理: 写入 shell 脚本 → 后台执行 → 脚本等 HTTP 响应完成后 stop→cp→start。
+// v1.6.42 H7: 增加日志记录, 使自重启操作可追踪
 func (s *Server) scheduleManagerRestart(newVer string) {
+	s.logMgr.Log("system", "Manager自重启", fmt.Sprintf("触发版本=%s", newVer), "info")
 	binDir := s.store.AgentBinDir()
 	// 查找刚上传的 manager 二进制
 	entries, err := os.ReadDir(binDir)
@@ -996,180 +1000,10 @@ func (s *Server) tryNotifyCertExpiry(alerts []notify.CertAlert) {
 	}()
 }
 
-// ── v1.5.33: DNS Key 实时连线核验 ──
-
-// handleTestDNSKey 在线测试 DNS Key 是否有效 (调用真实 API)。
-// 返回验证结果，仅提示不阻止保存。
-// 可选 query: ?domain=example.com 指定测试域名(未指定时用 @ 根域名)。
-func (s *Server) handleTestDNSKey(w http.ResponseWriter, r *http.Request) {
-	name := mux.Vars(r)["name"]
-	keys, err := s.store.LoadDNSKeys()
-	if err != nil || keys == nil {
-		jsonErr(w, http.StatusNotFound, "DNS Key 不存在")
-		return
-	}
-	dk, ok := keys[name]
-	if !ok {
-		jsonErr(w, http.StatusNotFound, "DNS Key 不存在")
-		return
-	}
-
-	// v1.5.36 C2: 支持指定测试域名，未指定时用根域名 "@" 触发真实 API 调用
-	testDomain := r.URL.Query().Get("domain")
-	if testDomain == "" {
-		testDomain = "@"
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	result, detail := testDNSKeyOnline(ctx, dk, testDomain)
-	jsonOK(w, map[string]interface{}{
-		"name": name, "valid": result,
-		"detail": detail, "provider": dk.Provider, "test_domain": testDomain,
-	})
-}
-
-// testDNSKeyOnline 通过 ddns-go 真实 API 调用验证 DNS Key 有效性。
-// v1.5.34 H5: 增强错误检测 — 增加更多提供商错误模式 + 输出完整捕获日志供人工判断
-// v1.5.36 C2: testDomain 参数强制 API 调用, 设为 "@" 可触发真实 API(避免 nil domains 假验证)
-func testDNSKeyOnline(ctx context.Context, dk *model.DNSKeyRecord, testDomain string) (valid bool, detail string) {
-	// v1.6.33 P3: 委托给 provider.ValidateKeyOnline (统一注册表单一真相源)
-	// 消除 handlers_admin.go 中的重复 provider 创建逻辑
-	var logBuf bytes.Buffer
-	origWriter := log.Writer()
-	log.SetOutput(io.MultiWriter(origWriter, &logBuf))
-	defer log.SetOutput(origWriter)
-
-	done := make(chan bool, 2) // v1.6.30 H5: buffer=2 防止 ctx 取消后 goroutine 写入阻塞泄漏
-	go func() {
-		defer func() { recover() }()
-		_, _, err := provider.ValidateKeyOnline(dk.Provider, dk.AccessKeyID, dk.AccessKeySecret, testDomain)
-		if err != nil {
-			done <- false
-			return
-		}
-		done <- true
-	}()
-
-	// v1.6.10 H5: goroutine 内增加 ctx 监听, 防止 Init() 永久阻塞导致 goroutine 泄漏
-	// 注: provider.Init() 本身不接受 context, 这里用 select 提供超时保护
-	// Init goroutine 在超时后可能继续运行(无法 kill), 但调用方不会被永久阻塞
-	select {
-	case apiOK := <-done:
-		// v1.6.28 H3: apiOK=false 表示 AddUpdateDomainRecords 全部失败
-		if !apiOK {
-			captured := logBuf.String()
-			return false, fmt.Sprintf("DNS API调用全部失败 (Key可能无效或权限不足) | 完整输出: %s", truncate(captured, 300))
-		}
-		// 正常完成
-	case <-ctx.Done():
-		log.Printf("[dns-key-test] 验证超时 (30s), Provider Init goroutine 可能仍在运行")
-		return false, "验证超时 (30s)，请检查网络连通性"
-	}
-
-	// Init 返回后处理结果
-	{
-		captured := logBuf.String()
-		// v1.5.34 H5: 扩展错误关键词列表, 覆盖 28 个提供商的常见认证错误模式
-		authErrors := []string{
-			// 阿里云
-			"InvalidAccessKeyId", "SignatureDoesNotMatch", "InvalidAccessKeyId.NotFound",
-			// 腾讯云
-			"AuthFailure", "UnauthorizedOperation",
-			// Cloudflare
-			"Invalid request headers", "Authentication error", "10000",
-			// 华为云
-			"InvalidCredential", "Authentication required",
-			// GoDaddy
-			"Unauthorized", "403 Forbidden",
-			// Porkbun / Namecheap / NameSilo / Dynadot / Spaceship
-			"Invalid API Key", "API access is not enabled", "401 Unauthorized",
-			// Vercel
-			"Forbidden", "invalid_token",
-			// 通用
-			"authentication failed", "auth failed", "AccessDenied", "access denied",
-			"InvalidParameter", "Specified access key is not found",
-		}
-		for _, kw := range authErrors {
-			if strings.Contains(captured, kw) {
-				// 返回完整捕获日志供人工诊断
-				return false, fmt.Sprintf("API认证失败: 日志中含 %q | 完整输出: %s", kw, truncate(captured, 300))
-			}
-		}
-		// 没有明显错误 → 视为有效 (API 连通)
-		return true, fmt.Sprintf("API连接成功，DNS Key 有效 | 提供商标识: %s", dk.Provider)
-	}
-}
-
 // truncate 截断字符串到 n 字符, 超出部分替换为 ...
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	return s[:n] + "..."
-}
-
-// StartDNSKeyChecker 定时检测所有 DNS Key 有效性，无效时发邮件通知。
-func (s *Server) StartDNSKeyChecker(shutdown <-chan struct{}) {
-	go func() {
-		ticker := time.NewTicker(6 * time.Hour)
-		defer ticker.Stop()
-
-		// 启动后 60 秒执行首次检测
-		select {
-		case <-time.After(60 * time.Second):
-		case <-shutdown:
-			return
-		}
-		s.checkAllDNSKeys()
-
-		for {
-			select {
-			case <-ticker.C:
-				s.checkAllDNSKeys()
-			case <-shutdown:
-				return
-			}
-		}
-	}()
-}
-
-func (s *Server) checkAllDNSKeys() {
-	keys, err := s.store.LoadDNSKeys()
-	if err != nil || len(keys) == 0 {
-		return
-	}
-	var invalidKeys []string
-	for name, dk := range keys {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		valid, detail := testDNSKeyOnline(ctx, dk, "@")  // v1.5.36 C2: 用根域名触发真实 API 调用
-		cancel()
-		if !valid {
-			s.logMgr.Log("dns-key", "有效性检测失败",
-				fmt.Sprintf("%s (%s): %s", name, dk.Provider, detail), "warning")
-			invalidKeys = append(invalidKeys, fmt.Sprintf("%s (%s): %s", name, dk.Provider, detail))
-		} else {
-			s.logMgr.Log("dns-key", "有效性检测通过",
-				fmt.Sprintf("%s (%s)", name, dk.Provider), "info")
-		}
-	}
-	if len(invalidKeys) > 0 {
-		s.tryNotifyDNSKeyInvalid(invalidKeys)
-	}
-}
-
-func (s *Server) tryNotifyDNSKeyInvalid(invalidKeys []string) {
-	cfg, err := s.store.LoadSMTPConfig()
-	if err != nil || cfg == nil || !cfg.IsConfigured() {
-		return
-	}
-	go func() {
-		subject := fmt.Sprintf("[DDNS-Manager] %d 个 DNS Key 验证失败", len(invalidKeys))
-		body := fmt.Sprintf("以下 DNS Key 在线验证失败:\n\n%s\n\n请登录管理端检查并更新。\n\n管理端: %s",
-			strings.Join(invalidKeys, "\n"), cfg.ManagerURL)
-		if err := cfg.SendRaw(subject, body); err != nil {
-			log.Printf("[smtp] DNS Key 无效通知失败: %v", err)
-		}
-	}()
 }

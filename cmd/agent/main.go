@@ -44,6 +44,13 @@ var errAuthFailed = fmt.Errorf("auth failed")
 // version is set at build time via -ldflags "-X main.version=x.y.z"
 var version = "dev"
 var lastConfigHash string
+
+// configHashPath 返回配置 hash 持久化文件路径 (与 ddns_cache.yaml 并列)
+// v1.6.36 C4: oneshot 模式下进程退出后 lastConfigHash 丢失,
+// 持久化到此文件确保跨进程不重复推送配置
+func configHashPath() string {
+	return filepath.Join(agentBaseDir, "ddns_config_hash.txt")
+}
 var certHashMap = map[string]string{}
 var certHashMapMu sync.Mutex // H6: protects certHashMap from concurrent access
 
@@ -86,8 +93,12 @@ func agentLog(format string, args ...interface{}) {
 	f := agentEventsFile
 	agentEventsFileMu.Unlock()
 	if f != nil {
-		// v1.6.33 P6: 统一使用 UTC+RFC3339 时间戳, 与 dns_updater LogBuffer 格式一致
-		fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), msg)
+		// v1.6.39: 使用显式 UTC 标记替代 RFC3339 Z, 更直观
+		// v1.6.36 H1: 检查写入错误, 防止磁盘满/权限变更导致操作日志静默丢失
+		n, writeErr := fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format("2006-01-02 15:04:05 UTC"), msg)
+		if writeErr != nil {
+			log.Printf("[agent] 操作日志写入失败: %v (wrote %d bytes)", writeErr, n)
+		}
 	}
 }
 
@@ -107,10 +118,16 @@ func initAgentEventsLog() {
 				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent_events.%d.log", i+1))
 				os.Rename(old, next)
 			} else {
-				os.Remove(old)
+				// v1.6.42 L1: 检查删除错误, 防止轮转失败静默
+				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+					log.Printf("[agent] 事件日志轮转删除失败: %s (%v)", old, err)
+				}
 			}
 		}
-		os.Rename(path, filepath.Join(agentBaseDir, "agent_events.1.log"))
+		// v1.6.45 M2: 检查 Rename 错误, 防止轮转失败静默 (权限/磁盘问题导致文件持续增长)
+		if err := os.Rename(path, filepath.Join(agentBaseDir, "agent_events.1.log")); err != nil {
+			log.Printf("[agent] 事件日志轮转 Rename 失败: %s (%v)", path, err)
+		}
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, perm)
 	if err != nil {
@@ -133,7 +150,10 @@ func initAgentLog() {
 		perm = 0755
 		filePerm = 0644
 	}
-	os.MkdirAll(agentBaseDir, perm)
+	// v1.6.42 H4: 检查目录创建错误, 失败时告警但不中断 (后续文件操作会再次失败)
+	if err := os.MkdirAll(agentBaseDir, perm); err != nil {
+		log.Printf("[agent] 创建安装目录失败: %v", err)
+	}
 	logPath := filepath.Join(agentBaseDir, "agent.log")
 
 	// 文件超过 10MB 时轮转: 只保留 3 个, 简单编号 (1/2/3)
@@ -144,7 +164,10 @@ func initAgentLog() {
 				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent.%d.log", i+1))
 				os.Rename(old, next)
 			} else {
-				os.Remove(old)
+				// v1.6.42 L1: 检查删除错误, 防止轮转失败静默
+				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+					log.Printf("[agent] Agent日志轮转删除失败: %s (%v)", old, err)
+				}
 			}
 		}
 		os.Rename(logPath, filepath.Join(agentBaseDir, "agent.1.log"))
@@ -243,13 +266,16 @@ func ensureSymlink() {
 	}
 	if bestName == "" {
 		log.Printf("[agent] 符号链接丢失且未找到版本化二进制, 请重新安装")
+		agentLog("[heartbeat] 符号链接丢失且未找到版本化二进制")
 		return
 	}
 	if err := os.Symlink(bestName, link); err != nil {
 		log.Printf("[agent] 自动重建符号链接失败: %v", err)
+		agentLog("[heartbeat] 符号链接重建失败: %v", err)
 		return
 	}
 	log.Printf("[agent] 符号链接丢失,已自动重建: %s → %s (v%s)", link, bestName, bestVer)
+	agentLog("[heartbeat] 符号链接已自动重建: %s → %s (v%s)", link, bestName, bestVer)
 }
 
 // setBaseDir overrides the default base directory (called after flag parsing).
@@ -330,7 +356,10 @@ func generatePassword() string {
 	return hex.EncodeToString(b)
 }
 
-// collectHardware gathers system info for heartbeat reporting.
+// collectHardware gathers system identity + network info for heartbeat reporting.
+// v1.6.45 M3: 只采集身份信息(主机名/OS/网卡/IP) — 管理端仪表盘仅需展示管理端自身资源,
+// Agent 端的 CPU/内存/磁盘资源数据不在采集范围内 (HardwareInfo 的 cpu_percent/
+// memory_*/disk_* 字段为管理端专用, Agent 侧永不填充)。
 func collectHardware() *model.HardwareInfo {
 	hostname, _ := os.Hostname()
 	hw := &model.HardwareInfo{
@@ -383,6 +412,14 @@ func collectHardware() *model.HardwareInfo {
 }
 
 func doHeartbeat(cfg *model.AgentConfig) error {
+	// v1.6.36 C4: 加载持久化的配置 hash (oneshot 模式跨进程不丢失)
+	// 仅首次心跳时加载一次, daemon 模式下 lastConfigHash 已在内存中
+	if lastConfigHash == "" {
+		if data, err := os.ReadFile(configHashPath()); err == nil {
+			lastConfigHash = strings.TrimSpace(string(data))
+		}
+	}
+
 	// v2: Use embedded DNSUpdater instead of separate ddns-go process
 	dnsUpdaterOnce.Do(func() {
 		dnsUpdater = NewDNSUpdater()
@@ -438,7 +475,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				IPv6Msg:         status.IPv6Msg,
 			},
 		},
-		ConfigHash: lastConfigHash,  // use Manager-pushed hash, not self-computed
+		ConfigHash: lastConfigHash,  // v1.5.23+v1.6.36 C4: 回传Manager权威hash, 避免yaml往返不稳定导致每心跳重推
 		Logs:       dnsUpdater.RecentLogs(10),
 		Hardware:   collectHardware(),
 	}
@@ -481,7 +518,12 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			if err := dnsUpdater.ApplyConfig([]byte(resp.Config.YAML)); err != nil {
 				log.Printf("配置应用失败: %v", err)
 			} else {
-				lastConfigHash = resp.Config.Hash  // accept Manager's hash
+				lastConfigHash = resp.Config.Hash  // v1.6.36 C4: 存储Manager权威hash, 不复算
+			// v1.6.36 C4: 持久化 hash 到文件, oneshot 模式跨进程不丢失
+			// v1.6.42 C1: 检查写入错误, 失败时 agentLog 告警 (磁盘满/权限变更)
+			if err := os.WriteFile(configHashPath(), []byte(lastConfigHash), 0600); err != nil {
+				agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
+			}
 			// Cache encrypted config for next oneshot run (AES-256-GCM)
 				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
 				if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
@@ -504,7 +546,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 					if !cfgStatus.LastOK {
 						agentLog("配置变更后DNS更新失败: %s", cfgStatus.LastError)
 						log.Printf("[dns] 配置变更后DNS更新失败: %s", cfgStatus.LastError)
-						// 发送跟进心跳上报 DNS 失败状态 (仅含 DDNSHealth, 不等 5 分钟)
+						// 发送跟进心跳上报 DNS 失败状态 (含 Logs, 不等 5 分钟)
 						go sendDDNSHealthHeartbeat(cfg, cfgStatus)
 					} else {
 						agentLog("配置变更后DNS更新完成 ipv4=%s ipv6=%s", cfgStatus.IPv4, cfgStatus.IPv6)
@@ -602,13 +644,17 @@ func sendHeartbeat(cfg *model.AgentConfig, req model.HeartbeatReq) (*model.Heart
 func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 	// v1.6.30 H1: 补全 CertPath/CertHashes/IPv4OK/IPv6OK, 与常规心跳字段对齐
 	// v1.6.33 P5: 补全 CertErrors 字段, 确保证书部署错误也在跟进心跳中上报
+	// v1.6.45 H1: 补全 Logs 字段, 确保 Manager 能关联 DNS 失败的具体域名和原因
 	lastCertErrorsMu.Lock()
 	followCertErrors := lastCertErrors
 	lastCertErrorsMu.Unlock()
 
+	dnsLogs := dnsUpdater.RecentLogs(10)
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
 		Fingerprint: cfg.Fingerprint,
+		ConfigHash:  lastConfigHash, // v1.6.36 C4: 补齐ConfigHash, 防止跟进心跳触发配置重推死循环
+		Logs:        dnsLogs,
 		Status: model.NodeStatus{
 			AgentVersion: version,
 			CertPath:     cfg.CertPath,
@@ -689,7 +735,12 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			// 相对路径基于 agentBaseDir 解析, 避免 Windows Service cwd 不确定
 			path = filepath.Join(agentBaseDir, path)
 		}
-		os.MkdirAll(path, 0o700)
+		// v1.6.37: 755 允许非root服务(nginx worker等)读取公钥证书
+		// v1.6.45 H3: 检查目录创建错误, 失败时告警但不中断 (后续文件写操作会再次失败)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			log.Printf("[cert] 创建证书目录失败 %s: %v", path, err)
+			agentLog("证书部署: 创建目录失败 %s: %v", path, err)
+		}
 		hasModernPFX := false
 		hasLegacyPFX := false
 		legacyPFXFile := "" // cert.pfx path (LegacyDES, 全版本兼容)
@@ -703,8 +754,12 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			}
 			tmp := filepath.Join(path, name+".new")
 			dst := filepath.Join(path, name)
-			// v1.5.22 C2: 检查文件写入错误 (磁盘满/权限不足)
-			if we := os.WriteFile(tmp, plain, 0o600); we != nil {
+			// v1.6.37: 私钥 600, 公钥证书 644 — 允许非root服务读取证书
+			filePerm := os.FileMode(0o644)
+			if isPrivateKeyFile(name) {
+				filePerm = 0o600
+			}
+			if we := os.WriteFile(tmp, plain, filePerm); we != nil {
 				log.Printf("[cert] 写入失败 %s/%s: %v", cu.BundleName, name, we)
 				agentLog("证书部署: 写入失败 %s/%s: %v", cu.BundleName, name, we)
 				certErrors = append(certErrors, fmt.Sprintf("%s: 写入失败 %s (%v)", cu.BundleName, name, we))
@@ -811,7 +866,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		// 如果 IIS 绑定失败，保留旧 hash，下次心跳 Manager 会重新推送
 		if iisOK {
 			hashFile := filepath.Join(path, ".cert_hash")
-			os.WriteFile(hashFile, []byte(cu.CertHash), 0o600)
+			os.WriteFile(hashFile, []byte(cu.CertHash), 0o644) // v1.6.37: 644 无敏感信息
 			// v1.5.22 M1: 正常路径也更新 certHashMap，使清理逻辑生效
 			certHashMapMu.Lock()
 			certHashMap[cu.BundleName] = cu.CertHash
@@ -908,6 +963,7 @@ func reloadService(svc string) bool {
 
 // recycleIISAppPools recycles all IIS application pools so the new certificate
 // takes effect immediately. Uses appcmd (IIS 7+) with fallback to iisreset.
+// v1.6.42 H5: 增加 agentLog, 使 Manager 端可追踪 IIS 回收结果
 func recycleIISAppPools() {
 	// Preferred: recycle individual app pools (less disruptive than iisreset)
 	appcmd := filepath.Join(os.Getenv("SystemRoot"), "System32", "inetsrv", "appcmd.exe")
@@ -915,6 +971,7 @@ func recycleIISAppPools() {
 		out, err := exec.Command(appcmd, "list", "apppool", "/xml").Output()
 		if err == nil {
 			// Parse app pool names and recycle each
+			var recycled []string
 			for _, line := range strings.Split(string(out), "\n") {
 				if idx := strings.Index(line, "APPPOOL.NAME="); idx != -1 {
 					start := idx + len("APPPOOL.NAME=") + 1
@@ -923,9 +980,11 @@ func recycleIISAppPools() {
 						poolName := line[start : start+end]
 						exec.Command(appcmd, "recycle", "apppool", poolName).Run()
 						log.Printf("[cert] IIS 应用池已回收: %s", poolName)
+						recycled = append(recycled, poolName)
 					}
 				}
 			}
+			agentLog("[cert] IIS应用池已回收: %v", recycled)
 			return
 		}
 	}
@@ -933,8 +992,10 @@ func recycleIISAppPools() {
 	out, err := exec.Command("iisreset", "/noforce").CombinedOutput()
 	if err != nil {
 		log.Printf("[cert] IIS 重置失败: %v: %s", err, string(out))
+		agentLog("[cert] IIS重置失败: %v", err)
 	} else {
 		log.Printf("[cert] IIS 已重置 (iisreset)")
+		agentLog("[cert] IIS已重置(iisreset)")
 	}
 }
 func fileSize(path string) int64 {
@@ -945,13 +1006,21 @@ func fileSize(path string) int64 {
 
 // isCertFile 判断文件名是否为证书相关文件 (PEM/PFX/KEY/CRT)。
 // v1.5.41: 用于磁盘证书文件扫描, 排除 .cert_hash / meta.json 等非证书文件。
+// isCertFile v1.6.42 M2: 用 strings.EqualFold 替代 ToLower, 避免每次调用分配新字符串
 func isCertFile(name string) bool {
+	return strings.EqualFold(filepath.Ext(name), ".pem") ||
+		strings.EqualFold(filepath.Ext(name), ".crt") ||
+		strings.EqualFold(filepath.Ext(name), ".cer") ||
+		strings.EqualFold(filepath.Ext(name), ".key") ||
+		strings.EqualFold(filepath.Ext(name), ".pfx")
+}
+
+// isPrivateKeyFile v1.6.37: 判断是否为私钥文件，私钥应保持 600 权限
+func isPrivateKeyFile(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".pem") ||
-		strings.HasSuffix(lower, ".crt") ||
-		strings.HasSuffix(lower, ".cer") ||
-		strings.HasSuffix(lower, ".key") ||
-		strings.HasSuffix(lower, ".pfx")
+	return strings.HasSuffix(lower, ".key") ||
+		strings.Contains(lower, "privkey") ||
+		strings.Contains(lower, "key.")
 }
 
 func fileSHA256(path string) string {
@@ -1023,18 +1092,17 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 		})
 		if ctx.Err() != nil { return }
 		// Phase 2+3: 磁盘证书扫描 (v1.6.29 H2: 并入 goroutine, 受 30s 超时保护)
+		// v1.6.42 M3: 合并为单次遍历 entries, 同时收集根级证书文件 + 检测子目录
 		entries, _ := os.ReadDir(cfg.CertPath)
-		hasRootCerts := false
+		var rootFiles []string
 		for _, e := range entries {
 			if ctx.Err() != nil { return }
-			if !e.IsDir() && isCertFile(e.Name()) { hasRootCerts = true; break }
-		}
-		if hasRootCerts {
-			var rootFiles []string
-			for _, e := range entries {
-				if e.IsDir() || !isCertFile(e.Name()) { continue }
+			if e.IsDir() { continue }
+			if isCertFile(e.Name()) {
 				rootFiles = append(rootFiles, e.Name())
 			}
+		}
+		if len(rootFiles) > 0 {
 			sort.Strings(rootFiles)
 			h := sha256.New()
 			for _, fn := range rootFiles {
@@ -1042,7 +1110,6 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			}
 			rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 			mu.Lock()
-			// v1.6.30 M2: 仅在无 .cert_hash 条目时才填充磁盘 hash, 防止覆盖权威 hash
 			if _, exists := result[cfg.CertPath]; !exists { result[cfg.CertPath] = rootHash }
 			mu.Unlock()
 		}
@@ -1072,11 +1139,20 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			mu.Unlock()
 		}
 	}()
-	// v1.6.29 H2: 全部扫描在 goroutine 内完成, 统一 30s 超时保护
+	// v1.6.42 C4 + v1.6.45 H2: 超时后等待 goroutine 退出再返回 result
+	// 35s 总超时后 goroutine 可能仍在写 result map (NFS深层目录卡住) → data race
+	// 此时返回空 map 而非半成品: Manager 检测到空 CertHashes 会全量重推证书 (一次冗余但安全)
 	select {
 	case <-done:
+		// 正常完成
 	case <-time.After(30 * time.Second):
 		log.Printf("[cert] 证书目录遍历超时 (30s): %s (可能是NFS挂载卡住)", cfg.CertPath)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			log.Printf("[cert] 遍历goroutine未能在35s内退出, 返回空hash (防data race)")
+			return map[string]string{}
+		}
 	}
 	return result
 }
@@ -1175,18 +1251,43 @@ func validateAgentBinary(path string) error {
 }
 // upgradeLogger writes upgrade step logs to install_dir/ddns_upgrade.log
 // (v1.5.30 M1: 与批处理脚本统一日志文件, 方便排查)
+// v1.6.36 M7: 缓存文件句柄 — 升级流程中 write→close→open 重复 20+ 次,
+// 现改为 Open 一次缓存, 避免每行日志都 Open/Close 的开销
+var (
+	upgradeLogFile   *os.File
+	upgradeLogFileMu sync.Mutex
+)
 func upgradeLogger(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
-	// 与批处理脚本写入同一日志文件: ddns_upgrade.log
-	f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err == nil {
-		fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format("15:04:05 UTC"), msg)
-		f.Close()
+	upgradeLogFileMu.Lock()
+	if upgradeLogFile == nil {
+		f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade.log"),
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			upgradeLogFileMu.Unlock()
+			return
+		}
+		upgradeLogFile = f
+	}
+	n, writeErr := fmt.Fprintf(upgradeLogFile, "[%s] %s\n", time.Now().UTC().Format("15:04:05 UTC"), msg)
+	upgradeLogFileMu.Unlock()
+	if writeErr != nil {
+		log.Printf("[upgrade] 升级日志写入失败: %v (wrote %d bytes)", writeErr, n)
 	}
 }
 
 func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
+	// v1.6.45 L2: defer 关闭升级日志文件句柄 (进程 os.Exit 前确保刷盘)
+	defer func() {
+		upgradeLogFileMu.Lock()
+		if upgradeLogFile != nil {
+			upgradeLogFile.Close()
+			upgradeLogFile = nil
+		}
+		upgradeLogFileMu.Unlock()
+	}()
+
 	exePath, _ := os.Executable()
 	if exePath == "" {
 		return fmt.Errorf("cannot find self")
@@ -1227,8 +1328,10 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 			upgradeLogger("下载重试 %d/3", attempt+1)
 		}
-		// 每次重试前清理失败的临时文件
-		os.Remove(tmpFile)
+		// v1.6.36 M2: 检查删除错误, 防止杀毒软件锁定文件导致 os.Create 失败
+		if rmErr := os.Remove(tmpFile); rmErr != nil && !os.IsNotExist(rmErr) {
+			upgradeLogger("清理临时文件失败(可能被锁定): %v", rmErr)
+		}
 		hc := newHTTPClient(cfg.VerifySSL, 2*time.Minute)
 		resp, err := hc.Get(url)
 		if err != nil {
@@ -1768,15 +1871,17 @@ func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
 // 现合并为一次调用减少进程开销。
 // v1.5.38: 增加 pfxPassword 参数 — certutil -dump 密码保护的 PFX 文件需要 -p 密码。
 // Win2022 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
+// certutilErrRe v1.6.42 C5: 包级编译一次 + 匹配任意长度 hex (覆盖 0x2/0x5/0x80070056)
+var certutilErrRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+
 // certutilErrorCode v1.6.17: 从certutil输出提取hex错误码, 避免中文乱码
 // certutil在中文Windows输出GBK, 直接log会出现"ָ 벻 ȷ"等乱码
+// v1.6.42 C5: 改用包级 regex + 匹配任意长度 hex 错误码 (不再限制恰好8位)
 func certutilErrorCode(output string) string {
-	// 匹配 0x80070056 或 0xXXXXXXXX 格式的hex错误码
-	re := regexp.MustCompile(`0x[0-9a-fA-F]{8}`)
-	if m := re.FindString(output); m != "" {
+	if m := certutilErrRe.FindString(output); m != "" {
 		return fmt.Sprintf("错误码=%s", m)
 	}
-	// 回退: 取第一行非空文本的前100字符(ASCII safek)
+	// 回退: 取第一行非空文本的前100字符(ASCII safe)
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1821,7 +1926,10 @@ func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
 
 // ── Windows Trust (MotW removal) ──
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile) // v1.5.31 M3: 所有日志带时间戳+文件名行号，便于排查
+	// v1.5.31 M3: 所有日志带时间戳+文件名行号，便于排查
+	// v1.6.45 L3: 加 log.LUTC 统一 UTC+0 时区 — Agent 上报/Manager 存储均使用 UTC,
+	// Web UI 按设置页时区转换显示。Agent 上报内容中附加的 "UTC" 标记用于区分原始时间与展示时间
+	log.SetFlags(log.LstdFlags | log.Lshortfile | log.LUTC)
 	heartbeat := flag.Bool("heartbeat", false, "send single heartbeat (for systemd timer)")
 	daemon := flag.Bool("daemon", false, "run as daemon (for Windows Service)")
 	showVersion := flag.Bool("version", false, "show version")

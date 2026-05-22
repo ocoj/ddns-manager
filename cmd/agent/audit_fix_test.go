@@ -212,3 +212,29 @@ func TestWindowsUpgrade_LogFile(t *testing.T) {
 		t.Error("append mode corrupted: first entry lost")
 	}
 }
+
+// TestIsPrivateKeyFile v1.6.37: 验证私钥/公钥文件识别
+func TestIsPrivateKeyFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected bool
+	}{
+		{"privkey.pem", true},
+		{"fullchain.pem", false},
+		{"cert.pem", false},
+		{"cert.pfx", false},
+		{"cert.key", true},
+		{"PRIVKEY.PEM", true},
+		{"server.key", true},
+		{"cert-modern.pfx", false},
+		{"ca.pem", false},
+		{"chain.pem", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPrivateKeyFile(tt.name); got != tt.expected {
+				t.Errorf("isPrivateKeyFile(%q) = %v, want %v", tt.name, got, tt.expected)
+			}
+		})
+	}
+}

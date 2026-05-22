@@ -139,13 +139,16 @@ func main() {
 
 	// v1.5.33: DNS Key 定时有效性检测 (每6小时)
 	shutdownKeyCheck := make(chan struct{})
-	mgr.StartDNSKeyChecker(shutdownKeyCheck)
 	defer close(shutdownKeyCheck)
 
 	// start background system info collector (non-blocking, 30s interval)
 	shutdownSysInfo := make(chan struct{})
 	mgr.StartSysInfoCollector(shutdownSysInfo)
 	defer close(shutdownSysInfo)
+
+	shutdownBinWatcher := make(chan struct{})
+	mgr.StartBinWatcher(shutdownBinWatcher)
+	defer close(shutdownBinWatcher)
 
 	r := mgr.Router()
 

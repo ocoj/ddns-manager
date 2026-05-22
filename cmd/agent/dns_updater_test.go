@@ -353,3 +353,65 @@ func TestDNSStatusLastLine(t *testing.T) {
 		})
 	}
 }
+
+// TestLogBuffer_DrainAndRecover v1.6.36: 验证环形缓冲区排水+恢复完整性
+// 覆盖场景: (1) 正常排水清空 (2) 恢复后条目数正确 (3) 清空后新写入
+func TestLogBuffer_DrainAndRecover(t *testing.T) {
+	lb := newLogBuffer(5)
+
+	// 写入 3 条
+	lb.Write("line-1")
+	lb.Write("line-2")
+	lb.Write("line-3")
+
+	if lb.Len() != 3 {
+		t.Errorf("Len = %d, want 3", lb.Len())
+	}
+
+	// 排水 (正常场景)
+	drained := lb.Drain()
+	if len(drained) != 3 {
+		t.Errorf("Drain 返回 %d 条, want 3", len(drained))
+	}
+	if lb.Len() != 0 {
+		t.Errorf("排水后 Len = %d, want 0", lb.Len())
+	}
+
+	// 排水后继续写入 (边界)
+	lb.Write("line-4")
+	if lb.Len() != 1 {
+		t.Errorf("新写入后 Len = %d, want 1", lb.Len())
+	}
+
+	// WriteRaw 恢复已排水数据 (异常恢复场景)
+	for _, item := range drained {
+		lb.WriteRaw(item)
+	}
+	if lb.Len() != 4 {
+		t.Errorf("恢复后 Len = %d, want 4 (3恢复+1新)", lb.Len())
+	}
+
+	// Recent 取最近 N 条
+	recent := lb.Recent(2)
+	if len(recent) != 2 {
+		t.Errorf("Recent(2) = %d 条, want 2", len(recent))
+	}
+
+	// 超容量写入 (环形覆盖)
+	for i := 0; i < 10; i++ {
+		lb.Write(fmt.Sprintf("overflow-%d", i))
+	}
+	if lb.Len() != 5 {
+		t.Errorf("超容后 Len = %d, want 5 (max buffer size)", lb.Len())
+	}
+
+	// Clear 清空
+	lb.Clear()
+	if lb.Len() != 0 {
+		t.Errorf("Clear 后 Len = %d, want 0", lb.Len())
+	}
+	recent = lb.Recent(5)
+	if len(recent) != 0 {
+		t.Errorf("Clear 后 Recent = %d 条, want 0", len(recent))
+	}
+}

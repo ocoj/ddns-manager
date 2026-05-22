@@ -374,6 +374,7 @@ func (m *Manager) Log(category, action, detail, status string) {
 		Time:     time.Now().UTC(),
 		Category: category,
 		Action:   action,
+		Node:     "管理端",
 		Detail:   detail,
 		Status:   status,
 	}
@@ -399,6 +400,7 @@ func (m *Manager) LogAuth(action, user, ip, detail, status string) {
 		Time:     time.Now().UTC(),
 		Category: "auth",
 		Action:   action,
+		Node:     "管理端",
 		User:     user,
 		IP:       ip,
 		Detail:   detail,
@@ -417,19 +419,22 @@ func (m *Manager) logEvent(e Event) {
 	// H2: rotation under separate rotateMu, avoiding blocking concurrent writes
 	m.rotateMu.Lock()
 	m.rotateIfNeeded()
-	m.rotateMu.Unlock()
-
-	// check disk space (debounced, once per minute)
+	// v1.6.42 M8: 磁盘检查也受 rotateMu 保护, 消除 lastDiskCheck 并发写 data race
 	if m.lastDiskCheck.Add(time.Minute).Before(time.Now()) {
 		m.EnsureDiskSpace()
 		m.lastDiskCheck = time.Now()
 	}
+	m.rotateMu.Unlock()
 
 	// File write under fileMu only (no rotation inside)
 	m.fileMu.Lock()
-	data, _ := json.Marshal(e)
-	if _, err := m.file.Write(append(data, '\n')); err != nil {
-		log.Printf("[logger] write error: %v", err)
+	data, err := json.Marshal(e)
+	if err != nil {
+		log.Printf("[logger] marshal error: %v", err)
+	} else {
+		if _, werr := m.file.Write(append(data, '\n')); werr != nil {
+			log.Printf("[logger] write error: %v", werr)
+		}
 	}
 	m.fileMu.Unlock()
 
@@ -655,6 +660,17 @@ func (m *Manager) CountByTime(category, status, node string, from, to time.Time)
 }
 
 // Categories returns distinct categories.
+// KnownCategories returns the known categories for this manager node.
+// These are categories logged by the manager backend itself (not agents).
+// Used to ensure the Web UI filter dropdown always includes all possible categories,
+// even when some are not currently in the ring buffer.
+func (m *Manager) KnownCategories() []string {
+	return []string{
+		"auth", "system", "dns-key", "upgrade", "smtp", "api-key-verify",
+		"节点", "通知", "DDNS-Update", "报告",
+	}
+}
+
 func (m *Manager) Categories() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -673,6 +689,11 @@ func (m *Manager) Categories() []string {
 			continue
 		}
 		seen[e.Category] = true
+	}
+	// Merge known categories so the dropdown always shows them even if
+	// they've been rotated out of the ring buffer
+	for _, c := range m.KnownCategories() {
+		seen[c] = true
 	}
 	var cats []string
 	for k := range seen {

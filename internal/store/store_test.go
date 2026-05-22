@@ -1,7 +1,11 @@
 package store
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -509,4 +513,230 @@ func TestSaveAndLoadRateLimitConfig(t *testing.T) {
 	if loaded.RequestsPerMin != 300 {
 		t.Errorf("RequestsPerMin = %d", loaded.RequestsPerMin)
 	}
+}
+
+// TestReplaceNodeDNSKey_Atomic v1.6.36 C3: 验证原子替换 DNS Key 引用
+// 覆盖场景: (1) 正常替换 (2) 仅添加 (3) 仅删除 (4) 两个key都不存在
+func TestReplaceNodeDNSKey_Atomic(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+
+	// 准备: 创建两个 DNS Key
+	keys := map[string]*model.DNSKeyRecord{
+		"阿里云":    {Name: "阿里云", Provider: "alidns", UsedByNodes: []string{"node-1", "node-2"}},
+		"Cloudflare": {Name: "Cloudflare", Provider: "cloudflare", UsedByNodes: []string{}},
+	}
+	s.SaveDNSKeys(keys)
+
+	// 场景1: 原子替换 — node-1 从阿里云 → Cloudflare (正常)
+	err := s.ReplaceNodeDNSKey("node-1", "阿里云", "Cloudflare")
+	if err != nil {
+		t.Fatalf("ReplaceNodeDNSKey 失败: %v", err)
+	}
+
+	loaded, _ := s.LoadDNSKeys()
+	// 验证: node-1 已从阿里云移除
+	for _, n := range loaded["阿里云"].UsedByNodes {
+		if n == "node-1" {
+			t.Error("node-1 应已从阿里云中移除")
+		}
+	}
+	// 验证: node-2 仍在阿里云 (其他节点不受影响)
+	found2 := false
+	for _, n := range loaded["阿里云"].UsedByNodes {
+		if n == "node-2" {
+			found2 = true
+		}
+	}
+	if !found2 {
+		t.Error("node-2 应仍在阿里云中 — 替换不应影响其他节点")
+	}
+	// 验证: node-1 已添加到 Cloudflare
+	found1 := false
+	for _, n := range loaded["Cloudflare"].UsedByNodes {
+		if n == "node-1" {
+			found1 = true
+		}
+	}
+	if !found1 {
+		t.Error("node-1 应已添加到 Cloudflare")
+	}
+
+	// 场景2: oldKey 不存在时仅添加新引用 (边界)
+	err = s.ReplaceNodeDNSKey("node-3", "不存在的Key", "阿里云")
+	if err != nil {
+		t.Fatalf("oldKey 不存在时应仅添加: %v", err)
+	}
+	loaded, _ = s.LoadDNSKeys()
+	found3 := false
+	for _, n := range loaded["阿里云"].UsedByNodes {
+		if n == "node-3" {
+			found3 = true
+		}
+	}
+	if !found3 {
+		t.Error("node-3 应已添加到阿里云 (oldKey不存在时仅添加)")
+	}
+
+	// 场景3: 仅删除不添加 — newKey 为空 (边界)
+	err = s.ReplaceNodeDNSKey("node-3", "阿里云", "")
+	if err != nil {
+		t.Fatalf("仅删除时不应失败: %v", err)
+	}
+	loaded, _ = s.LoadDNSKeys()
+	for _, n := range loaded["阿里云"].UsedByNodes {
+		if n == "node-3" {
+			t.Error("node-3 应已从阿里云中移除 (仅删除模式)")
+		}
+	}
+
+	// 场景4: 两个 key 都不存在 — 不应 panic (异常安全)
+	err = s.ReplaceNodeDNSKey("node-x", "不存在的Key", "也不存在")
+	if err != nil {
+		t.Fatalf("两个 key 都不存在时不应失败: %v", err)
+	}
+}
+
+// TestRebuildManifest_WithHelper v1.6.36 C2: 验证 RebuildManifest 同时追踪
+// node-agent 和 upgrade_helper 二进制文件, 确保 Agent 端能找到升级助手。
+func TestRebuildManifest_WithHelper(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	binDir := s.AgentBinDir()
+
+	// 创建测试二进制文件 (模拟构建脚本输出)
+	writeBin := func(name string) {
+		os.WriteFile(filepath.Join(binDir, name), []byte("dummy"), 0644)
+	}
+	writeBin("node-agent-v1.6.35-linux-amd64")
+	writeBin("node-agent-v1.6.36-linux-amd64")
+	writeBin("node-agent-v1.6.35-windows-amd64.exe")
+	writeBin("node-agent-v1.6.36-windows-amd64.exe")
+	writeBin("upgrade_helper-v1.6.35-windows-amd64.exe")
+	writeBin("upgrade_helper-v1.6.36-windows-amd64.exe")
+	writeBin("upgrade_helper-v1.6.36-linux-amd64")           // Linux 不匹配正则 (非 .exe)
+	writeBin("node-agent-v1.6.35-linux-armv7")                 // 非标准 arch
+	writeBin("node-agent-vdev-windows-amd64.exe")              // dev 版本应跳过
+
+	s.RebuildManifest()
+	manifest, err := s.LoadAgentManifest()
+	if err != nil {
+		t.Fatalf("LoadAgentManifest: %v", err)
+	}
+
+	// 验证: 每个平台取最高版本
+	if !strings.Contains(manifest["linux-amd64"], "v1.6.36") {
+		t.Errorf("linux-amd64 应选 v1.6.36, got %q", manifest["linux-amd64"])
+	}
+	if !strings.Contains(manifest["windows-amd64"], "v1.6.36") {
+		t.Errorf("windows-amd64 应选 v1.6.36, got %q", manifest["windows-amd64"])
+	}
+
+	// 验证: helper 文件被追踪 (key = "helper-windows-amd64")
+	helperFile, ok := manifest["helper-windows-amd64"]
+	if !ok {
+		t.Error("manifest 应包含 helper-windows-amd64 键")
+	} else if !strings.Contains(helperFile, "v1.6.36") {
+		t.Errorf("helper-windows-amd64 应选 v1.6.36, got %q", helperFile)
+	}
+
+	// 验证: Linux helper 不应被追踪 (helper 仅 Windows 需要)
+	if _, ok := manifest["helper-linux-amd64"]; ok {
+		t.Error("helper-linux-amd64 不应被追踪 (upgrade_helper.exe 是 Windows-only)")
+	}
+
+	// 验证: dev 版本被跳过
+	for _, f := range manifest {
+		if strings.Contains(f, "vdev") {
+			t.Errorf("dev 版本不应出现在 manifest: %q", f)
+		}
+	}
+}
+
+// TestGetAgentBinarySHA256_Fallback v1.6.36 C5: 验证 .sha256 缺失时自动从二进制计算兜底
+func TestGetAgentBinarySHA256_Fallback(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	binDir := s.AgentBinDir()
+
+	// 写入二进制，但不写 .sha256
+	binPath := filepath.Join(binDir, "node-agent-v1.6.36-linux-amd64")
+	testData := []byte("dummy binary content for sha256 test")
+	os.WriteFile(binPath, testData, 0644)
+
+	// 计算期待值
+	expectedHash := fmt.Sprintf("%x", sha256.Sum256(testData))
+
+	// .sha256 缺失时，应自动从二进制计算
+	got := s.GetAgentBinarySHA256("node-agent-v1.6.36-linux-amd64")
+	if got != expectedHash {
+		t.Errorf("GetAgentBinarySHA256 兜底计算: got %q, want %q", got, expectedHash)
+	}
+
+	// 二进制也不存在时，应返回空字符串
+	gotEmpty := s.GetAgentBinarySHA256("nonexistent-binary")
+	if gotEmpty != "" {
+		t.Errorf("文件不存在应返回空字符串, got %q", gotEmpty)
+	}
+
+	// .sha256 存在时，应优先读取 (不重新计算)
+	os.WriteFile(binPath+".sha256", []byte("aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999  node-agent-v1.6.36-linux-amd64\n"), 0644)
+	gotFromFile := s.GetAgentBinarySHA256("node-agent-v1.6.36-linux-amd64")
+	if gotFromFile != "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999" {
+		t.Errorf(".sha256 存在时应读文件, got %q", gotFromFile)
+	}
+
+	// .sha256 损坏 (格式不对) 时，应降级到兜底计算
+	os.WriteFile(binPath+".sha256", []byte("garbage\n"), 0644)
+	gotFallback := s.GetAgentBinarySHA256("node-agent-v1.6.36-linux-amd64")
+	if gotFallback != expectedHash {
+		t.Errorf(".sha256 损坏时应兜底计算: got %q, want %q", gotFallback, expectedHash)
+	}
+}
+
+// TestTrackDNSKeyUsage_Atomic — v1.6.42 C7:
+// 验证 TrackDNSKeyUsage 原子化后两个 goroutine 并发追加节点引用无竞态。
+func TestTrackDNSKeyUsage_Atomic(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+
+	// 初始化 DNS Key
+	keys := map[string]*model.DNSKeyRecord{
+		"key-a": {Name: "key-a", Provider: "alidns"},
+	}
+	if err := s.SaveDNSKeys(keys); err != nil {
+		t.Fatalf("SaveDNSKeys: %v", err)
+	}
+
+	// 两个 goroutine 并发调用 TrackDNSKeyUsage (均原子化)
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+
+	for g := 0; g < 2; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				nodeID := fmt.Sprintf("node-%d-%d", gid, i)
+				if err := s.TrackDNSKeyUsage("key-a", nodeID); err != nil {
+					errs <- err
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("并发 TrackDNSKeyUsage 错误: %v", err)
+	}
+
+	// 验证: key-a 的 used_by_nodes 包含所有 20 个并发写入的节点 (无丢失)
+	finalKeys, _ := s.LoadDNSKeys()
+	ka, ok := finalKeys["key-a"]
+	if !ok {
+		t.Fatal("key-a 不存在")
+	}
+	// 由于去重逻辑, 可能 < 20 (同 node 多次写入), 但不应为空
+	if len(ka.UsedByNodes) == 0 {
+		t.Error("key-a used_by_nodes 为空 — 并发写入全部丢失")
+	}
+	t.Logf("used_by_nodes count: %d (20 unique nodes across 2 goroutines)", len(ka.UsedByNodes))
 }

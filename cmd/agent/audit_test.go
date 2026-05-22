@@ -129,23 +129,24 @@ func TestLogBufferTimeFormat(t *testing.T) {
 	line := lines[0]
 	t.Logf("Log line: %s", line)
 
-	// Verify UTC+RFC3339 timestamp format: "2006-01-02T15:04:05Z <msg>"
-	// After the v1.6.30 H3 fix, the format is ISO 8601 UTC with 'Z' suffix
-	if !strings.Contains(line, "Z ") {
-		t.Errorf("expected UTC 'Z' suffix in timestamp, got: %s", line[:30])
+	// Verify UTC timestamp format: "2006-01-02 15:04:05 UTC <msg>" (v1.6.39)
+	// After the v1.6.39 fix, the format uses explicit "UTC" label instead of "Z"
+	if !strings.Contains(line, " UTC ") {
+		t.Errorf("expected explicit UTC label in timestamp, got: %s", line[:30])
 	}
 	if !strings.Contains(line, testMsg) {
 		t.Errorf("expected message %q in line, got: %s", testMsg, line)
 	}
 
-	// Verify the timestamp is parseable
+	// Verify the timestamp is parseable and uses UTC label
 	parts := strings.SplitN(line, " ", 2)
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		t.Fatalf("unexpected log format: %s", line)
 	}
-	ts := parts[0]
-	if !strings.HasSuffix(ts, "Z") {
-		t.Errorf("timestamp %q does not end with Z (not UTC)", ts)
+	// v1.6.39: format is "2006-01-02 15:04:05 UTC <msg>"
+	// parts[0] = "2006-01-02", parts[1] should contain "15:04:05 UTC"
+	if !strings.Contains(parts[1], "UTC") {
+		t.Errorf("timestamp does not contain explicit UTC label: %s", line[:40])
 	}
 }
 

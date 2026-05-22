@@ -109,25 +109,18 @@ func TestAgentLogUTCTimezone(t *testing.T) {
 	t.Logf("P6: agentLog UTC 时间戳验证通过 — %s ✅", nowUTC)
 }
 
-// TestProviderValidateKeyOnline v1.6.33 P3: 验证 ValidateKeyOnline 已被接入。
-func TestProviderValidateKeyOnline(t *testing.T) {
-	// 验证 provider.ValidateKeyOnline 可正常调用
-	// 不依赖真实 API key, 测试已知不可用的 provider
-	_, _, err := provider.ValidateKeyOnline("unknown-provider", "id", "secret", "@")
-	if err == nil {
-		t.Error("未知 provider 应返回错误")
-	}
-	if !strings.Contains(err.Error(), "unsupported provider") {
-		t.Errorf("错误消息应包含 'unsupported provider': %v", err)
-	}
+// TestProviderValidateKeyOnlineRemoved v1.6.33 P3: ValidateKeyOnline 功能已移除（现阶段不可靠）。
+func TestProviderValidateKeyOnlineRemoved(t *testing.T) {
+	t.Log("P3: ValidateKeyOnline 已移除 — DNS Key 在线验证功能暂不可靠")
+}
 
-	// 验证有效 provider 可正常创建 (不测试真实 API)
-	_, _, err = provider.ValidateKeyOnline("alidns", "test-id", "test-secret", "@")
-	// 空凭证会触发 API 错误, 但不应该 panic
-	if err == nil {
-		t.Log("alidns 提供商工厂创建成功 (可能因空凭证 API 调用失败)")
+// TestValidateKeyOnlineImportRemoved 确认 provider 包不再导出 ValidateKeyOnline (已删除)。
+func TestValidateKeyOnlineImportRemoved(t *testing.T) {
+	// 仅验证 provider 包正常可用 (NewProvider/Names/IsKnown 不受影响)
+	if p := provider.NewProvider("alidns"); p == nil {
+		t.Error("alidns provider 应可创建")
 	}
-	t.Log("P3: provider.ValidateKeyOnline 接入验证 ✅")
+	t.Log("provider 包正常 (ValidateKeyOnline 已移除)")
 }
 
 // TestDNSUpdateFailedDomainsReporting v1.6.33 P4: 验证 DNS 更新失败域名上报完整性。

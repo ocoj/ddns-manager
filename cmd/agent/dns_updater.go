@@ -104,6 +104,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 		detail   string
 	}
 	var segErrors []segErr
+	var lastAPIErr string // v1.6.44 C1: DNS API 实际错误，用于域名级失败日志
 
 	for _, dc := range u.cfg.DnsConf {
 		// Create the appropriate DNS provider (v1.6.28 M1: 统一注册表)
@@ -161,6 +162,8 @@ func (u *DNSUpdater) Run() DNSStatus {
 			if len(detail) > 500 {
 				detail = detail[:500] + "..."
 			}
+			// v1.6.44 C1: 保存API错误详情供后续域名级失败日志使用
+			lastAPIErr = detail
 			// v1.6.33 P2: 每段错误独立记录 — 移除有缺陷的 len(segErrors) < len(DnsConf) 条件
 			// 原条件在"不支持的provider"提前占位时可能导致后续段的错误被静默丢弃
 			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, detail: detail})
@@ -180,11 +183,19 @@ func (u *DNSUpdater) Run() DNSStatus {
 		// v1.5.29 H1: 收集失败域名详情，后续上报到 Manager
 		// v1.5.30 H4: 失败域名追加到外层累积列表，不覆盖
 		var segFailed []string
+		var segFailedDetail []string
 		for _, d := range domains.Ipv4Domains {
 			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
 				allOK = false
 				domainStr := d.String()
-				u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s", domainStr))
+				// v1.6.44 C1: DNS失败时附带 ddns-go API 实际错误详情
+				if lastAPIErr != "" {
+					u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s — %s", domainStr, lastAPIErr))
+					segFailedDetail = append(segFailedDetail, domainStr+": "+lastAPIErr)
+				} else {
+					u.logBuf.Write(fmt.Sprintf("IPv4更新失败: %s", domainStr))
+					segFailedDetail = append(segFailedDetail, domainStr)
+				}
 				segFailed = append(segFailed, domainStr)
 			}
 		}
@@ -192,7 +203,13 @@ func (u *DNSUpdater) Run() DNSStatus {
 			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
 				allOK = false
 				domainStr := d.String()
-				u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s", domainStr))
+				if lastAPIErr != "" {
+					u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s — %s", domainStr, lastAPIErr))
+					segFailedDetail = append(segFailedDetail, domainStr+": "+lastAPIErr)
+				} else {
+					u.logBuf.Write(fmt.Sprintf("IPv6更新失败: %s", domainStr))
+					segFailedDetail = append(segFailedDetail, domainStr)
+				}
 				segFailed = append(segFailed, domainStr)
 			}
 		}
@@ -200,8 +217,10 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 		if len(segFailed) > 0 {
 			// v1.6.10 C1: 仅记录日志, 状态在循环外统一赋值
-			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, domains: segFailed})
-			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, strings.Join(segFailed, ", "))
+			// v1.6.44 C1: DNS失败时附带 ddns-go API 实际错误原因
+			segErrors = append(segErrors, segErr{provider: dc.DNS.Name, domains: segFailed,
+				detail: strings.Join(segFailedDetail, "; ")})
+			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, strings.Join(segFailedDetail, ", "))
 		}
 	}
 
@@ -357,8 +376,8 @@ func newLogBuffer(size int) *LogBuffer {
 func (lb *LogBuffer) Write(msg string) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	// v1.6.30 H3: 统一使用 UTC+RFC3339 时间戳, 与 agent_events.log 格式一致
-	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("2006-01-02T15:04:05Z") + " " + msg
+	// v1.6.30 H3+v1.6.39: 使用显式 UTC 标记替代 "Z", 对非技术用户更直观
+	lb.buf[lb.pos%lb.size] = time.Now().UTC().Format("2006-01-02 15:04:05 UTC") + " " + msg
 	lb.pos++
 }
 

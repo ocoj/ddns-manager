@@ -1,0 +1,9 @@
+# ddns-manager 项目守门配置
+name: ddns-manager
+compile_cmd: "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o build/ddns-manager-linux-amd64 ./cmd/manager"
+python: python3
+src_pattern: "*.go"
+services:
+  - ddns-manager
+health_endpoint: "http://localhost:9877/api/ping"
+smoke_tests: []

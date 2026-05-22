@@ -153,26 +153,29 @@ func copyFile(src, dst string) error {
 // fallbackBatchUpgrade v1.6.28+v1.6.30: 旧的批处理升级作为降级兜底。
 // 仅在 upgrade_helper.exe 不可用时使用。
 // v1.6.30: 增加等待时间 ping -n 3→ping -n 10 (约9秒), 确保旧进程完全退出
+// v1.6.42 C2: 修复 Sprintf 位置参数 Bug — Go 不支持 %[1]s, 改为普通 %s
 func fallbackBatchUpgrade(newExe, curExe string) error {
 	dir := filepath.Dir(curExe)
+	agentLog("[upgrade] 降级到批处理升级方案 (helper不可用): new=%s cur=%s", newExe, curExe)
 
 	helperPath := filepath.Join(dir, "upgrade_helper.bat")
+	// C2: %s 替代 %[1]s/%[2]s — Go Sprintf 不支持位置参数
 	helper := fmt.Sprintf("@echo off\r\n"+
-		"rem v1.6.31 C4: 10次ping≈9秒等待 + 错误恢复逻辑\r\n"+
+		"rem v1.6.42 C2: 10次ping≈9秒等待 + 错误恢复逻辑\r\n"+
 		"ping -n 10 127.0.0.1 >nul\r\n"+
-		"move /y \"%[1]s\" \"%[2]s\"\r\n"+
+		"move /y \"%s\" \"%s\"\r\n"+
 		"if %%ERRORLEVEL%% NEQ 0 (\r\n"+
-		"  echo move failed, retrying with copy... >> \"%[2]s.fail\"\r\n"+
-		"  copy /y \"%[1]s\" \"%[2]s\"\r\n"+
+		"  echo move failed, retrying with copy... >> \"%s.fail\"\r\n"+
+		"  copy /y \"%s\" \"%s\"\r\n"+
 		"  if %%ERRORLEVEL%% NEQ 0 (\r\n"+
-		"    echo copy also failed >> \"%[2]s.fail\"\r\n"+
+		"    echo copy also failed >> \"%s.fail\"\r\n"+
 		"  )\r\n"+
-		"  del \"%[1]s\" 2>nul\r\n"+
+		"  del \"%s\" 2>nul\r\n"+
 		")\r\n"+
 		"sc config node-agent start= auto\r\n"+
 		"sc start node-agent\r\n"+
 		"del \"%%~f0\" & exit\r\n",
-		newExe, curExe)
+		newExe, curExe, curExe, newExe, curExe, curExe, newExe)
 
 	if err := os.WriteFile(helperPath, []byte(helper), 0700); err != nil {
 		return fmt.Errorf("write upgrade helper: %w", err)
@@ -202,47 +205,69 @@ func restartAgentAfterUpgrade() {}
 // 此函数在 selfUpgrade 中调用, 确保下次升级有 upgrade_helper 可用。
 // v1.6.31 C3: 先下载到 .tmp, 成功后原子 rename, 防止下载失败损坏已有的 upgrade_helper.exe
 // 下载失败不阻塞升级 (findHelperExe 会回退到 PATH 搜索, replaceRunningBinary 会降级批处理)。
+// v1.6.36 C2: 增加重试逻辑 (2次, 1s/2s退避) + manifest 文件名查询兜底, 提升升级可靠性。
 func downloadUpgradeHelper(cfg *model.AgentConfig, targetVersion string) {
-	helperURL := fmt.Sprintf("%s/dl/upgrade_helper-v%s-windows-amd64.exe",
-		strings.TrimRight(cfg.ManagerURL, "/"), targetVersion)
 	helperPath := filepath.Join(agentBaseDir, "upgrade_helper.exe")
 	// 如果已有 upgrade_helper.exe 且非零大小, 跳过下载
 	if fi, err := os.Stat(helperPath); err == nil && fi.Size() > 0 {
+		upgradeLogger("升级助手已存在: %s (%d bytes)", helperPath, fi.Size())
 		return
 	}
-	// v1.6.31 C3: 下载到临时文件, 成功后再原子 rename, 防止覆盖健康的旧 helper
-	tmpPath := helperPath + ".dl"
-	os.Remove(tmpPath) // 清理上次残留
 
-	hc := newHTTPClient(cfg.VerifySSL, 30*time.Second)
-	resp, err := hc.Get(helperURL)
-	if err != nil {
-		upgradeLogger("下载升级助手失败(非致命): %v", err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		upgradeLogger("下载升级助手 HTTP %d (非致命)", resp.StatusCode)
-		return
-	}
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		upgradeLogger("创建升级助手临时文件失败(非致命): %v", err)
-		return
-	}
-	if _, err := io.Copy(f, io.LimitReader(resp.Body, 10<<20)); err != nil {
+	// C2: 先构造 URL (优先使用与 Agent 同版本的 helper)
+	helperURL := fmt.Sprintf("%s/dl/upgrade_helper-v%s-windows-amd64.exe",
+		strings.TrimRight(cfg.ManagerURL, "/"), targetVersion)
+
+	// v1.6.42 H6: 3次重试 + 1s/2s/3s 退避, 与 selfUpgrade 下载对齐, 覆盖瞬态网络故障
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+			upgradeLogger("升级助手下载重试 %d/3", attempt+1)
+		}
+
+		tmpPath := helperPath + ".dl"
+		os.Remove(tmpPath) // 清理上次残留
+
+		hc := newHTTPClient(cfg.VerifySSL, 30*time.Second)
+		resp, err := hc.Get(helperURL)
+		if err != nil {
+			upgradeLogger("下载升级助手失败: %v (attempt=%d)", err, attempt+1)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			upgradeLogger("下载升级助手 HTTP %d (attempt=%d)", resp.StatusCode, attempt+1)
+			continue
+		}
+		f, err := os.Create(tmpPath)
+		if err != nil {
+			resp.Body.Close()
+			upgradeLogger("创建升级助手临时文件失败: %v (attempt=%d)", err, attempt+1)
+			continue
+		}
+		n, copyErr := io.Copy(f, io.LimitReader(resp.Body, 10<<20))
 		f.Close()
-		os.Remove(tmpPath)
-		upgradeLogger("写入升级助手失败(非致命): %v", err)
-		return
-	}
-	f.Close()
+		resp.Body.Close()
+		if copyErr != nil {
+			os.Remove(tmpPath)
+			upgradeLogger("写入升级助手失败: %v (attempt=%d)", copyErr, attempt+1)
+			continue
+		}
+		if n == 0 {
+			os.Remove(tmpPath)
+			upgradeLogger("下载升级助手为空 (attempt=%d)", attempt+1)
+			continue
+		}
 
-	// 原子 rename: 只有完整下载才替换旧 helper
-	if err := os.Rename(tmpPath, helperPath); err != nil {
-		os.Remove(tmpPath)
-		upgradeLogger("安装升级助手失败(非致命): %v", err)
+		// 原子 rename: 只有完整下载才替换旧 helper
+		if err := os.Rename(tmpPath, helperPath); err != nil {
+			os.Remove(tmpPath)
+			upgradeLogger("安装升级助手失败: %v (attempt=%d)", err, attempt+1)
+			continue
+		}
+		upgradeLogger("升级助手已预下载: %s (%d bytes)", helperPath, n)
 		return
 	}
-	upgradeLogger("升级助手已预下载: %s (%d bytes)", helperPath, fileSize(helperPath))
+	// 2次重试均失败: 非致命, findHelperExe 会回退到 PATH 搜索
+	upgradeLogger("升级助手下载彻底失败(2次重试用尽), 下次升级将回退到 PATH 搜索或批处理")
 }

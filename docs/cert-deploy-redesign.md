@@ -82,6 +82,8 @@ category=cert-deploy  证书部署全链路日志
   detail: 具体操作描述 + 成功/失败原因
 ```
 
+> **实现差异**: 设计方案中 `HeartbeatReq.IISSnapshot` 在代码实现时并入 `NodeStatus.IISBoundSites`（json:"iis_bound_sites"），字段名和嵌套位置均不同。IIS 绑定快照由 Agent 心跳时通过 `NodeStatus.IISBoundSites` 上报。
+
 ## 4. 各阶段详细日志规范
 
 ### Phase 0: 发现

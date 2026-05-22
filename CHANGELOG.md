@@ -1,5 +1,180 @@
 # CHANGELOG
 
+## v1.6.45 — 2026-05-22
+
+### 🔴 关键修复
+- **C2 context 泄漏**: `StartAutoRenew` 中 `defer cancel()` 在 for 循环内堆积到 goroutine 退出才释放, 改为匿名函数包裹每次迭代
+- **H2 data race 残余**: `collectCertHashes` 35s 总超时后 goroutine 可能仍在写 result map, 改为返回空 map 防并发写
+
+### 🟠 升级可靠性增强
+- **H1 跟进心跳补 Logs**: `sendDDNSHealthHeartbeat` 补全 `Logs` 字段, 确保配置变更后 DNS 失败时 Manager 能看到具体域名级失败原因
+- **H3 os.MkdirAll 错误检查**: `applyCertUpdates` 中证书目录创建失败时增加 `agentLog` 告警
+
+### 📋 日志质量提升
+- **H4 DNS 错误去重**: 心跳 detail 仅含简短摘要 (`detail(len=N)`), 完整错误详情仅通过独立日志记录, 避免 events.log 中重复存储 500 字符 detail
+- **L3 时区统一 UTC+0**: `log.SetFlags` 增加 `log.LUTC`, Agent 所有日志输出统一使用 UTC+0; Web UI 按设置页时区转换显示, 原始日志中的 `UTC` 标记区分原始时间与展示时间
+
+### 🛠️ 代码质量
+- **M1 重试日志修正**: `downloadUpgradeHelper` 重试日志 `/2` 改为 `/3`, 与实际重试次数对齐
+- **M2 轮转错误检查**: `initAgentEventsLog` 日志轮转 `os.Rename` 失败时增加错误日志
+- **L2 升级日志关闭**: `selfUpgrade()` 末尾 defer 关闭 `upgradeLogFile` 文件句柄
+
+### 📝 设计文档澄清
+- **C1/M3/L1**: `collectHardware()`、`HardwareInfo`、`sysinfo_windows.go` 增加注释说明 Agent 仅采集身份+网络信息, CPU/内存/磁盘为管理端专用字段
+
+### 📁 涉及文件
+`cmd/agent/main.go`, `cmd/agent/upgrade_windows.go`, `internal/server/server.go`, `internal/server/handlers_nodes.go`, `internal/model/model.go`, `internal/sysinfo/sysinfo_windows.go` — 共 6 文件
+
+---
+
+## v1.6.44 — 2026-05-21
+
+### 🔴 关键修复
+- **C1 DNS 失败详情**: `dns_updater.go` DNS 更新失败时附带 ddns-go API 实际错误原因（之前只报域名名）
+- **H1 日志截断**: AgentLogs 保留上限从 20 提高到 100，防止升级/证书/配置操作日志被丢弃
+- **H3 Manager 日志**: heartbeat 入口补关键操作日志
+
+### 📁 涉及文件
+`cmd/agent/dns_updater.go`, `cmd/agent/upgrade_linux.go`, `internal/server/handlers_nodes.go`
+
+---
+
+## v1.6.43 — 2026-05-21
+
+### 🧩 Web UI 优化
+- **日志筛选**: 节点下拉新增"管理端"选项，筛选管理端产生的事件（auth/system/dns-key/upgrade/smtp 等）
+- **日志分类**: 分类下拉合并内存 ring buffer + 已知分类列表，避免已轮转日志的分类从下拉消失
+- **管理端 Node 标识**: `Log()`/`LogAuth()` 自动标记 `Node:"管理端"`，旧数据 Node 为空时兜底显示"管理端"
+- **IP 获取方式**: 选择"命令"时网卡下拉正确隐藏，命令输入框正常显示
+- **多 DNS 服务商绑定**: 域名输入框旁新增 DNS Key 选择器，支持单节点多域名绑定不同 DNS 提供商
+- **DNS Keys 表格**: "使用节点"列正确追踪域名级 DNS Key 引用
+- **DNS Keys 名称列**: 宽度对齐证书表 (`188px`)
+
+### 🔧 后端
+- **DomainConfig.UnmarshalJSON**: 兼容旧格式（字符串数组）和新格式（对象数组），平滑迁移
+- **renderDDNSConfig**: 按域名各自的 DNS provider 分组生成多个 ddns-go dnsconf 段
+- **DNS Key 追踪**: 保存配置时全量重建 `used_by_nodes`，覆盖顶层默认 Key + 所有域名级 Key
+
+### 📁 涉及文件
+`internal/model/model.go`, `internal/server/handlers_nodes.go`, `internal/logger/logger.go`, `cmd/manager/static/index.html` — 共 4 文件
+
+---
+
+## v1.6.42 — 2026-05-20
+
+### 🔴 关键修复 (全量代码审计 — KK虾)
+- **C1 配置 hash 持久化错误检查**: `os.WriteFile(configHashPath())` 返回值未检查 → 磁盘满/权限变更时静默失败, oneshot 模式重启后配置重复推送
+- **C2 Windows 批处理升级格式 Bug**: `fmt.Sprintf("%[1]s")` 不支持位置参数 → 批处理脚本损坏, 所有 Windows 节点降级批处理时升级失败
+- **C3 bin-watcher 变更遗漏**: 单一 `lastMod` + `break` → 连续 SCP 多个二进制时后续文件被忽略
+- **C4 collectCertHashes data race**: WalkDir 超时后 goroutine 可能继续写 result map → `go test -race` 检测到并发写
+- **C5 certutil regex 匹配宽度 + 每调用编译**: `{8}` 不匹配短 hex (`0x2`/`0x5`) + `regexp.MustCompile` 每调用编译
+- **C7 TrackDNSKeyUsage TOCTOU**: `LoadDNSKeys(RLock)` → 修改 → `SaveDNSKeys(Lock)` 中间窗口写覆盖, 与 v1.6.37 C3 同类问题
+- **C8 context cancel 泄漏**: `StartAutoRenew` 中 `cancel()` 未 `defer`, panic 时 context 和定时器泄漏
+
+### 🟠 升级可靠性增强
+- **H6 helper 下载重试对齐**: 2→3 次重试 + 1s/2s/3s 退避, 与 selfUpgrade 下载统一
+- **H8 限流热载内存泄漏**: `reloadRateLimit` 停止旧 limiter 前清理 IP buckets, 防止 map 无限增长
+
+### 📋 日志覆盖率提升
+- **H1-H5**: Agent 关键路径补 `agentLog` — hash持久化/升级重启/符号链接自愈/目录创建/IIS应用池回收
+- **H7**: Manager 自重启操作日志追踪
+
+### 🛠️ 代码质量
+- **M2 isCertFile 性能**: `strings.ToLower` 替代为 `strings.EqualFold`, 减少内存分配
+- **M3 collectCertHashes 合并遍历**: 双次 entries 扫描合并为一次
+- **M4 jsonOK Content-Length**: 预编码 JSON 并设置 Content-Length, 大响应浏览器可显进度
+- **M6 上传二进制取最高版本**: `CompareSemVer` 替代取首个文件版本号
+- **M8 lastDiskCheck 原子化**: disk check 移入 `rotateMu` 保护, 消除 data race
+- **C6 注释**: `sysinfo_windows.go` 标注为编译占位 (管理端不部署 Windows)
+- **M9 归档**: 孤儿旧安装器迁移到 `cmd/_deprecated/installer/`
+
+### 🧪 新增测试
+`TestCertutilErrorCode_ShortHexMatch`, `TestFallbackBatchFormatCorrectness`, `TestTrackDNSKeyUsage_Atomic`
+
+### 📋 涉及文件
+`cmd/agent/main.go`, `cmd/agent/upgrade_linux.go`, `cmd/agent/upgrade_windows.go`, `cmd/upgrade-helper/main.go`, `internal/server/server.go`, `internal/server/middleware.go`, `internal/server/handlers_admin.go`, `internal/server/handlers_nodes.go`, `internal/server/handlers_certs.go`, `internal/server/json_helpers.go`, `internal/store/store.go`, `internal/store/store_test.go`, `internal/logger/logger.go`, `internal/sysinfo/sysinfo_windows.go`, `scripts/build.sh`, `cmd/_deprecated/installer/`
+
+---
+
+## v1.6.41 — 2026-05-20
+
+### ✨ 新功能
+- **bin/ 轮询守护**: 30s 间隔监控 `bin/` 目录变化，文件更新时自动重建 `agent_manifest.json`。解决手动 SCP 部署二进制后 manifest 不更新导致升级推送错误版本的问题。零依赖，兼容 NFS
+
+### 📋 涉及文件
+`internal/server/server.go`, `cmd/manager/main.go`
+
+---
+
+## v1.6.40 — 2026-05-20
+
+### 改进
+- **时间戳格式**: 日志时间从 RFC3339 `2026-05-19T15:04:05Z` 改为 `2026-05-19 15:04:05 UTC`，对非技术用户更直观
+
+### 📋 涉及文件
+`cmd/agent/dns_updater.go`, `cmd/agent/main.go`, `cmd/agent/audit_test.go`
+
+---
+
+## v1.6.39 — 2026-05-20
+
+### 🔴 Bug 修复
+- **首次安装后升级符号链接丢失**: `replaceRunningBinary` 清理旧版时误删非版本化文件名 `node-agent`（安装器写入的普通文件），导致 systemd `203/EXEC`。修复: 只删以 `node-agent-v` 开头的版本化文件
+
+### 📋 涉及文件
+`cmd/agent/upgrade_linux.go`
+
+---
+
+## v1.6.38 — 2026-05-20
+
+### 🔴 Bug 修复
+- **证书权限**: 目录 700→755，公钥文件 600→644（私钥保持 600），允许非 root 服务读取证书
+- **前端升级状态**: 无升级记录但版本已匹配时显示 🟢"当前" 而非 "-"，新增"已放弃"状态，共 6 种状态
+- **安装器**: 新增 `os.MkdirAll`，修复新机器首次安装报 "no such file or directory"
+
+### 📋 涉及文件
+`cmd/agent/main.go`, `cmd/installer-linux/main.go`, `cmd/manager/static/index.html`
+
+---
+
+## v1.6.37 — 2026-05-19
+
+### 🔴 全量代码审计修复 — KK虾
+- **C2 升级可靠性增强**: `RebuildManifest` 同时追踪 `upgrade_helper*.exe` (key=`helper-{os}-{arch}`), 解决 Agent 端 helper 缺失导致升级降级到批处理; `downloadUpgradeHelper` 增加 2 次重试 (1s/2s 退避) + 空文件检测
+- **C3 DNS Key TOCTOU 竞态**: 新增 `ReplaceNodeDNSKey` 原子操作 — 全程持写锁读-删-加-写, 消除 `RemoveNodeFromDNSKeys→TrackDNSKeyUsage` 两步之间的并发写覆盖风险
+- **C4 配置重复推送死循环**: `sendDDNSHealthHeartbeat` 缺 `ConfigHash` → 跟进心跳触发无限重推; 修复: 补齐 `ConfigHash` + `lastConfigHash` 持久化到 `ddns_config_hash.txt` (oneshot 模式跨进程不丢失)
+- **C5 sha256 校验兜底**: `GetAgentBinarySHA256` .sha256 缺失/损坏时自动从二进制计算; 覆盖手动 SCP 忘带校验文件或磁盘坏块场景
+- **H1 agentLog 写入检查**: `fmt.Fprintf` 错误不再丢弃, 磁盘满/权限变更时告警
+- **M7 upgradeLogger 句柄缓存**: 打开一次 `ddns_upgrade.log` 并缓存, 替代升级流程中 20+ 次 Open→Write→Close
+- **M2 os.Remove 错误处理**: `selfUpgrade` 重试循环中检查并记录临时文件删除失败
+- **M6 handlePing 空版本**: 未设置 Agent 版本时返回 `"-"` 而非空字符串
+- **L2 json.Marshal 错误检查**: `logEvent` 中检查 marshal 失败并记录
+- **安装器 `os.MkdirAll`**: Linux 安装器创建安装目录，修复新机器首次安装报 "no such file or directory"
+
+### 📋 涉及文件
+`store.go`, `cmd/agent/main.go`, `cmd/agent/upgrade_windows.go`, `cmd/installer-linux/main.go`, `handlers_nodes.go`, `handlers_admin.go`, `logger/logger.go`
+
+### 🧪 新增测试 (4 个)
+`TestReplaceNodeDNSKey_Atomic`, `TestLogBuffer_DrainAndRecover`, `TestRebuildManifest_WithHelper`, `TestGetAgentBinarySHA256_Fallback`
+
+---
+
+## v1.6.36 — 2026-05-19 (前期修复)
+
+### 🔴 Bug 修复
+- **DNS Key 表"使用节点"不更新**: `handleSaveNodeConfig` 更换 DNS key 时只加新引用不清理旧引用 → 保存前提取旧 key，保存后先 `RemoveNodeFromDNSKeys` 再 `TrackDNSKeyUsage`
+- **API 响应浏览器缓存**: `jsonOK` 缺少 `Cache-Control` 头 → 加 `Cache-Control: no-store, max-age=0`
+- **证书 SAN 列显示证书名**: 代码取 `c.sans || c.dns_names` 均为 null，fallback `[name]` → 改用 `c.domains`（实际数据所在字段）
+- **全库 DNS key 脏数据清零**: 读 `nodes.json` 逐节点实际 DNS key 归属重建 `dns_keys.json` 的 `used_by_nodes`
+
+### ✨ 移动端 WebUI 卡片布局重构
+DNS & 证书页 + 版本管理页全部改用 JS 双渲染（桌面表格 + 移动端 flex 卡片），CSS `desk-only` / `mob-only` 切换
+
+### 📋 涉及文件
+`handlers_nodes.go`, `json_helpers.go`, `index.html`, `dns_keys.json`
+
+---
 
 ## v1.6.35 — 2026-05-19
 

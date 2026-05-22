@@ -108,7 +108,9 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	// 清理旧的版本化二进制（当前版本，非新版本）
 	// 只删与新版本名不同的旧版本化文件，避免误删
 	// v1.6.10 H3: 删除失败时记录日志, 防止旧二进制静默堆积
-	if versionedName != oldName {
+	// v1.6.38: 加 "node-agent-v" 前缀检查 — 安装器写入的非版本化文件名 ("node-agent")
+	// 会被 os.Remove 误删, 导致符号链接丢失 → systemd 203/EXEC
+	if versionedName != oldName && strings.HasPrefix(oldName, "node-agent-v") {
 		oldVersionedPath := filepath.Join(dir, oldName)
 		if err := os.Remove(oldVersionedPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[upgrade] 删除旧版二进制失败: %s (%v)", oldName, err)
@@ -131,18 +133,23 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 // v1.5.13 修复: 使用 --no-block 防止 systemctl 等待当前进程完成（死锁）。
 func restartAgentAfterUpgrade() {
 	for i := 0; i < 3; i++ {
+		agentLog("[upgrade] systemctl start 第%d次...", i+1)
 		cmd := exec.Command("systemctl", "start", "--no-block", "node-agent.service")
 		if err := cmd.Run(); err != nil {
 			log.Printf("[upgrade] systemctl start 失败(第%d次): %v", i+1, err)
+			agentLog("[upgrade] systemctl start 失败(第%d次): %v", i+1, err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 		log.Printf("[upgrade] systemctl start --no-block 成功")
+		agentLog("[upgrade] systemctl start --no-block 成功")
 		return
 	}
 	// 3次重试均失败: 不阻塞升级流程, agent timer 会在下次触发时间自动拉起
 	log.Printf("[upgrade] systemctl start 3次重试均失败, 依赖 node-agent.timer 下次自动触发")
+	agentLog("[upgrade] systemctl start 3次重试均失败, 依赖 node-agent.timer 下次自动触发")
 }
 
-// downloadUpgradeHelper v1.6.31: Linux stub (Windows-only 功能, 在 upgrade_windows.go 实现)
+// downloadUpgradeHelper Linux 无操作（Windows 实现在 upgrade_windows.go）。
+// v1.6.44 H2: 必须保留此桩函数，否则 Go 编译器无法为 Linux 构建 selfUpgrade。
 func downloadUpgradeHelper(cfg *model.AgentConfig, targetVersion string) {}

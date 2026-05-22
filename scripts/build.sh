@@ -212,7 +212,7 @@ build_installer_windows() {
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
 }
 
-# ── Installer (旧版 v1.0.0 冻结, 保留不清除) ──
+# ── Installer (旧版 v1.0.0 冻结, v1.6.42 归档到 cmd/_deprecated/installer/ — 以下函数保留为历史参考) ──
 
 build_installer() {
     local arch="$1"

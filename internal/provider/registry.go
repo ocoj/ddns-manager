@@ -4,11 +4,7 @@
 package provider
 
 import (
-	"fmt"
-
-	ddnsconfig "github.com/jeessy2/ddns-go/v6/config"
 	"github.com/jeessy2/ddns-go/v6/dns"
-	"github.com/jeessy2/ddns-go/v6/util"
 )
 
 // ProviderFactory creates a DNS provider instance.
@@ -70,43 +66,4 @@ func Names() []string {
 func IsKnown(name string) bool {
 	_, ok := Registry[name]
 	return name != "" && ok
-}
-
-// ValidateKeyOnline tests if a DNS provider's credentials are valid by
-// calling Init + AddUpdateDomainRecords with a test domain.
-// Returns (valid, detail). This replaces the duplicated testDNSKeyOnline logic.
-func ValidateKeyOnline(providerName, accessKeyID, accessKeySecret, testDomain string) (dns.DNS, *ddnsconfig.DnsConfig, error) {
-	fn, ok := Registry[providerName]
-	if !ok {
-		return nil, nil, fmt.Errorf("unsupported provider: %s", providerName)
-	}
-	p := fn()
-
-	dc := &ddnsconfig.DnsConfig{
-		DNS: ddnsconfig.DNS{Name: providerName, ID: accessKeyID, Secret: accessKeySecret},
-	}
-	dc.Ipv4.Enable = true
-	dc.Ipv4.GetType = "url"
-	dc.Ipv4.URL = "http://ipv4.icanhazip.com"
-	dc.Ipv4.Domains = []string{testDomain}
-	dc.Ipv6.Enable = false
-
-	ipv4cache := &util.IpCache{}
-	ipv6cache := &util.IpCache{}
-	p.Init(dc, ipv4cache, ipv6cache)
-	domains := p.AddUpdateDomainRecords()
-
-	// Check if all updates failed (strong indicator of invalid credentials)
-	allFailed := true
-	for _, d := range domains.Ipv4Domains {
-		if d.UpdateStatus != ddnsconfig.UpdatedFailed {
-			allFailed = false
-			break
-		}
-	}
-	if allFailed && len(domains.Ipv4Domains) > 0 {
-		return p, dc, fmt.Errorf("all domain updates failed (possible invalid credentials)")
-	}
-
-	return p, dc, nil
 }

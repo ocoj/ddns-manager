@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -139,20 +140,24 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 				mgrs := s.acmeMgrList()
 				totalRenewed := 0
 				// v1.5.31 H1: 每个 mgr 独立 context(5min), 防止多账号共享超时导致后续账号被截断
+				// v1.6.45 C2: 用匿名函数包裹每次迭代, defer cancel() 在 Renew 返回后立即执行
+				// defer 在 for 循环内会堆积到 goroutine 退出(24h后)才释放, 造成 context 泄漏
 				for _, mgr := range mgrs {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-					renewed := mgr.Renew(ctx)
-					for _, name := range renewed {
-						if b, err := s.store.LoadCertBundle(name); err == nil {
-							if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
-								log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
+					func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+						defer cancel()
+						renewed := mgr.Renew(ctx)
+						for _, name := range renewed {
+							if b, err := s.store.LoadCertBundle(name); err == nil {
+								if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
+									log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
+								}
 							}
+							s.logMgr.Log("acme", "自动续期成功",
+								fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
 						}
-						s.logMgr.Log("acme", "自动续期成功",
-							fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
-					}
-					totalRenewed += len(renewed)
-					cancel()
+						totalRenewed += len(renewed)
+					}()
 				}
 				// v1.5.29 H2: ACME 空续签记录审计日志 (修复 v1.5.19 C4 回归)
 				if totalRenewed == 0 {
@@ -267,6 +272,50 @@ func (s *Server) countExpiringCerts(days int) int {
 		}
 	}
 	return count
+}
+
+// StartBinWatcher v1.6.41: 轮询 bin/ 目录, 检测到文件变化时自动重建 manifest
+// 30s 间隔, 零依赖, 兼容所有文件系统 (NFS/CIFS)
+// 解决手动 SCP 部署 Agent 二进制后 manifest 未更新的问题
+// v1.6.42 C3: 全量扫描记录 maxModTime, 循环结束后一次 rebuild, 避免 break 遗漏后续文件
+func (s *Server) StartBinWatcher(shutdown <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		var lastMod time.Time
+		binDir := s.store.AgentBinDir()
+		for {
+			select {
+			case <-ticker.C:
+				entries, err := os.ReadDir(binDir)
+				if err != nil {
+					continue
+				}
+				// 全量扫描记录目录内最新修改时间, 避免 break 遗漏文件
+				var maxModTime time.Time
+				for _, e := range entries {
+					if e.IsDir() {
+						continue
+					}
+					info, err := e.Info()
+					if err != nil {
+						continue
+					}
+					if info.ModTime().After(maxModTime) {
+						maxModTime = info.ModTime()
+					}
+				}
+				if maxModTime.After(lastMod) {
+					s.store.RebuildManifest()
+					lastMod = maxModTime
+					log.Printf("[bin-watcher] 检测到 bin/ 变化, manifest 已重建")
+				}
+			case <-shutdown:
+				log.Println("[bin-watcher] 已停止")
+				return
+			}
+		}
+	}()
 }
 
 func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string) *Server {
@@ -426,7 +475,6 @@ func (s *Server) Router() *mux.Router {
 	// dns keys
 	a.HandleFunc("/dns-keys", s.handleListDNSKeys).Methods("GET")
 	a.HandleFunc("/dns-keys", s.handleSaveDNSKey).Methods("POST")
-	a.HandleFunc("/dns-keys/{name}/test", s.handleTestDNSKey).Methods("POST") // v1.5.33: 在线核验
 	a.HandleFunc("/dns-keys/{name}", s.handleDeleteDNSKey).Methods("DELETE")
 	// certs
 	a.HandleFunc("/certs", s.handleListCerts).Methods("GET")

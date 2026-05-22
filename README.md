@@ -8,10 +8,10 @@
 |------|------|
 | **[架构与实现](docs/架构与实现.md)** | 后端架构与实现 — 数据模型、API、配置引擎、安全、部署 |
 | **[前端设计](docs/前端设计.md)** | Web 前端设计规范 — 布局、色彩、组件、API 对照 |
-| **[变更日志](CHANGELOG.md)** | 版本变更日志（v1.5.1 → v1.6.27） |
+| **[变更日志](CHANGELOG.md)** | 版本变更日志（v1.5.1 → v1.6.33） |
 | **[安装接口规范](docs/安装接口规范.md)** | ⚠️ 冻结 — 安装器/Agent/Manager 三方接口契约 |
 | **[版本推进规范](docs/VERSIONING.md)** | 📋 v1.5.37+ — 发版流程、/bin/管理、历史教训 |
-| **[Windows 静默执行规范](docs/windows-dev-notes.md)** | 🔴 v1.6.27 — 批处理/PS/netsh/certutil 禁用规则 |
+| **[Windows 静默执行规范](docs/windows-dev-notes.md)** | 🔴 v1.6.18+ — 批处理/PS/netsh/certutil 禁用规则与历史教训 |
 | **[安全审计](docs/audits/)** | 全量代码审计报告 |
 | **[图标资源](docs/图标.md)** | 侧边栏 SVG 图标资源 |
 
@@ -40,16 +40,19 @@ bash -c "$(curl -fsSL https://manager.example.com:30443/bin/install.sh)"
 
 ## 技术栈
 
-- Go 1.25+ / gorilla/mux / ddns-go v6
-- 单文件 SPA (go:embed)
+- Go 1.25+ / gorilla/mux / ddns-go v6.17.0
+- 单文件 SPA (go:embed) + PWA 支持
 - JSON 文件持久化 / AES-256-GCM 加密 / HKDF-SHA256 密钥派生
-- ACME (Let's Encrypt / ZeroSSL / Google Trust) / SMTP 邮件通知
+- PKCS#12 PFX 证书生成 (go-pkcs12, 纯 Go)
+- ACME (Let's Encrypt / ZeroSSL / Google Trust) / acme.sh + 纯 Go 双路径
+- SMTP 邮件通知 / YAML 配置解析 (gopkg.in/yaml.v3)
+- 跨平台 systemd/Windows Service 集成 (golang.org/x/sys)
 
 ## 版本
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.33** | P1~P13: 客户端升级版本化写入+segErrors修复+ValidateKeyOnline接入+升级完成标记+安装器目录创建+密码自动重注册+bat括号路径+去硬编码域名+install.sh自动跟随 |
+| ddns-manager | **v1.6.42** | C2~C6 + bin轮询守护 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.0 | DNS provider library |
 

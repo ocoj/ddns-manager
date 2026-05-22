@@ -131,9 +131,11 @@ func (s *Server) reloadRateLimit(cfg *store.RateLimitConfig) {
 	s.rateLock.Lock()
 	defer s.rateLock.Unlock()
 
-	// 停止旧清理循环，防止 goroutine 泄漏
+	// v1.6.42 H8: 停止前先清理所有 IP bucket, 释放内存 (旧 limiter 不再使用)
+	// 防止长期运行后 buckets map 无限增长
 	for _, old := range []*rateLimiter{s.globalLimiter, s.heartbeatLimiter, s.loginLimiter} {
 		if old != nil {
+			old.cleanupStale()
 			close(old.stop)
 		}
 	}

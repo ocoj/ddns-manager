@@ -428,12 +428,19 @@ func (s *ManagerStore) DeleteDNSKeyAtomic(name string) error {
 }
 
 // TrackDNSKeyUsage adds nodeID to the used_by_nodes list of a DNS key (by name).
+// v1.6.42 C7: 原子化 — 全程持写锁读-改-写, 消除与 SaveDNSKeys/ReplaceNodeDNSKey 的 TOCTOU 竞态
 func (s *ManagerStore) TrackDNSKeyUsage(keyName, nodeID string) error {
-	keys, err := s.LoadDNSKeys()
-	if err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 确保缓存已加载
+	if s.dnsKeysCache == nil {
+		if err := s.loadDNSKeysToCache(); err != nil {
+			return err
+		}
 	}
-	rec, ok := keys[keyName]
+
+	rec, ok := s.dnsKeysCache[keyName]
 	if !ok {
 		return nil
 	}
@@ -446,9 +453,63 @@ func (s *ManagerStore) TrackDNSKeyUsage(keyName, nodeID string) error {
 	}
 	if !found {
 		rec.UsedByNodes = append(rec.UsedByNodes, nodeID)
-		return s.SaveDNSKeys(keys)
+		data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(s.dnsKeysPath(), data, 0o600)
 	}
 	return nil
+}
+
+// ReplaceNodeDNSKey v1.6.36 C3: 原子替换节点的 DNS Key 引用 — 在读-删-加-写四个步骤
+// 全程持写锁, 消除 v1.6.35 中 RemoveNodeFromDNSKeys→TrackDNSKeyUsage 两步之间的 TOCTOU 竞态。
+// oldKeyName="" 表示仅添加新引用 (不删除旧引用)。
+func (s *ManagerStore) ReplaceNodeDNSKey(nodeID, oldKeyName, newKeyName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 确保缓存已加载
+	if s.dnsKeysCache == nil {
+		if err := s.loadDNSKeysToCache(); err != nil {
+			return err
+		}
+	}
+
+	// 从旧 key 中移除节点引用
+	if oldKeyName != "" {
+		if oldRec, ok := s.dnsKeysCache[oldKeyName]; ok {
+			for i, n := range oldRec.UsedByNodes {
+				if n == nodeID {
+					oldRec.UsedByNodes = append(oldRec.UsedByNodes[:i], oldRec.UsedByNodes[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+
+	// 添加到新 key
+	if newKeyName != "" {
+		if newRec, ok := s.dnsKeysCache[newKeyName]; ok {
+			found := false
+			for _, n := range newRec.UsedByNodes {
+				if n == nodeID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				newRec.UsedByNodes = append(newRec.UsedByNodes, nodeID)
+			}
+		}
+	}
+
+	// 一次写盘
+	data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
 }
 
 // RemoveNodeFromDNSKeys removes nodeID from all DNS key usage lists.
@@ -665,23 +726,31 @@ func (s *ManagerStore) DeleteAgentBinary(name string) error {
 }
 
 // GetAgentBinarySHA256 读取已保存的二进制 SHA256 校验和 (v1.5.36 C3)。
-// 返回 hex 字符串, 若文件不存在返回空字符串。
+// 返回 hex 字符串。优先读预计算的 .sha256 文件；缺失时从二进制当场计算兜底。
+// v1.6.36 C5: 兜底计算覆盖手动 SCP 部署忘记带 .sha256 的场景
 func (s *ManagerStore) GetAgentBinarySHA256(filename string) string {
 	data, err := os.ReadFile(filepath.Join(s.AgentBinDir(), filename+".sha256"))
+	if err == nil {
+		// 标准格式: "hex  filename\n"
+		fields := strings.Fields(string(data))
+		if len(fields) >= 1 && len(fields[0]) == 64 {
+			return fields[0]
+		}
+	}
+	// v1.6.36 C5: 兜底 — .sha256 缺失/损坏时当场计算
+	// 覆盖手动 SCP 部署忘带 .sha256 或磁盘坏块导致文件损坏的场景
+	bin, err := os.ReadFile(filepath.Join(s.AgentBinDir(), filename))
 	if err != nil {
 		return ""
 	}
-	// 标准格式: "hex  filename\n"
-	fields := strings.Fields(string(data))
-	if len(fields) >= 1 && len(fields[0]) == 64 {
-		return fields[0]
-	}
-	return ""
+	h := sha256.Sum256(bin)
+	return fmt.Sprintf("%x", h[:])
 }
 
 // RebuildManifest 扫描 /bin/ 目录，按 os-arch 分组建 agent_manifest.json。
 // 每个平台取版本号最高的二进制文件。上传/删除后自动调用。
 // 文件名格式: node-agent-v{VERSION}-{os}-{arch}[.exe]
+// v1.6.36 C2: 同时追踪 upgrade_helper*.exe, 解决 Agent 端 helper 缺失导致升级降级到批处理
 func (s *ManagerStore) RebuildManifest() {
 	// 注意: RebuildManifest 不持锁扫描目录。
 	// SaveAgentManifest 内部持写锁写文件，确保 manifest 原子性。
@@ -694,6 +763,8 @@ func (s *ManagerStore) RebuildManifest() {
 	// 正则: node-agent-v{VERSION}-{os}-{arch}[.exe]
 	// 示例: node-agent-v1.5.8-windows-amd64.exe / node-agent-v1.5.8-linux-amd64
 	re := regexp.MustCompile(`^node-agent-v([^-]+)-([^-]+)-([^\.]+)(?:\.exe)?$`)
+	// C2: 同时匹配 upgrade_helper-v{VERSION}-{os}-{arch}.exe
+	reHelper := regexp.MustCompile(`^upgrade_helper-v([^-]+)-([^-]+)-([^\.]+)(?:\.exe)$`)
 	// platformKey → {version, filename}
 	type candidate struct {
 		version  string
@@ -705,21 +776,34 @@ func (s *ManagerStore) RebuildManifest() {
 			continue
 		}
 		m := re.FindStringSubmatch(e.Name())
-		if m == nil {
+		if m != nil {
+			ver, goos, goarch := m[1], m[2], m[3]
+			// 跳过 dev 版本和非标准版本号
+			if ver == "dev" || goos == "" || goarch == "" {
+				continue
+			}
+			key := goos + "-" + goarch
+			cur, exists := best[key]
+			if !exists || model.CompareSemVer(ver, cur.version) > 0 {
+				best[key] = candidate{ver, e.Name()}
+			}
 			continue
 		}
-		ver, goos, goarch := m[1], m[2], m[3]
-		// 跳过 dev 版本和非标准版本号
-		if ver == "dev" || goos == "" || goarch == "" {
-			continue
-		}
-		key := goos + "-" + goarch
-		cur, exists := best[key]
-		if !exists || model.CompareSemVer(ver, cur.version) > 0 {
-			best[key] = candidate{ver, e.Name()}
+		// C2: 追踪 upgrade_helper 文件, key 为 "helper-{os}-{arch}"
+		mh := reHelper.FindStringSubmatch(e.Name())
+		if mh != nil {
+			ver, goos, goarch := mh[1], mh[2], mh[3]
+			if ver == "dev" || goos == "" || goarch == "" {
+				continue
+			}
+			key := "helper-" + goos + "-" + goarch
+			cur, exists := best[key]
+			if !exists || model.CompareSemVer(ver, cur.version) > 0 {
+				best[key] = candidate{ver, e.Name()}
+			}
 		}
 	}
-	// 写入 manifest
+	// 写入 manifest (agent 节点 manifest + helper manifest 合并存储)
 	manifest := make(map[string]string, len(best))
 	for k, c := range best {
 		manifest[k] = c.filename

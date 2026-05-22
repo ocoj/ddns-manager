@@ -83,6 +83,11 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	}
 	agentConfigPath = filepath.Join(baseDir, "agent.yaml")
 
+	// v1.6.37: 创建安装目录 (新建机器上不存在, CopyFile 会失败)
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		log.Fatalf("创建安装目录失败: %v", err)
+	}
+
 	// ── Upgrade check ──
 	if existingCfg, err := installer.LoadConfig(agentConfigPath); err == nil {
 		fmt.Println()

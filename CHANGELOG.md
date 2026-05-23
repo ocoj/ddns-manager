@@ -1,3 +1,25 @@
+## v1.6.50 — 2026-05-23
+
+### 🔒 全量审计修复 (6项)
+
+DeepSeek V4-Pro 主审 + Kimi K2.6 交叉验证。审计报告: `docs/audits/2026-05-23-v1.6.50.md`
+
+- **H1 重复函数提取**: `sanitizeCertDirName` 在 agent 和 server 两处重复定义 → 提取到 `model.SanitizeCertDirName()`, 4 处调用统一引用
+- **H2 配置持久化顺序**: `doHeartbeat` 中 `lastConfigHash` 在 `WriteFile` 成功后才更新, 消除磁盘满导致状态不一致窗口
+- **M1 Windows 批处理超时**: `ping -n 10`(9秒)→`ping -n 30`(27秒), 覆盖 SCM 慢停止场景
+- **M2 证书 hash key 统一**: `sendDDNSHealthHeartbeat` 改用 `collectCertHashes(cfg)`, key 对齐常规心跳
+- **M5 ACME goroutine 限制**: `initACMEManagers` 加 `sem(3)` 防止多账号并发注册压垮 ACME 服务器
+- **L2 certutil 错误提取增强**: 新增 `ERROR_[A-Z_]+` 二次匹配, 覆盖无 hex 码的符号错误名
+
+### 🧪 测试
+
+- 新增 3 个测试文件: `model_test.go` / `v1650_audit_test.go` (agent) / `v1650_audit_test.go` (server)
+- 16 个用例覆盖: 正常/边界/异常, 8 包全量回归 PASS
+
+📁 `internal/model/model.go`, `cmd/agent/main.go`, `cmd/agent/upgrade_windows.go`, `internal/server/server.go`, `internal/server/handlers_nodes.go`, `VERSION` — 共 6 文件
+
+---
+
 ## v1.6.49 — 2026-05-23
 
 ### 🏗️ 多卡片 DNS 配置（架构升级）

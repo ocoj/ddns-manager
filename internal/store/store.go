@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -168,7 +169,19 @@ func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del boo
 		}
 		delete(nodes, id)
 	} else {
-		nodes[id] = rec
+		// v1.6.46 H3: 字段级 merge — 心跳 handler 在 LoadNodes→PutNode 间可能被
+		// 其他 handler (ApproveNode/SaveNodeConfig) 覆盖非心跳字段。
+		// 若缓存中已有记录, 仅更新心跳相关字段, 保留其他 handler 写入的字段。
+		if existing, ok := nodes[id]; ok {
+			existing.LastSeen = rec.LastSeen
+			existing.Status = rec.Status
+			existing.Hardware = rec.Hardware
+			existing.ConfigHash = rec.ConfigHash
+			existing.ConfigSentAt = rec.ConfigSentAt
+			existing.DNSConsecutiveFailures = rec.DNSConsecutiveFailures
+		} else {
+			nodes[id] = rec
+		}
 	}
 	// Write-through: persist to disk + update cache atomically
 	return s.saveNodesLocked(nodes)
@@ -296,6 +309,7 @@ func (s *ManagerStore) DeleteCertBundle(name string) error {
 type AdminState struct {
 	TokenHash       string `json:"token_hash"`        // bcrypt of admin token
 	PasswordChanged bool   `json:"password_changed"`
+	InstanceSalt    string `json:"instance_salt,omitempty"` // v1.6.46: 实例级随机 salt, 防跨实例 token 复用
 }
 
 func (s *ManagerStore) adminPath() string { return filepath.Join(s.dir, "admin.json") }
@@ -513,13 +527,20 @@ func (s *ManagerStore) ReplaceNodeDNSKey(nodeID, oldKeyName, newKeyName string) 
 }
 
 // RemoveNodeFromDNSKeys removes nodeID from all DNS key usage lists.
+// v1.6.46 H2: 全程持写锁, 操作缓存直接内存, 防止 Load→Modify→Save 竞态
 func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
-	keys, err := s.LoadDNSKeys()
-	if err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 确保缓存已加载
+	if s.dnsKeysCache == nil {
+		if err := s.loadDNSKeysToCache(); err != nil {
+			return err
+		}
 	}
+
 	changed := false
-	for _, rec := range keys {
+	for _, rec := range s.dnsKeysCache {
 		for i, n := range rec.UsedByNodes {
 			if n == nodeID {
 				rec.UsedByNodes = append(rec.UsedByNodes[:i], rec.UsedByNodes[i+1:]...)
@@ -528,10 +549,16 @@ func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
 			}
 		}
 	}
-	if changed {
-		return s.SaveDNSKeys(keys)
+
+	if !changed {
+		return nil
 	}
-	return nil
+
+	data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
 }
 
 // ── Agent Version ──
@@ -803,6 +830,39 @@ func (s *ManagerStore) RebuildManifest() {
 			}
 		}
 	}
+	// v1.6.46 H5: 为缺失 .sha256 的二进制自动补全校验文件
+	// 覆盖场景: SCP/SSH 手动部署遗漏 .sha256、Web UI 上传写 sha256 失败
+	for _, e := range entries {
+		if e.IsDir() || e.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		name := e.Name()
+		// 跳过非二进制: .sha256 / .txt / .bat / .sh / .new / .tmp
+		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, ".txt") ||
+			strings.HasSuffix(name, ".bat") || strings.HasSuffix(name, ".sh") ||
+			strings.HasSuffix(name, ".new") || strings.HasSuffix(name, ".tmp") ||
+			strings.HasSuffix(name, ".linktmp") {
+			continue
+		}
+		shaPath := filepath.Join(s.AgentBinDir(), name+".sha256")
+		// .sha256 已存在 → 跳过
+		if _, err := os.Stat(shaPath); err == nil {
+			continue
+		}
+		// 读取二进制, 计算 SHA256, 写入持久文件
+		binPath := filepath.Join(s.AgentBinDir(), name)
+		data, err := os.ReadFile(binPath)
+		if err != nil {
+			log.Printf("[bin] 读取 %s 失败, 跳过 sha256 补全: %v", name, err)
+			continue
+		}
+		h := sha256.Sum256(data)
+		content := fmt.Sprintf("%x  %s\n", h[:], name)
+		if err := os.WriteFile(shaPath, []byte(content), 0o644); err != nil {
+			log.Printf("[bin] 写入 %s 失败: %v", shaPath, err)
+		}
+	}
+
 	// 写入 manifest (agent 节点 manifest + helper manifest 合并存储)
 	manifest := make(map[string]string, len(best))
 	for k, c := range best {

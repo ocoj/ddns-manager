@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -331,19 +333,29 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 		log.Fatalf("加载管理员状态失败: %v", err)
 	}
 	if st == nil {
-		defaultToken := tokenFromPassword(defaultAdminPassword)
+		// v1.6.46 H4: 生成实例级随机 salt, 防止同密码跨实例 token 复用
+		saltBytes := make([]byte, 32)
+		if _, err := rand.Read(saltBytes); err != nil {
+			log.Fatalf("生成实例 salt 失败: %v", err)
+		}
+		instanceSalt := hex.EncodeToString(saltBytes)
+		defaultToken := tokenFromPasswordWithSalt(defaultAdminPassword, instanceSalt)
 		hash, err := bcrypt.GenerateFromPassword([]byte(defaultToken), bcrypt.DefaultCost)
 		if err != nil {
 			log.Fatalf("bcrypt 加密失败: %v", err)
 		}
-		st = &store.AdminState{TokenHash: string(hash), PasswordChanged: false}
+		st = &store.AdminState{TokenHash: string(hash), PasswordChanged: false, InstanceSalt: instanceSalt}
 		if err := s.SaveAdminState(st); err != nil {
 			log.Fatalf("保存管理员状态失败: %v", err)
 		}
 		log.Println("[admin] 首次运行 — 已设置默认密码（请立即登录修改）")
 	}
 	if !st.PasswordChanged {
-		svr.adminToken = tokenFromPassword(defaultAdminPassword)
+		if st.InstanceSalt != "" {
+			svr.adminToken = tokenFromPasswordWithSalt(defaultAdminPassword, st.InstanceSalt)
+		} else {
+			svr.adminToken = tokenFromPassword(defaultAdminPassword)
+		}
 	}
 	// init multi-account ACME managers
 	svr.initACMEManagers()

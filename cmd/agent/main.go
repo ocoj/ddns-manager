@@ -483,7 +483,7 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			},
 		},
 		ConfigHash: lastConfigHash,  // v1.5.23+v1.6.36 C4: 回传Manager权威hash, 避免yaml往返不稳定导致每心跳重推
-		Logs:       dnsUpdater.RecentLogs(10),
+		Logs:       dnsUpdater.PeekRecentLogs(10),  // v1.6.46 H7: 增量上报, 心跳成功才 commit
 		Hardware:   collectHardware(),
 	}
 
@@ -508,16 +508,13 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 		for _, logLine := range drainedAgentLogs {
 			agentLogBuf.WriteRaw(logLine)
 		}
-		// v1.6.10 H2: DNS 日志恢复到正确缓冲区 (dnsUpdater.logBuf), 避免类别混乱
-		dnsUpdater.mu.Lock()
-		for _, logLine := range req.Logs {
-			dnsUpdater.logBuf.Write("[dns-replay] " + logLine)
-		}
-		dnsUpdater.mu.Unlock()
-		// v1.5.34 H6: 日志含具体失败原因, 不再笼统说"心跳失败"
+		// v1.6.46 H7: Peek 不消耗 buffer, 无需 dns-replay 恢复 — 失败时游标不动自动重传
 		log.Printf("[heartbeat] 心跳失败: %v", hbErr)
 		return fmt.Errorf("心跳失败: %w", hbErr)
 	}
+
+	// v1.6.46 H7: 心跳成功 → 确认 DNS 日志上报, 游标前移防止重复
+	dnsUpdater.CommitRecentLogs()
 
 	// 4. Config hot-reload + cache to disk for next heartbeat
 	if resp.Config != nil && resp.Config.YAML != "" {
@@ -656,7 +653,7 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 	followCertErrors := lastCertErrors
 	lastCertErrorsMu.Unlock()
 
-	dnsLogs := dnsUpdater.RecentLogs(10)
+	dnsLogs := dnsUpdater.PeekRecentLogs(10)  // v1.6.46 H7: 增量上报
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
 		Fingerprint: cfg.Fingerprint,

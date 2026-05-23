@@ -47,11 +47,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
-	token := tokenFromPassword(req.Password)
 	st, err := s.store.LoadAdminState()
 	if err != nil || st == nil {
 		jsonErr(w, http.StatusInternalServerError, "管理员状态不可用")
 		return
+	}
+	// v1.6.46 H4: 使用实例 salt 派生 token (无 salt 时回退旧算法)
+	var token string
+	if st.InstanceSalt != "" {
+		token = tokenFromPasswordWithSalt(req.Password, st.InstanceSalt)
+	} else {
+		token = tokenFromPassword(req.Password)
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.getAdminToken())) != 1 {
 		if err := bcrypt.CompareHashAndPassword([]byte(st.TokenHash), []byte(token)); err != nil {
@@ -283,13 +289,24 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "密码至少需要8个字符")
 		return
 	}
-	newToken := tokenFromPassword(req.NewPassword)
+	st, _ := s.store.LoadAdminState()
+	// v1.6.46 H4: 使用实例 salt 派生 token (无 salt 时回退旧算法)
+	var salt string
+	if st != nil {
+		salt = st.InstanceSalt
+	}
+	var newToken string
+	if salt != "" {
+		newToken = tokenFromPasswordWithSalt(req.NewPassword, salt)
+	} else {
+		newToken = tokenFromPassword(req.NewPassword)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newToken), bcrypt.DefaultCost)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "服务器内部错误")
 		return
 	}
-	s.store.SaveAdminState(&store.AdminState{TokenHash: string(hash), PasswordChanged: true})
+	s.store.SaveAdminState(&store.AdminState{TokenHash: string(hash), PasswordChanged: true, InstanceSalt: salt})
 	s.setAdminToken(newToken)
 	s.logMgr.LogAuth("密码已修改", "admin", clientIP(r), "", "success")
 	jsonOK(w, map[string]string{"status": "changed"})
@@ -359,6 +376,15 @@ func (s *Server) handleSetAgentVersion(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleListAgentBinaries(w http.ResponseWriter, r *http.Request) {
 	list, _ := s.store.ListAgentBinaries()
+	// v1.6.46 H6: 文件系统返回 UTC 时间, 转换为配置时区展示
+	tz := s.GetTimezone()
+	for _, item := range list {
+		if mt, ok := item["mod_time"].(string); ok {
+			if t, err := time.Parse("2006-01-02 15:04", mt); err == nil {
+				item["mod_time"] = t.In(tz).Format("2006-01-02 15:04")
+			}
+		}
+	}
 	jsonOK(w, list)
 }
 // v1.5.29: 上传后自动提取版本号 + 设置 Agent 版本 + Manager 自重启
@@ -513,22 +539,32 @@ func (s *Server) scheduleManagerRestart(newVer string) {
 	go func() {
 		time.Sleep(3 * time.Second) // 等待 HTTP 响应发送完毕
 
+		// v1.6.46 H1: 检查 systemctl stop 错误 — 服务未正常运行时放弃自重启
 		log.Printf("[deploy] 停止 ddns-manager 服务...")
-		exec.Command("systemctl", "stop", "ddns-manager").Run()
+		if out, err := exec.Command("systemctl", "stop", "ddns-manager").CombinedOutput(); err != nil {
+			log.Printf("[deploy] systemctl stop 失败: %v (output=%s), 放弃自重启", err, string(out))
+			os.Remove(tmpPath)
+			return
+		}
 		time.Sleep(1 * time.Second)
 
 		// 原子替换: mv 是同一文件系统内的原子操作
 		if err := os.Rename(tmpPath, realPath); err != nil {
 			log.Printf("[deploy] 原子替换失败: %v", err)
 			// 尝试回退: 启动旧版本
-			exec.Command("systemctl", "start", "ddns-manager").Run()
+			if startErr := exec.Command("systemctl", "start", "ddns-manager").Run(); startErr != nil {
+				log.Printf("[deploy] 回退启动也失败: %v, 需人工介入!", startErr)
+			}
+			os.Remove(tmpPath)
 			return
 		}
-		os.Chmod(realPath, 0755)
+		if err := os.Chmod(realPath, 0755); err != nil {
+			log.Printf("[deploy] chmod 失败: %v", err)
+		}
 
 		log.Printf("[deploy] 启动 ddns-manager 服务 (新版本: %s)...", newVer)
-		if err := exec.Command("systemctl", "start", "ddns-manager").Run(); err != nil {
-			log.Printf("[deploy] systemctl start 失败: %v", err)
+		if out, err := exec.Command("systemctl", "start", "ddns-manager").CombinedOutput(); err != nil {
+			log.Printf("[deploy] systemctl start 失败: %v (output=%s), 需人工介入!", err, string(out))
 		}
 	}()
 

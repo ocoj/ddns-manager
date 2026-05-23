@@ -10,7 +10,15 @@ import (
 )
 
 func tokenFromPassword(pass string) string {
+	// v1.6.46 H4: 无 salt 版本保留向后兼容 (旧 admin.json 不含 instance_salt)
 	h := sha256.Sum256([]byte("admin:" + pass))
+	return fmt.Sprintf("%x", h)
+}
+
+// tokenFromPasswordWithSalt derives admin token with instance-specific salt.
+// v1.6.46 H4: 防止同密码在不同 Manager 实例上产生相同 token。
+func tokenFromPasswordWithSalt(pass, salt string) string {
+	h := sha256.Sum256([]byte(salt + "\x00" + "admin:" + pass))
 	return fmt.Sprintf("%x", h)
 }
 

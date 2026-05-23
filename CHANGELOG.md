@@ -1,6 +1,36 @@
 # CHANGELOG
 
+## v1.6.47 — 2026-05-22
+
+### 🔧 DNS 日志去重
+
+- **H7 Peek/Commit**: DNS 日志从 `Recent`(只读重复) 改为 `Peek`(增量取新) + `Commit`(成功确认) — 每条日志只上报一次
+- **重传机制**: 心跳失败 → 不 Commit → 游标不动 → 下次 Peek 自动重传, 零丢失
+- **管理端清理**: events.log 从 140,606 条去重至 58,038 条 (移除 82,568 重复)
+
+📁 `cmd/agent/dns_updater.go`, `cmd/agent/main.go`
+
+---
+
 ## v1.6.46 — 2026-05-22
+
+### 🔒 安全审计修复
+
+全量代码审计 (18,311行/69文件) — DeepSeek V4-Pro 主审 + Kimi K2.6 + MiniMax M2.7 交叉验证。
+
+审计报告: `docs/audits/2026-05-22.md`
+
+- **H1 scheduleManagerRestart**: `systemctl stop/start` 的 `Run()` 错误被忽略 → 改为检查错误并清理临时文件
+- **H2 RemoveNodeFromDNSKeys**: `Load→Modify→Save` 非原子 → 改为全程持写锁操作缓存, 对齐 `ReplaceNodeDNSKey`
+- **H3 putNodeInternal**: 心跳字段覆盖合并 → 改为一对字段级 merge, 保留并发 handler 写入的非心跳字段
+- **H4 Token Salt**: 增加实例级随机 salt → `sha256(salt + "\x00" + "admin:" + password)`, 向后兼容
+- **M1 meta.json**: `issueViaAcmeSh` + `issueCert` 两处 `os.WriteFile` 错误增加检查日志
+
+📄 审计报告: `docs/audits/2026-05-22-v1.6.46.md`
+
+📁 `internal/server/handlers_admin.go`, `internal/store/store.go`, `internal/acme/acme.go`, `internal/server/json_helpers.go`, `internal/server/server.go` — 共 4 文件
+
+---
 
 ### 🔴 DDNS健康判定机制重构 (全链路追踪)
 

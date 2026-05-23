@@ -356,6 +356,17 @@ func (u *DNSUpdater) RecentLogs(n int) []string {
 	return u.logBuf.Recent(n)
 }
 
+// PeekRecentLogs v1.6.46 H7: 只返回上次确认上报之后的新日志条目, 不消耗 buffer。
+// 心跳失败时条目保留, 下次 Peek 重发。心跳成功后调用 CommitRecentLogs 前移游标。
+func (u *DNSUpdater) PeekRecentLogs(n int) []string {
+	return u.logBuf.Peek(n)
+}
+
+// CommitRecentLogs 确认 Peek 返回的日志已成功上报, 前移游标防止重复。
+func (u *DNSUpdater) CommitRecentLogs() {
+	u.logBuf.Commit()
+}
+
 // LastLogLine returns the most recent log line.
 func (u *DNSUpdater) LastLogLine() string {
 	lines := u.logBuf.Recent(1)
@@ -369,10 +380,11 @@ func (u *DNSUpdater) LastLogLine() string {
 
 // LogBuffer is a thread-safe ring buffer for log lines.
 type LogBuffer struct {
-	mu   sync.Mutex
-	buf  []string
-	pos  int
-	size int
+	mu      sync.Mutex
+	buf     []string
+	pos     int
+	size    int
+	peekPos int // v1.6.46 H7: 已确认上报位置 (Commit 前移)
 }
 
 func newLogBuffer(size int) *LogBuffer {
@@ -447,8 +459,6 @@ func (lb *LogBuffer) Recent(n int) []string {
 		n = total
 	}
 	result := make([]string, 0, n)
-	// lb.pos grows without bound (wraps at 2^63 ~ 10^19 writes at 5min/heartbeat).
-	// The subtraction lb.pos-n is safe: the loop is bounded to n iterations.
 	start := lb.pos - n
 	if start < 0 {
 		start = 0
@@ -457,4 +467,45 @@ func (lb *LogBuffer) Recent(n int) []string {
 		result = append(result, lb.buf[i%lb.size])
 	}
 	return result
+}
+
+// Peek v1.6.46 H7: 返回 peekPos 之后的新日志最多 n 条, 不动游标不消耗 buffer。
+// Commit 成功后游标前移, 心跳失败则 Peek 下次返回相同的条目 (自动重传)。
+// 若 ring buffer 已覆盖 peekPos, 退到最早有效位置。
+func (lb *LogBuffer) Peek(n int) []string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	total := lb.pos
+	if total > lb.size {
+		total = lb.size
+	}
+	oldest := lb.pos - total
+	if oldest < 0 {
+		oldest = 0
+	}
+	start := lb.peekPos
+	if start < oldest {
+		start = oldest // peekPos 被环形覆盖, 退到最早有效位置
+	}
+	if start >= lb.pos {
+		return nil // 无新条目
+	}
+	count := lb.pos - start
+	if count > n {
+		count = n
+	}
+	result := make([]string, 0, count)
+	for i := start; i < start+count; i++ {
+		result = append(result, lb.buf[i%lb.size])
+	}
+	return result
+}
+
+// Commit 确认 Peek 返回的日志已成功上报, peekPos 前移到当前位置。
+// 心跳成功后调用; 失败时跳过 → 下次 Peek 自动重传相同条目。
+func (lb *LogBuffer) Commit() {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	lb.peekPos = lb.pos
 }

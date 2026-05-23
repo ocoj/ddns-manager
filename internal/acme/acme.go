@@ -361,7 +361,9 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 	meta := fmt.Sprintf(`{"domains":["%s"],"issued":"%s","acme":true,"ca":"%s","provider":"%s","key_type":"%s","email":"%s"}`,
 		strings.Join(domains, `","`), time.Now().Format(time.RFC3339), m.ca.Name, dp.Name, m.keyType, m.email,
 	)
-	os.WriteFile(filepath.Join(certDir, "meta.json"), []byte(meta), 0o600)
+	if err := os.WriteFile(filepath.Join(certDir, "meta.json"), []byte(meta), 0o600); err != nil {
+		log.Printf("[acme] 写入 meta.json 失败: %v (证书已签发但元数据丢失)", err)
+	}
 	log.Printf("[acme] 证书已签发: %s (CA=%s 密钥=%s)", strings.Join(domains, ","), m.ca.Name, m.keyType)
 	return firstDomain, nil
 }
@@ -453,7 +455,9 @@ func (m *Manager) issueCert(ctx context.Context, domains []string, ct string) (s
 	meta := fmt.Sprintf(`{"domains":["%s"],"issued":"%s","acme":true,"ca":"%s","key_type":"%s","email":"%s"}`,
 		strings.Join(domains, `","`), time.Now().Format(time.RFC3339), m.ca.Name, m.keyType, m.email,
 	)
-	os.WriteFile(filepath.Join(certDir, "meta.json"), []byte(meta), 0o600)
+	if err := os.WriteFile(filepath.Join(certDir, "meta.json"), []byte(meta), 0o600); err != nil {
+		log.Printf("[acme] 写入 meta.json 失败: %v (证书已签发但元数据丢失)", err)
+	}
 	log.Printf("[acme] 证书已签发: %s (CA=%s 密钥=%s)", strings.Join(domains, ","), m.ca.Name, m.keyType)
 	return firstDomain, nil
 }

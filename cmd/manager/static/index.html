@@ -187,6 +187,7 @@ th{text-align:left}
 .badge-red{background:#fff2f0;color:var(--c-red);border:1px solid #ffccc7}
 .badge-orange{background:#fffbe6;color:var(--c-orange);border:1px solid #ffe58f}
 .badge-blue{background:#e6f7ff;color:var(--c-primary);border:1px solid #91d5ff}
+.badge-purple{background:#f9f0ff;color:#722ed1;border:1px solid #d3adf7}
 
 .form-group{margin-bottom:14px}
 .form-group label{display:block;font-size:12px;color:var(--c-text2);margin-bottom:4px}
@@ -230,6 +231,15 @@ th{text-align:left}
 .mono{font-family:Consolas,Monaco,monospace;font-size:12px}
 .meta-row{display:flex;gap:24px;flex-wrap:wrap;font-size:12px;color:var(--c-text2);margin-bottom:4px}
 .section-title{font-size:13px;font-weight:600;color:var(--c-primary);margin:16px 0 8px;padding-bottom:6px;border-bottom:1px dashed var(--c-border);display:flex;align-items:center;gap:6px}
+.ncfg-help-content{font-size:13px;line-height:1.7}
+.ncfg-help-content h4{font-size:15px;margin:0 0 6px;color:var(--c-primary)}
+.ncfg-help-section{padding:12px 14px;margin-bottom:10px;background:var(--c-th-bg);border-radius:8px}
+.ncfg-help-section p{font-size:13px;color:var(--c-text2);margin-bottom:8px}
+.ncfg-help-sub{margin:8px 0 0;font-size:13px}
+.ncfg-help-sub strong{color:var(--c-text)}
+.ncfg-help-content ul{margin:4px 0 8px 16px;font-size:12px;line-height:2}
+.ncfg-help-content code{background:#e8e8e8;padding:1px 6px;border-radius:3px;font-size:11px;word-break:break-all}
+body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#3a3a50;color:#d4d4d4}
 .pagination{display:flex;align-items:center;gap:8px;justify-content:center;padding:12px 0}
 .pagination span{font-size:12px;color:var(--c-text2)}
 .tip{font-size:11px;color:var(--c-text2);margin-top:4px}
@@ -468,6 +478,36 @@ th{text-align:left}
   #page-logs .col-log-node{font-size:10px!important;max-width:50px}
   #page-logs .col-log-cat{font-size:10px!important;max-width:60px}
 }
+
+/* v1.6.48: 节点配置多卡片样式 */
+.ncfg-card{padding:12px 0;border-bottom:1px solid var(--c-border)}
+.ncfg-card:last-child{border-bottom:none}
+.ncfg-card-hd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.ncfg-card-idx{font-weight:600;font-size:13px;color:var(--c-primary);white-space:nowrap}
+.ncfg-card-name{flex:1;height:32px;padding:4px 8px;border:1px solid var(--c-input-border);border-radius:6px;background:var(--c-card);color:var(--c-text);font-size:13px;font-weight:600;outline:none}
+.ncfg-card-name:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px var(--c-primary-bg)}
+.ncfg-card-row{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.ncfg-field{display:flex;flex-direction:column;gap:2px;flex:1;min-width:120px}
+.ncfg-field label{font-size:10px;color:var(--c-text2);text-transform:uppercase;letter-spacing:.5px}
+.ncfg-field-sm{flex:0 0 auto;min-width:60px}
+.ncfg-sel{height:32px;padding:4px 8px;border:1px solid var(--c-input-border);border-radius:6px;background:var(--c-card);color:var(--c-text);font-size:12px;outline:none;width:100%}
+.ncfg-sel:focus{border-color:var(--c-primary)}
+.ncfg-inp{height:32px;padding:4px 8px;border:1px solid var(--c-input-border);border-radius:6px;background:var(--c-card);color:var(--c-text);font-size:12px;outline:none;width:100%}
+.ncfg-inp:focus{border-color:var(--c-primary);box-shadow:0 0 0 2px var(--c-primary-bg)}
+.ncfg-ip-block{margin:2px 0;padding:6px 10px;background:var(--c-bg);border-radius:6px}
+.ncfg-ip-title{font-size:12px;margin-bottom:4px;display:flex;align-items:center;gap:4px}
+.ncfg-domain-row{display:flex;gap:4px;margin:2px 0;align-items:stretch}
+.ncfg-domain-row .ncfg-inp{flex:1}
+.ncfg-domain-row .btn{height:32px;width:32px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+/* 移动端 */
+@media(max-width:768px){
+  .ncfg-card-row{flex-direction:column;gap:4px}
+  .ncfg-field{min-width:0;width:100%}
+  .ncfg-field-sm{width:100%}
+  .ncfg-card-hd{flex-wrap:wrap}
+  .ncfg-card-name{min-width:120px}
+}
+
 </style>
 </head>
 <body>
@@ -587,6 +627,7 @@ th{text-align:left}
 <div class="modal-overlay" id="modal-cert-detail"><div class="modal-box" style="width:460px"><h3>证书详情<button class="modal-close" onclick="closeModal('modal-cert-detail')">&times;</button></h3><div id="cert-detail-body" style="font-size:13px;line-height:2"></div></div></div>
 <div class="modal-overlay" id="modal-cert-upload"><div class="modal-box" style="width:460px"><h3>上传证书<button class="modal-close" onclick="closeModal('modal-cert-upload')">&times;</button></h3><div class="form-group"><label>证书名称</label><input id="cupload-name" placeholder="my-cert"></div><div class="form-group"><label>证书文件</label><input type="file" id="cupload-files" multiple style="height:auto;padding:6px 0;border:none"><div class="tip">支持 .pem .crt .key .pfx 等</div></div><div class="form-group"><label>PFX 密码</label><input id="cupload-pfxpw" placeholder="默认 ddns" style="width:200px"></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-cert-upload')">取消</button><button class="btn btn-primary" id="cupload-btn" onclick="uploadCert()">上传</button></div></div></div>
 <div class="modal-overlay" id="modal-dnskey-add"><div class="modal-box" style="width:420px"><h3>添加 DNS Key<button class="modal-close" onclick="closeModal('modal-dnskey-add')">&times;</button></h3><div class="form-group"><label>名称</label><input id="dnskey-name" placeholder="e.g. 阿里云-生产"><div class="tip">自定义名称，同一供应商可建多个 Key</div></div><div class="form-group"><label>提供商</label><select id="dnskey-provider"><option value="">-- 请选择 --</option><option value="alidns">阿里云 (alidns)</option><option value="aliesa">阿里云国际 (aliesa)</option><option value="tencentcloud">腾讯云 (tencentcloud)</option><option value="dnspod">DNSPod (dnspod)</option><option value="cloudflare">Cloudflare</option><option value="huaweicloud">华为云 (huaweicloud)</option><option value="baiducloud">百度云 (baiducloud)</option><option value="porkbun">Porkbun</option><option value="godaddy">GoDaddy</option><option value="namecheap">Namecheap</option><option value="namesilo">NameSilo</option><option value="dynv6">Dynv6</option><option value="dnsla">DNSLA</option><option value="dynadot">Dynadot</option><option value="vercel">Vercel</option><option value="cloudns">ClouDNS</option><option value="trafficroute">TrafficRoute</option><option value="callback">Callback</option><option value="spaceship">Spaceship</option><option value="edgeone">EdgeOne</option><option value="gcore">Gcore</option><option value="nsone">NS1</option><option value="name_com">Name.com</option><option value="rainyun">Rainyun</option><option value="eranet">Eranet</option><option value="nowcn">NowCN</option><option value="tnethk">TnetHK</option><option value="hipmdnsmgr">HiPM DNS</option></select></div><div class="form-group"><label>Access Key ID</label><input id="dnskey-ak" placeholder=""></div><div class="form-group"><label>Secret Key</label><input id="dnskey-sk" placeholder=""></div><div class="btn-row" style="margin-top:12px"><button class="btn" onclick="closeModal('modal-dnskey-add')">取消</button><button class="btn btn-primary" onclick="saveDNSKey()">保存</button></div></div></div>
+<div class="modal-overlay" id="modal-ncfg-help"><div class="modal-box" style="width:640px;max-height:90vh;overflow-y:auto"><h3>IP 获取方式帮助<button class="modal-close" onclick="closeModal('modal-ncfg-help')">&times;</button></h3><div id="ncfg-help-body" class="ncfg-help-content"></div></div></div>
 
 <script>
 "use strict";
@@ -672,9 +713,22 @@ function normalizeNode(id, n) {
   var cfg = parseConfig(n.config_yaml);
   var st = n.status || {};
   var hw = n.hardware || {};
-  // 提取域名列表: ipv4.domains + ipv6.domains 去重合并
+  // 提取域名列表: dns_confs (新格式) 或 ipv4/ipv6.domains (旧格式) 去重合并
   var domains = [];
   if (cfg) {
+    // 新格式: 多卡片 dns_confs
+    if (cfg.dns_confs && Array.isArray(cfg.dns_confs)) {
+      cfg.dns_confs.forEach(function(card) {
+        ['ipv4','ipv6'].forEach(function(p) {
+          if (card[p] && card[p].domains) {
+            card[p].domains.forEach(function(d) {
+              domains.push(typeof d === 'object' ? (d.domain || '') : d);
+            });
+          }
+        });
+      });
+    }
+    // 旧格式: 顶层 ipv4/ipv6
     if (cfg.ipv4 && cfg.ipv4.domains) {
       cfg.ipv4.domains.forEach(function(d) { 
         domains.push(typeof d === 'object' ? (d.domain || '') : d);
@@ -686,6 +740,9 @@ function normalizeNode(id, n) {
       });
     }
   }
+  // 去重: IPv4/IPv6 可能配了相同域名
+  var seen = {};
+  domains = domains.filter(function(d) { if (seen[d]) return false; seen[d] = true; return true; });
   return {
     id: id,
     name: id,  // 用户注册时自定义的节点ID（如 client-a），不是计算机名
@@ -693,6 +750,8 @@ function normalizeNode(id, n) {
     fingerprint: n.fingerprint || '',
     ip: st.ipv4 || '',
     ipv6: st.ipv6 || '',
+    ipv4Enabled: (st.ddns_health && st.ddns_health.ipv4_enabled === true) ? true : false,
+    ipv6Enabled: (st.ddns_health && st.ddns_health.ipv6_enabled === true) ? true : false,
     dns_provider: cfg ? (cfg.dns_provider || cfg.dns_key_name || '') : '',
     domains: domains,
     version: st.agent_version || '',
@@ -1293,8 +1352,12 @@ function renderDashboard(stats, nodes, events, access) {
       n.domainsStr = domsArr.length > 0 ? domsArr[0] : '\uffff';
       n.status = n.online ? '\u0001在线' : '\u0002离线';
       n.healthSort = {OK:'\u0001',ERR:'\u0002',DOWN:'\u0003','-':'\u0004'}[n.health] || '\u0005';
-      var ipHtml = he(n.ip || '-');
-      if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
+      var ipHtml = n.ipv4Enabled === false ? '<span style="color:var(--c-text2)">未开启</span>' : (n.ip || '-');
+      if (n.ipv6Enabled !== false) {
+        var v6txt = n.ipv6 ? he(n.ipv6) : (n.ipv6Enabled ? '-' : '未开启');
+        if (n.ipv6Enabled === false) v6txt = '<span style="color:var(--c-text2)">未开启</span>';
+        ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)"' + (n.ipv6 ? ' title="' + he(n.ipv6) + '"' : '') + '>' + v6txt + '</span>';
+      }
       h += '<tr><td class="col-dash-node"><b>' + he(n.name) + '</b>' + (n.fingerprint ? '<div class="meta-row" style="margin-top:2px">' + he(n.fingerprint.substring(0,12)) + '...</div>' : '') + '</td>';
       h += '<td class="mono">' + ipHtml + '</td>';
       h += '<td class="col-dom">';
@@ -1622,8 +1685,12 @@ function renderNodes(nodes) {
       n.healthSort = {'OK':'\u0001','ERR':'\u0002','DOWN':'\u0003','-':'\u0004'}[n.health] || '\u0005';
     });
     nodes.forEach(function(n) {
-      var ipHtml = he(n.ip || '-');
-      if (n.ipv6) ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)">' + he(n.ipv6) + '</span>';
+      var ipHtml = n.ipv4Enabled === false ? '<span style="color:var(--c-text2)">未开启</span>' : (n.ip || '-');
+      if (n.ipv6Enabled !== false) {
+        var v6txt = n.ipv6 ? he(n.ipv6) : (n.ipv6Enabled ? '-' : '未开启');
+        if (n.ipv6Enabled === false) v6txt = '<span style="color:var(--c-text2)">未开启</span>';
+        ipHtml += '<br><span style="font-size:10px;color:var(--c-text2)"' + (n.ipv6 ? ' title="' + he(n.ipv6) + '"' : '') + '>' + v6txt + '</span>';
+      }
       h += '<tr>';
       h += '<td class="col-dash-node"><b>' + he(n.name) + '</b><div class="meta-row">' + he(n.fingerprint.substring(0,16)) + '...</div></td>';
       h += '<td class="mono">' + ipHtml + '</td>';
@@ -1671,7 +1738,7 @@ async function openNodeConfig(id) {
   var node = nodes.find(function(n) { return n.id === id; });
   if (!node) { toast('未找到节点', 'error'); return; }
   var dkr = await apiJSON('/api/admin/dns-keys');
-  var keys = dkr.data || {};
+  var keys = (dkr && dkr.ok && dkr.data) ? dkr.data : {};
   var providers = Object.keys(keys);
   var cr = await apiJSON('/api/admin/certs');
   var certs = cr.data || [];
@@ -1681,121 +1748,268 @@ async function openNodeConfig(id) {
 
   document.getElementById('modal-node-title').textContent = '节点配置: ' + node.name;
   var cfg = node.config || {};
-  var ipv4 = cfg.ipv4 || {}, ipv6 = cfg.ipv6 || {};
-  var hasIfaces = (node.interfaces || []).length > 0;
-  // 新节点有网卡数据时，默认用网卡模式 (而非 URL)，避免多网卡节点选错
-  if (!cfg.dns_key_name && !cfg.dns_provider) {
-    // 无已保存配置 → 首次配置，默认网卡模式
-    if (hasIfaces && !cfg.ipv4) { ipv4 = {enable: true, gettype: 'netInterface'}; }
-    if (hasIfaces && !cfg.ipv6) { ipv6 = {enable: false, gettype: 'netInterface'}; }
-  }
   var bindings = cfg.cert_bindings || [];
 
-  var h = '';
-  h += '<div class="form-group"><label>DNS Key</label><select id="ncfg-dns">';
-  var curDns = cfg.dns_key_name || cfg.dns_provider || '';
-  var foundDns = false;
-  if (providers.length === 0) {
-    h += '<option value="">-- 无 --</option>';
-  } else {
-    providers.forEach(function(p) {
-      var k = keys[p];
-      var name = (k && k.name) || p;
-      var prov = (k && k.provider) || p;
-      var label = name + ' (' + prov + ')';
-      // 同时匹配 key 名称和显示名，防止 DNS Key 重命名后预选失效
-      var matched = (p === curDns) || (k && k.name === curDns) || (k && k.provider === curDns);
-      if (matched) foundDns = true;
-      h += '<option value="' + he(p) + '"' + (matched ? ' selected' : '') + '>' + he(label) + '</option>';
-    });
-    // 如果当前引用的 DNS Key 已不存在，提示用户
-    if (!foundDns && curDns) {
-      h += '<option value="" disabled style="color:var(--c-red)">⚠ DNS密钥 "' + he(curDns) + '" 已丢失，请重新选择</option>';
-    }
+  // v1.6.48: 多卡片 DNS 配置 — 从 dns_confs 或旧格式迁移
+  var cards = cfg.dns_confs || [];
+  if (cards.length === 0 && (cfg.dns_key_name || cfg.dns_provider || cfg.ipv4 || cfg.ipv6)) {
+    // 旧格式 → 迁移为单张卡片
+    cards = [{
+      name: (cfg.dns_key_name || cfg.dns_provider || 'DNS配置 1'),
+      dns_key: cfg.dns_key_name || cfg.dns_provider || '',
+      ipv4: cfg.ipv4 || {},
+      ipv6: cfg.ipv6 || {},
+      ttl: cfg.ttl || '600'
+    }];
   }
-  h += '</select></div>';
-  h += ipSection('IPv4', 'ipv4', ipv4, node);
-  h += ipSection('IPv6', 'ipv6', ipv6, node);
+  if (cards.length === 0) {
+    // 全新节点 → 一张空卡片
+    cards = [{name: 'DNS配置 1', dns_key: '', ipv4: {enable: true, gettype: 'netInterface'}, ipv6: {enable: false, gettype: 'netInterface'}, ttl: '600'}];
+  }
 
-  h += '<div class="section-title">证书绑定</div>';
+  window._ncfgCards = cards;
+  // v1.6.48: 必须在 renderCard 之前设置, renderCard 内读取这些变量
+  window._ncfgCerts = certs; window._ncfgProviders = providers; window._ncfgKeys = keys;
+
+  var h = '';
+  h += '<div id="ncfg-dns-cards">';
+  cards.forEach(function(card, ci) {
+    h += renderCard(ci, card, node);
+  });
+  h += '</div>';
+  h += '<button class="btn" style="margin-bottom:16px" onclick="addDNSCard()">+ 新增 DNS 配置</button>';
+
+  h += '<div class="section-title">证书部署（节点统一）</div>';
   h += '<div id="ncfg-certs">';
   bindings.forEach(function(b, i) { h += certBindingRow(i, b, certs); });
   h += '</div>';
   h += '<button class="btn btn-auto" style="margin-bottom:4px" onclick="addCertBinding()">+ 添加证书绑定</button>';
-  h += '<div class="tip" style="margin-bottom:16px">Windows 节点留空即可（证书导入系统存储）；Linux 节点填 nginx 等服务证书目录</div>';
+  h += '<div class="tip" style="margin-bottom:16px">Windows 留空；Linux 填 nginx 等服务证书目录</div>';
 
-  h += '<div class="section-title">高级</div>';
-  h += '<div class="form-group"><label>TTL</label><select id="ncfg-ttl">';
-  ['60','120','300','600','1800','3600'].forEach(function(t) {
-    h += '<option value="' + t + '"' + (String(cfg.ttl || '600') === t ? ' selected' : '') + '>' + t + 's</option>';
-  });
-  h += '</select></div>';
-  h += '<div class="btn-row" style="margin-top:16px"><button class="btn" onclick="closeModal(\'modal-node-config\')">取消</button><button class="btn btn-primary" onclick="saveNodeConfig(\'' + id + '\')">保存并下发</button></div>';
+  h += '<div class="btn-row" style="margin-top:16px"><span style="flex:1"></span><button class="btn btn-outline" onclick="showNodeConfigHelp()" title="查看IP获取方式使用说明">&#x2753; 帮助</button><button class="btn" onclick="closeModal(\'modal-node-config\')">取消</button><button class="btn btn-primary" onclick="saveNodeConfig(\'' + id + '\')">保存并下发</button></div>';
 
-  document.getElementById('modal-node-body').innerHTML = h;
-  toggleIPSection('ipv4');
-  toggleIPSection('ipv6');
-  openModal('modal-node-config');
   window._ncfgNode = node;
-  window._ncfgCerts = certs; window._ncfgProviders = providers; window._ncfgKeys = keys;
+  document.getElementById('modal-node-body').innerHTML = h;
+  // 初始化每张卡片的显示状态
+  cards.forEach(function(card, ci) {
+    toggleCardIP(ci, 'ipv4');
+    toggleCardIP(ci, 'ipv6');
+  });
+  openModal('modal-node-config');
 }
 
-function ipSection(title, prefix, cfg, node) {
+// v1.6.48: 多卡片 DNS 配置渲染 — 统一样式
+function renderCard(ci, card, node) {
   var ifaces = node.interfaces || [];
-  var enable = cfg.enable !== false;
-  var gettype = cfg.gettype || 'url';
-  var h = '<div class="section-title">' + title + ' <label class="checkbox-row" style="margin-left:8px"><input type="checkbox" id="ncfg-' + prefix + '-enable"' + (enable ? ' checked' : '') + ' onchange="toggleIPSection(\'' + prefix + '\')"> 启用</label></div>';
-  h += '<div id="ncfg-' + prefix + '-section">';
-  h += '<div class="form-group"><label>获取方式</label><select id="ncfg-' + prefix + '-type" onchange="toggleIPSection(\'' + prefix + '\')">';
-  ['url','netInterface','cmd'].forEach(function(t) {
-    h += '<option value="' + t + '"' + (gettype === t ? ' selected' : '') + '>' + ({url:'URL',netInterface:'网卡',cmd:'命令'}[t]) + '</option>';
-  });
-  h += '</select></div>';
-  var defUrl = prefix === 'ipv4' ? 'http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org' : 'http://api6.ipify.org,http://checkip.amazonaws.com,http://icanhazip.com';
-  h += '<div class="form-group" id="ncfg-' + prefix + '-url"><label>URL</label><input id="ncfg-' + prefix + '-urlval" value="' + he(cfg.url || '') + '" placeholder="' + he(defUrl) + '"><div class="tip">逗号分隔，留空使用默认</div></div>';
-  h += '<div class="form-group" id="ncfg-' + prefix + '-iface"><label>网卡</label><select id="ncfg-' + prefix + '-ifaceval">';
-  if (ifaces.length === 0) {
-    h += '<option value="">-- 无 --</option>';
-  } else {
-    // 自动选择第一个网卡（用户保存前默认值）
-    var selIface = cfg.netinterface || ifaces[0].name;
-    ifaces.forEach(function(ifc) {
-      var label = ifc.name + (ifc.ipv4 ? ' (' + ifc.ipv4 + ')' : '');
-      h += '<option value="' + he(ifc.name) + '"' + (ifc.name === selIface ? ' selected' : '') + '>' + he(label) + '</option>';
+  var h = '';
+  h += '<div class="ncfg-card">';
+  h += '<div class="ncfg-card-hd"><span class="ncfg-card-idx">卡片 ' + (ci+1) + '</span><input value="' + he(card.name || '') + '" data-card="' + ci + '" data-field="name" class="ncfg-card-name" placeholder="名称 (如 阿里云-主)">';
+  if (window._ncfgCards.length > 1) h += '<button class="btn btn-danger" onclick="delDNSCard(' + ci + ')">删除</button>';
+  h += '</div>';
+
+  h += '<div class="ncfg-card-row"><div class="ncfg-field"><label>DNS Key</label><select data-card="' + ci + '" data-field="dns_key" class="ncfg-sel">';
+  var providers = window._ncfgProviders || [], keys = window._ncfgKeys || {};
+  var curDns = card.dns_key || '';
+  if (providers.length === 0) { h += '<option value="">-- 无 --</option>'; }
+  else {
+    var found = false;
+    providers.forEach(function(p) {
+      var k = keys[p]; var label = (k && k.name) || p;
+      var sel = (p === curDns || (k && k.name === curDns));
+      if (sel) found = true;
+      h += '<option value="' + he(p) + '"' + (sel ? ' selected' : '') + '>' + he(label) + '</option>';
     });
+    if (!found && curDns) h += '<option value="" disabled style="color:var(--c-red)">⚠ ' + he(curDns) + ' 已丢失</option>';
   }
   h += '</select></div>';
-  if (prefix === 'ipv6') h += '<div class="form-group" id="ncfg-ipv6-regex"><label>IPv6 正则 (可选)</label><input id="ncfg-ipv6-regexval" value="' + he(cfg.ipv6reg || '') + '" placeholder="多IP过滤正则"></div>';
-  h += '<div class="form-group" id="ncfg-' + prefix + '-cmd"><label>命令</label><input id="ncfg-' + prefix + '-cmdval" value="' + he(cfg.cmd || '') + '" placeholder="curl -s ifconfig.me"></div>';
-  var domains = cfg.domains || [];
-  h += '<div class="form-group"><label>域名</label><div id="ncfg-' + prefix + '-domains">';
-  domains.forEach(function(d, i) { h += domainRow(prefix, i, (typeof d==='object'?d:{domain:d,dns_key_name:''})); });
-  h += '</div><button class="btn" style="margin-top:4px" onclick="addDomain(\'' + prefix + '\')">+ 添加</button></div>';
+  h += '<div class="ncfg-field ncfg-field-sm"><label>TTL</label><select data-card="' + ci + '" data-field="ttl" class="ncfg-sel" style="width:80px">';
+  ['60','120','300','600','1800','3600'].forEach(function(t) {
+    h += '<option value="' + t + '"' + ((card.ttl || '600') === t ? ' selected' : '') + '>' + t + 's</option>';
+  });
+  h += '</select></div></div>';
+  h += renderCardIP(ci, card, 'ipv4', 'IPv4', ifaces);
+  h += renderCardIP(ci, card, 'ipv6', 'IPv6', ifaces);
   h += '</div>';
   return h;
 }
 
-function domainRow(prefix, i, val) {
-  var domain = (typeof val === 'object') ? (val.domain || '') : (val || '');
-  var dnsKey = (typeof val === 'object') ? (val.dns_key_name || '') : '';
-  var providers = window._ncfgProviders || [], keys = window._ncfgKeys || {};
-  var sel = '<select class="domain-dns-select" style="width:120px;margin:0 4px;font-size:12px" data-prefix="' + prefix + '" data-idx="' + i + '"><option value="">默认</option>';
-  providers.forEach(function(p) {
-    var k = keys[p]; var label = (k && k.name) || p;
-    sel += '<option value="' + he(p) + '"' + (p === dnsKey ? ' selected' : '') + '>' + he(label) + '</option>';
-  });
-  sel += '</select>';
-  return '<div class="form-inline" style="margin-bottom:4px"><input value="' + he(domain) + '" data-prefix="' + prefix + '" data-idx="' + i + '" class="domain-input" style="flex:1" placeholder="example.com">' + sel + '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
+function renderCardIP(ci, card, prefix, title, ifaces) {
+  var cfg = card[prefix] || {};
+  var enable = cfg.enable !== false;
+  var gettype = cfg.gettype || 'url';
+  var h = '<div class="ncfg-ip-block"><label class="checkbox-row ncfg-ip-title"><input type="checkbox" data-card="' + ci + '" data-prefix="' + prefix + '" data-field="enable"' + (enable ? ' checked' : '') + ' onchange="toggleCardIP(' + ci + ',\'' + prefix + '\')"> ' + title + '</label>';
+  h += '<div id="ncfg-card-' + ci + '-' + prefix + '" style="' + (enable ? '' : 'display:none') + '"><div class="ncfg-card-row">';
+  h += '<div class="ncfg-field ncfg-field-sm"><label>获取方式</label><select data-card="' + ci + '" data-prefix="' + prefix + '" data-field="gettype" onchange="toggleCardIP(' + ci + ',\'' + prefix + '\')" class="ncfg-sel">';
+  ['url','netInterface','cmd'].forEach(function(t) { h += '<option value="' + t + '"' + (gettype === t ? ' selected' : '') + '>' + ({url:'URL',netInterface:'网卡',cmd:'命令'}[t]) + '</option>'; });
+  h += '</select></div>';
+  if (gettype === 'url') h += '<div class="ncfg-field"><label>URL</label><input data-card="' + ci + '" data-prefix="' + prefix + '" data-field="url" value="' + he(cfg.url || '') + '" class="ncfg-inp" placeholder="' + (prefix==='ipv4'?'http://ipv4.icanhazip.com':'http://api6.ipify.org') + '"></div>';
+  else if (gettype === 'netInterface') { h += '<div class="ncfg-field"><label>网卡</label><select data-card="' + ci + '" data-prefix="' + prefix + '" data-field="netinterface" class="ncfg-sel">'; if (ifaces.length === 0) h += '<option value="">-- 无 --</option>'; else ifaces.forEach(function(ifc) { h += '<option value="' + he(ifc.name) + '"' + (ifc.name === cfg.netinterface ? ' selected' : '') + '>' + he(ifaceDisplay(ifc)) + '</option>'; }); h += '</select></div>'; }
+  else if (gettype === 'cmd') h += '<div class="ncfg-field"><label>命令</label><input data-card="' + ci + '" data-prefix="' + prefix + '" data-field="cmd" value="' + he(cfg.cmd || '') + '" class="ncfg-inp" placeholder="curl -s ifconfig.me"></div>';
+  h += '</div>';
+  var domains = cfg.domains || [];
+  h += '<div class="ncfg-field"><label>域名</label><div id="ncfg-card-' + ci + '-' + prefix + '-domains">';
+  domains.forEach(function(d, di) { h += '<div class="ncfg-domain-row"><input data-card="' + ci + '" data-prefix="' + prefix + '" data-idx="' + di + '" data-field="domain" value="' + he((typeof d==='object'?d.domain||'':d||'')) + '" class="ncfg-inp" placeholder="example.com"><button class="btn btn-danger" onclick="this.parentElement.remove()">✕</button></div>'; });
+  h += '</div><button class="btn btn-sm" style="margin-top:4px" onclick="addCardDomain(' + ci + ',\'' + prefix + '\')">+ 添加域名</button></div>';
+  h += '</div></div>';
+  return h;
 }
-function addDomain(prefix) {
-  var ct = document.getElementById('ncfg-' + prefix + '-domains');
+
+function addCardDomain(ci, prefix) {
+  var ct = document.getElementById('ncfg-card-' + ci + '-' + prefix + '-domains');
   var div = document.createElement('div');
-  div.innerHTML = domainRow(prefix, Date.now(), {domain: '', dns_key_name: ''});
+  div.innerHTML = '<div class="ncfg-domain-row"><input data-card="' + ci + '" data-prefix="' + prefix + '" data-idx="' + Date.now() + '" data-field="domain" value="" class="ncfg-inp" placeholder="example.com"><button class="btn btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   ct.appendChild(div.firstElementChild);
 }
+
+
+function ifaceDisplay(ifc) {
+  var parts = [];
+  if (ifc.ipv4) parts.push(ifc.ipv4);
+  if (ifc.ipv6) parts.push(ifc.ipv6);
+  return ifc.name + (parts.length ? ' (' + parts.join(' / ') + ')' : '');
+}
+function toggleCardIP(ci, prefix) {
+  var section = document.getElementById('ncfg-card-' + ci + '-' + prefix);
+  // v1.6.49: null-safe — check section before accessing parentElement
+  var block = section ? section.parentElement : null;
+  var cb = block ? block.querySelector('[data-card="' + ci + '"][data-prefix="' + prefix + '"][data-field="enable"]') : null;
+  var gtSel = block ? block.querySelector('[data-card="' + ci + '"][data-prefix="' + prefix + '"][data-field="gettype"]') : null;
+  if (!section || !cb) return;
+  var en = cb.checked, gt = gtSel ? gtSel.value : 'url';
+  section.style.display = en ? '' : 'none';
+  if (!en) return;
+  // v1.6.49: 先保存当前字段值到 _ncfgCards，再动态替换获取方式字段
+  var row = section.querySelector('.ncfg-card-row');
+  if (!row) return;
+  var fields = row.querySelectorAll('.ncfg-field');
+  // label → config field name 映射
+  var labelToField = {'URL':'url','网卡':'netinterface','命令':'cmd'};
+  fields.forEach(function(f) {
+    var label = (f.querySelector('label') || {}).textContent || '';
+    if (label === '获取方式') return;
+    if (label === 'URL' || label === '网卡' || label === '命令') {
+      // 1. 保存当前字段值到 _ncfgCards（防止切换时丢失未保存的输入）
+      var card = (window._ncfgCards || [])[ci] || {};
+      if (!card[prefix]) card[prefix] = {};
+      var cfg = card[prefix];
+      var inp = f.querySelector('input,select');
+      if (inp && labelToField[label]) cfg[labelToField[label]] = inp.value;
+
+      // 2. 构建新字段 HTML（用已保存的值，不用 oldVal 混入旧类型数据）
+      var ifaces = (window._ncfgNode || {}).interfaces || [];
+      var newHTML = '';
+      if (gt === 'url') newHTML = '<label>URL</label><input data-card="' + ci + '" data-prefix="' + prefix + '" data-field="url" value="' + he(cfg.url || '') + '" class="ncfg-inp" placeholder="' + (prefix==='ipv4'?'http://ipv4.icanhazip.com':'http://api6.ipify.org') + '">';
+      else if (gt === 'netInterface') { newHTML = '<label>网卡</label><select data-card="' + ci + '" data-prefix="' + prefix + '" data-field="netinterface" class="ncfg-sel">'; if (ifaces.length === 0) newHTML += '<option value="">-- 无 --</option>'; else ifaces.forEach(function(ifc) { newHTML += '<option value="' + he(ifc.name) + '"' + (ifc.name === cfg.netinterface ? ' selected' : '') + '>' + he(ifaceDisplay(ifc)) + '</option>'; }); newHTML += '</select>'; }
+      else if (gt === 'cmd') newHTML = '<label>命令</label><input data-card="' + ci + '" data-prefix="' + prefix + '" data-field="cmd" value="' + he(cfg.cmd || '') + '" class="ncfg-inp" placeholder="curl -s ifconfig.me">';
+      f.innerHTML = newHTML;
+    }
+  });
+}
+
+
+function showNodeConfigHelp() {
+  var h = '';
+  h += '<div class="ncfg-help-section"><h4>&#x1F310; URL 方式</h4>';
+  h += '<p>通过访问公网 IP 查询接口获取本机外网地址。简单可靠，但依赖外部服务可用性。</p>';
+  h += '<div class="ncfg-help-sub"><strong>IPv4 常用 URL（推荐从官方的开始）：</strong>';
+  h += '<ul>';
+  h += '<li><code>http://ipv4.icanhazip.com</code> — icanhazip (推荐)</li>';
+  h += '<li><code>http://ifconfig.me/ip</code> — ifconfig.me 纯 IP</li>';
+  h += '<li><code>http://api.ipify.org</code> — ipify API</li>';
+  h += '<li><code>http://checkip.amazonaws.com</code> — AWS (纯 IP)</li>';
+  h += '<li><code>http://v4.ident.me</code> — v4.ident.me</li>';
+  h += '<li><code>http://ip.sb</code> — ip.sb</li>';
+  h += '<li><code>http://cip.cc</code> — cip.cc</li>';
+  h += '<li><code>http://myip.ipip.net</code> — ipip.net (含地理位置)</li>';
+  h += '<li><code>http://ip.3322.net</code> — 3322 (国内推荐)</li>';
+  h += '<li><code>http://ddns.oray.com/checkip</code> — 花生壳 (国内推荐)</li>';
+  h += '</ul></div>';
+  h += '<div class="ncfg-help-sub"><strong>IPv6 常用 URL：</strong>';
+  h += '<ul>';
+  h += '<li><code>http://api6.ipify.org</code> — ipify IPv6 API (推荐)</li>';
+  h += '<li><code>http://v6.ident.me</code> — v6.ident.me</li>';
+  h += '<li><code>http://ifconfig.co</code> — ifconfig.co (同时支持 IPv4/IPv6)</li>';
+  h += '<li><code>http://ipv6.icanhazip.com</code> — icanhazip IPv6</li>';
+  h += '<li><code>http://ipv6.myip.la</code> — myip.la IPv6</li>';
+  h += '</ul></div>';
+  h += '<div class="tip" style="margin-top:4px">&#x26A0;&#xFE0F; 注意：部分接口有频率限制，过于频繁请求可能被限流。建议选择多个备用 URL。</div>';
+  h += '</div>';
+
+  h += '<div class="ncfg-help-section"><h4>&#x2328;&#xFE0F; 命令方式</h4>';
+  h += '<p>通过执行系统命令获取 IP。灵活性高，可自定义脚本逻辑，适合复杂网络环境（如多网卡、VPN）。</p>';
+  h += '<div class="ncfg-help-sub"><strong>Linux / Unix 获取 IPv4：</strong>';
+  h += '<ul>';
+  h += '<li><code>curl -s ifconfig.me</code></li>';
+  h += '<li><code>curl -s ipv4.icanhazip.com</code></li>';
+  h += '<li><code>curl -s ip.sb</code></li>';
+  h += '<li><code>curl -s cip.cc</code></li>';
+  h += '<li><code>curl -s ipinfo.io/ip</code></li>';
+  h += '<li><code>wget -qO- ifconfig.me</code></li>';
+  h += '</ul></div>';
+  h += '<div class="ncfg-help-sub"><strong>Windows PowerShell 获取 IPv4：</strong>';
+  h += '<ul>';
+  h += "<li><code>(Invoke-WebRequest -Uri 'http://ipv4.icanhazip.com').Content.Trim()</code></li>";
+  h += "<li><code>(Invoke-RestMethod 'http://ifconfig.me/ip').Trim()</code></li>";
+  h += "<li><code>(Invoke-WebRequest -Uri 'http://api.ipify.org').Content.Trim()</code></li>";
+  h += '</ul></div>';
+  h += '<div class="ncfg-help-sub"><strong>Linux / Unix 获取 IPv6：</strong>';
+  h += '<ul>';
+  h += '<li><code>curl -s api6.ipify.org</code></li>';
+  h += '<li><code>curl -s v6.ident.me</code></li>';
+  h += "<li><code>ip -6 addr | grep inet6 | awk -F '[ \\t]+|/' '\$3 == \"::1\" { next;} \$3 ~ /^fe80::/ { next;} /inet6/ {print \$3}'</code> — 从本机网卡提取公网 IPv6</li>";
+  h += '</ul></div>';
+  h += '<div class="ncfg-help-sub"><strong>Windows PowerShell 获取 IPv6：</strong>';
+  h += '<ul>';
+  h += "<li><code>(Invoke-WebRequest -Uri 'http://api6.ipify.org').Content.Trim()</code></li>";
+  h += '<li><code>ipconfig | findstr IPv6</code> — 从本机 ipconfig 提取</li>';
+  h += '</ul></div>';
+  h += '<div class="ncfg-help-sub"><strong>高级示例 — 指定网卡获取 IPv6 (Linux IPV)：</strong>';
+  h += '<ul>';
+  h += "<li><code>ip -6 addr | grep inet6 | awk -F '[ \\t]+|/' '\$3 == \"::1\" { next;} \$3 ~ /^fe80::/ { next;} /inet6/ {print \$3}' | head -1</code></li>";
+  h += '</ul></div>';
+  h += '<div class="tip" style="margin-top:4px">&#x26A0;&#xFE0F; 注意：命令方式需要系统已安装对应工具（curl/wget/PowerShell）。输出必须是纯 IP 地址，不能包含额外字符。</div>';
+  h += '</div>';
+
+  h += '<div class="ncfg-help-section"><h4>&#x1F4E1; 网卡方式</h4>';
+  h += '<p>直接从本机网卡读取 IP 地址，<strong>无需外部网络</strong>。最稳定、最快，但仅适用于直接从公网获取 IP 的场景（如 PPPoE 拨号）。</p>';
+  h += '<ul style="margin:8px 0 0 16px;font-size:13px;line-height:1.8">';
+  h += '<li>适合：光猫拨号、路由器 PPPoE、有公网 IP 的服务器</li>';
+  h += '<li>不适合：多层 NAT 后、运营商 CGNAT 环境</li>';
+  h += '<li>选择网卡时，下拉框会显示每张网卡当前绑定的 IPv4/IPv6 地址</li>';
+  h += '</ul>';
+  h += '</div>';
+
+  h += '<p style="text-align:center;color:var(--c-text2);font-size:12px;margin-top:16px">以上示例摘自 <a href="https://github.com/jeessy2/ddns-go" target="_blank" rel="noopener">ddns-go</a> 社区，感谢开源！</p>';
+
+  document.getElementById('ncfg-help-body').innerHTML = h;
+  openModal('modal-ncfg-help');
+}
+
+function addDNSCard() {
+  var cards = window._ncfgCards || [];
+  cards.push({name: 'DNS配置 ' + (cards.length+1), dns_key: '', ipv4: {enable: true, gettype: 'netInterface'}, ipv6: {enable: false, gettype: 'netInterface'}, ttl: '600'});
+  window._ncfgCards = cards;
+  var ct = document.getElementById('ncfg-dns-cards');
+  var node = window._ncfgNode || {};
+  var div = document.createElement('div');
+  div.innerHTML = renderCard(cards.length-1, cards[cards.length-1], node);
+  ct.appendChild(div.firstElementChild);
+}
+
+function delDNSCard(ci) {
+  var cards = window._ncfgCards || [];
+  if (cards.length <= 1) { toast('至少保留一张 DNS 配置'); return; }
+  cards.splice(ci, 1);
+  window._ncfgCards = cards;
+  var node = window._ncfgNode || {};
+  var ct = document.getElementById('ncfg-dns-cards');
+  ct.innerHTML = '';
+  cards.forEach(function(card, i) { var div = document.createElement('div'); div.innerHTML = renderCard(i, card, node); ct.appendChild(div.firstElementChild); });
+}
+
 function certBindingRow(i, b, certs) {
   var arr = certs || window._ncfgCerts || [];
-  var h = '<div class="form-inline" style="margin-bottom:6px;flex-wrap:wrap"><select class="ncfg-cert-name" style="flex:1" onchange="updateCertPathPreview(this)">';
+  var h = '<div class="form-inline" style="margin-bottom:6px;flex-wrap:wrap"><select class="ncfg-cert-name ncfg-sel" style="flex:1" onchange="updateCertPathPreview(this)">';
   var cur = b.bundle_name || '';
   arr.forEach(function(c) {
     var n = c.bundle_name || c.name || '';
@@ -1810,8 +2024,8 @@ function certBindingRow(i, b, certs) {
   }
   var ph = autoPath ? '自动路径: ' + autoPath : (window._ncfgCertPath ? '客户端路径: ' + window._ncfgCertPath : '部署路径 (Windows留空, Linux填实际路径如 /etc/nginx/certs/)');
   var titleAttr = autoPath ? ' title="' + he(autoPath) + '"' : '';
-  h += '<input class="ncfg-cert-path" value="' + he(b.deploy_path || '') + '" placeholder="' + he(ph) + '"' + titleAttr + ' style="flex:1" oninput="updateCertPathPreview(this)">';
-  h += '<button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
+  h += '<input class="ncfg-cert-path ncfg-sel" value="' + he(b.deploy_path || '') + '" placeholder="' + he(ph) + '"' + titleAttr + ' style="flex:1" oninput="updateCertPathPreview(this)">';
+  h += '<button class="btn btn-danger" onclick="this.parentElement.remove()">✕</button></div>';
   return h;
 }
 // v1.6.36: 实时更新 placeholder + title — 切换证书或修改部署路径时联动
@@ -1861,44 +2075,84 @@ function toggleIPSection(prefix) {
 }
 
 async function saveNodeConfig(id) {
-  var ipv4 = readIPConfig('ipv4'), ipv6 = readIPConfig('ipv6');
-  var dns = document.getElementById('ncfg-dns').value;
-  var ttl = document.getElementById('ncfg-ttl').value;
+  // v1.6.48: 从卡片 DOM 读取多 DNS 配置
+  var cards = window._ncfgCards || [];
+  var dnsConfs = [];
+  var cardsContainer = document.getElementById('ncfg-dns-cards');
+  if (cardsContainer) {
+    var cardEls = cardsContainer.querySelectorAll('.ncfg-card');
+    cardEls.forEach(function(cardEl) {
+      var ci = parseInt(cardEl.querySelector('[data-field="name"]').dataset.card);
+      var card = {name: '', dns_key: '', ipv4: {}, ipv6: {}, ttl: '600'};
+      // Read name
+      var nameEl = cardEl.querySelector('[data-field="name"]');
+      if (nameEl) card.name = nameEl.value;
+      // Read dns_key
+      var dnsEl = cardEl.querySelector('[data-field="dns_key"]');
+      if (dnsEl) card.dns_key = dnsEl.value;
+      // Read ttl
+      var ttlEl = cardEl.querySelector('[data-field="ttl"]');
+      if (ttlEl) card.ttl = ttlEl.value;
+      // Read ipv4/ipv6
+      ['ipv4','ipv6'].forEach(function(p) {
+        var enableEl = cardEl.querySelector('[data-prefix="' + p + '"][data-field="enable"]');
+        var gtEl = cardEl.querySelector('[data-prefix="' + p + '"][data-field="gettype"]');
+        var en = enableEl ? enableEl.checked : false;
+        var gt = gtEl ? gtEl.value : 'url';
+        // 防呆: 先收集域名，启用但无域名 → 强制禁用
+        var domainEls = cardEl.querySelectorAll('[data-prefix="' + p + '"][data-field="domain"]');
+        var domainValues = [];
+        domainEls.forEach(function(dEl) {
+          if (dEl.value.trim()) domainValues.push({domain: dEl.value.trim()});
+        });
+        if (en && domainValues.length === 0) en = false;
+        var ipcfg = {enable: en, gettype: gt, url: '', netinterface: '', cmd: '', domains: []};
+        if (!en) { card[p] = ipcfg; return; }
+        // v1.6.49: 仅启用时读取字段值，防止 disabled 段携带脏数据
+        var urlEl = cardEl.querySelector('[data-prefix="' + p + '"][data-field="url"]');
+        var niEl = cardEl.querySelector('[data-prefix="' + p + '"][data-field="netinterface"]');
+        var cmdEl = cardEl.querySelector('[data-prefix="' + p + '"][data-field="cmd"]');
+        if (urlEl) ipcfg.url = urlEl.value;
+        if (niEl) ipcfg.netinterface = niEl.value;
+        if (cmdEl) ipcfg.cmd = cmdEl.value;
+        ipcfg.domains = domainValues;
+        card[p] = ipcfg;
+      });
+      dnsConfs.push(card);
+    });
+  }
+
   var certBindings = [];
   document.querySelectorAll('#ncfg-certs .form-inline').forEach(function(row) {
     var name = row.querySelector('.ncfg-cert-name');
     var path = row.querySelector('.ncfg-cert-path');
     if (name && name.value) certBindings.push({bundle_name: name.value, deploy_path: path ? path.value : ''});
   });
-  var body = {dns_key_name: dns, dns_provider: dns, ttl: ttl, ipv4: ipv4, ipv6: ipv6, cert_bindings: certBindings};
+
+  // v1.6.49: 保存前校验 — 缺失内容时提示补充，禁止保存
+  var errs = [];
+  dnsConfs.forEach(function(card, ci) {
+    var pre = '卡片 ' + (ci+1) + '（' + (card.name || '未命名') + '）: ';
+    if (!card.dns_key) errs.push(pre + '请选择 DNS Key');
+    ['ipv4','ipv6'].forEach(function(p) {
+      if (!card[p] || !card[p].enable) return;
+      var c = card[p];
+      if (c.gettype === 'netInterface' && !c.netinterface) errs.push(pre + p + ' 网卡方式需要选择网卡');
+      if (c.gettype === 'cmd' && !c.cmd) errs.push(pre + p + ' 命令方式需要填写命令');
+    });
+  });
+  if (errs.length > 0) {
+    toast(errs.join('<br>'), 'error'); return;
+  }
+
+  var body = {dns_confs: dnsConfs, cert_bindings: certBindings};
   var r = await apiJSON('/api/admin/nodes/' + id + '/config', {method: 'PUT', body: body});
   if (r.ok) { toast('配置已保存'); closeModal('modal-node-config'); loadNodes(true); markPageClean(); }
 }
 
 function readIPConfig(prefix) {
-  var enable = document.getElementById('ncfg-' + prefix + '-enable');
-  var type = document.getElementById('ncfg-' + prefix + '-type');
-  var en = enable ? enable.checked : true, tp = type ? type.value : 'url';
-  var domains = [];
-  document.querySelectorAll('#ncfg-' + prefix + '-domains .form-inline').forEach(function(row) {
-    var inp = row.querySelector('.domain-input');
-    var sel = row.querySelector('.domain-dns-select');
-    if (inp && inp.value.trim()) {
-      domains.push({domain: inp.value.trim(), dns_key_name: sel ? sel.value : ''});
-    }
-  });
-  var cfg = {
-    enable: en, gettype: tp,
-    url: document.getElementById('ncfg-' + prefix + '-urlval') ? document.getElementById('ncfg-' + prefix + '-urlval').value : '',
-    netinterface: document.getElementById('ncfg-' + prefix + '-ifaceval') ? document.getElementById('ncfg-' + prefix + '-ifaceval').value : '',
-    cmd: document.getElementById('ncfg-' + prefix + '-cmdval') ? document.getElementById('ncfg-' + prefix + '-cmdval').value : '',
-    domains: domains
-  };
-  if (prefix === 'ipv6') {
-    var re = document.getElementById('ncfg-ipv6-regexval');
-    cfg.ipv6reg = re ? re.value : '';
-  }
-  return cfg;
+  // v1.6.48: 保留兼容旧调用，但新代码不再使用
+  return {};
 }
 
 // ==================== DNS & CERTS ====================
@@ -2668,7 +2922,7 @@ async function loadLogsIncremental() {
       var ts = fmtTime(l.time);
       var ts2 = ts.length > 10 ? ts.substring(11,16) : ts;
       if (ts === firstTime) break;
-      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
+      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : (l.status === 'warning' ? 'badge-orange' : (l.status === 'security' ? 'badge-purple' : 'badge-blue')));
       newRows.push('<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + ts + '</span><span class="log-time-short">' + ts2 + '</span></td><td class="col-log-node">' + he(l.node || '管理端') + '</td>');
       newRows.push('<td class="col-log-cat"><span class="badge ' + badgeCls + '">' + he(l.category) + '</span></td>');
       newRows.push('<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>');
@@ -2691,6 +2945,7 @@ async function loadLogs(silent, filter) {
     if (filter) {
       if (filter.node) url += '&node=' + encodeURIComponent(filter.node);
       if (filter.category) url += '&category=' + encodeURIComponent(filter.category);
+      if (filter.status) url += '&status=' + encodeURIComponent(filter.status);
       if (filter.from) url += '&from=' + encodeURIComponent(filter.from);
       if (filter.to) url += '&to=' + encodeURIComponent(filter.to);
     }
@@ -2730,6 +2985,11 @@ function renderLogs(data, filter) {
   h += '</select></div>';
   h += '<div class="form-group" style="flex:0 1 120px"><label>开始</label><input type="date" id="log-filter-from" value="' + he(f.from || '') + '" style="font-size:11px"></div>';
   h += '<div class="form-group" style="flex:0 1 120px"><label>结束</label><input type="date" id="log-filter-to" value="' + he(f.to || '') + '" style="font-size:11px"></div>';
+  h += '<div class="form-group" style="flex:0 1 100px"><label>状态</label><select id="log-filter-status"><option value="">全部</option>';
+  [{v:'error',t:'故障'},{v:'warning',t:'警告'},{v:'success',t:'成功'},{v:'info',t:'信息'},{v:'security',t:'安全'}].forEach(function(s) {
+    h += '<option value="' + s.v + '"' + (f.status === s.v ? ' selected' : '') + '>' + s.t + '</option>';
+  });
+  h += '</select></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn btn-primary" onclick="applyLogFilter()">搜索</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="resetLogFilter()">重置</button></div>';
   h += '<div class="form-group" style="flex:0 0 auto"><label style="visibility:hidden">.</label><button class="btn" onclick="downloadLogs()">下载</button></div>';
@@ -2740,7 +3000,7 @@ function renderLogs(data, filter) {
     h += '<tr><td colspan="4" class="empty">暂无日志</td></tr>';
   } else {
     events.forEach(function(l) {
-      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : 'badge-blue');
+      var badgeCls = l.status === 'error' ? 'badge-red' : (l.status === 'success' ? 'badge-green' : (l.status === 'warning' ? 'badge-orange' : (l.status === 'security' ? 'badge-purple' : 'badge-blue')));
       var timeFull = fmtTime(l.time);
       var timeShort = timeFull.length > 10 ? timeFull.substring(11,16) : timeFull;
       h += '<tr class="log-row"><td class="col-log-time"><span class="log-time-full">' + timeFull + '</span><span class="log-time-short">' + timeShort + '</span></td><td class="col-log-node">' + he(l.node || '管理端') + '</td>';
@@ -2755,12 +3015,13 @@ function getLogFilter() {
   return {
     node: document.getElementById('log-filter-node') ? document.getElementById('log-filter-node').value : '',
     category: document.getElementById('log-filter-cat') ? document.getElementById('log-filter-cat').value : '',
+    status: document.getElementById('log-filter-status') ? document.getElementById('log-filter-status').value : '',
     from: document.getElementById('log-filter-from') ? document.getElementById('log-filter-from').value : '',
     to: document.getElementById('log-filter-to') ? document.getElementById('log-filter-to').value : ''
   };
 }
 function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f); }
-function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false); }
+function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; var st = document.getElementById('log-filter-status'); if (st) st.value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false); }
 function toggleLogFilter() { var b = document.querySelector('.log-filter-bar'); if (b) { b.classList.toggle('open'); var t = document.querySelector('.log-filter-toggle'); if (t) t.textContent = b.classList.contains('open') ? '筛选 ▴' : '筛选 ▾'; } }
 async function cleanupLogs() {
   confirmAction('清理日志', '确定清理旧日志？', function() {

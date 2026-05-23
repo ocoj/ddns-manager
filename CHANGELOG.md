@@ -1,3 +1,54 @@
+## v1.6.49 — 2026-05-23
+
+### 🏗️ 多卡片 DNS 配置（架构升级）
+
+多 DNS 配置支持：节点可配多张独立 DNS 卡片, 每张绑定不同 DNS Key/IPv4/IPv6/域名/TTL。
+
+- **数据模型**: `NodeConfigRequest` 新增 `dns_confs []DnsConfItem`, 向后兼容旧格式 `ipv4/ipv6/dns_key_name`
+- **配置渲染**: `renderDDNSConfig` 优先处理 `dns_confs`, 每张卡片独立生成 YAML 段, DNS Key 独立查找映射
+- **Key 引用追踪**: 配置保存时遍历 `dns_confs` 全部卡片 → `used_by_nodes` 准确反映多 Key 绑定关系
+- **配置校验**: 保存时校验 `dns_confs` 中每张卡片的 DNS Key 是否存在
+- **域名提取**: `normalizeNode` 从 `dns_confs` 全量提取域名 → 节点列表正确显示
+- **旧格式迁移**: `openNodeConfig` 自动将旧格式 ipv4/ipv6 迁移为首张卡片
+
+### 🛡️ 防呆增强
+
+- **启用无域名→强制禁用**: `saveNodeConfig` 检测 IPv4/IPv6 已启用但无域名 → 自动禁用（前端+后端双重保护）
+- **保存前核验**: 前端校验 DNS Key 必选、网卡方式必选网卡、命令方式必填命令；URL/名称有默认值不拦
+- **禁用字段清理**: 禁用时不再携带脏域名/网卡名, 防止 YAML 下发冗余数据
+
+### 🔧 Web UI 修复
+
+- **获取方式切换**: `toggleCardIP` 修复 null-safety + 值回写 `_ncfgCards` + 消除 `oldVal` 混入旧类型数据
+- **网卡详情**: 下拉框显示 `eth0 (192.168.1.1 / fe80::1)` 含 IPv4/IPv6, 新增 `ifaceDisplay()` 辅助函数
+- **帮助页面**: 节点配置底部 ❓ 按钮, 弹窗含 URL/命令/网卡三种获取方式说明 + ddns-go 社区采集的有效示例
+- **暗色模式**: 帮助页 `code` 元素适配 `body.dark`/`body.auto`
+- **删除按钮**: 全部去掉 `btn-sm`, 23px→34px 与输入框对齐
+- **`_ncfgNode` 时序**: 移到 `toggleCardIP` 之前赋值, 消除初次打开网卡下拉显示 "无"
+- **IP 列显示**: 根据 Agent 上报的 `ipv4_enabled`/`ipv6_enabled` 显示 "未开启"/"-"/实际IP
+- **IPv6 悬停**: 鼠标悬停气泡显示完整 IPv6 地址
+- **帮助按钮位置**: 移到取消按钮左侧, 间距统一 8px
+
+### 🔧 服务端修复
+
+- **`deploy_path` 自动填充**: 保存时若 `deploy_path=""` → 自动填入 `{CertPath}/{sanitized_BundleName}`
+- **泛域名路径消隐**: `sanitizeCertDirName()` 统一替换 `*`→`_`, 证书目录跨平台合法
+- **部署路径日志**: 证书下发日志 `path=` 改用 `targetPath`, 不再显示空
+- **配置保存日志**: `dnsKey=` 从 `dns_confs` 拼接全部 Key 名, 不再为空
+- **日志状态着色**: `classifyLogStatus()` — 根据内容关键词判定事件状态, 失败/错误 → 红色
+- **Agent IPv4/IPv6 清零**: DNS 更新入口重置 ipv4/ipv6 字段, 防止旧值残留
+- **Agent 证书目录**: 用 `sanitizeCertDirName` 创建子目录, 规避 Windows `*` 非法字符
+
+### 📊 健康日志增强
+
+- **状态变更日志**: 心跳处理中记录 OK/WARN/ERR/DOWN 互转 (`健康状态变更: OK → WARN`)
+- **节点恢复日志**: 5分钟以上无心跳后恢复 → 记录 `节点恢复在线: 离线 6m 后恢复`
+- **无响应检测**: 5分钟后台扫描 → 记录 `节点无响应: diff=5m30s`
+
+📁 `internal/server/handlers_nodes.go`, `internal/server/server.go`, `cmd/manager/static/index.html`, `cmd/agent/dns_updater.go`, `cmd/agent/main.go` — 共 5 文件
+
+---
+
 # CHANGELOG
 
 ## v1.6.47 — 2026-05-22

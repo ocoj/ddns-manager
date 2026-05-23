@@ -522,25 +522,29 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			if err := dnsUpdater.ApplyConfig([]byte(resp.Config.YAML)); err != nil {
 				log.Printf("配置应用失败: %v", err)
 			} else {
-				lastConfigHash = resp.Config.Hash  // v1.6.36 C4: 存储Manager权威hash, 不复算
-			// v1.6.36 C4: 持久化 hash 到文件, oneshot 模式跨进程不丢失
-			// v1.6.42 C1: 检查写入错误, 失败时 agentLog 告警 (磁盘满/权限变更)
-			if err := os.WriteFile(configHashPath(), []byte(lastConfigHash), 0600); err != nil {
+			// v1.6.50 H2: 持久化 hash 到文件, oneshot 模式跨进程不丢失
+			// v1.6.50 H2: lastConfigHash 在 WriteFile 成功后更新, 避免磁盘满时内存已更新→持久化失败→
+			// 重启后 hash 不匹配但无新配置缓存→需额外心跳拉取→DNS更新延迟一个周期
+			if err := os.WriteFile(configHashPath(), []byte(resp.Config.Hash), 0600); err != nil {
 				agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
+				log.Printf("[config] hash持久化失败: %v (managerHash已丢弃, 下次心跳重推)", err)
+			} else {
+				lastConfigHash = resp.Config.Hash  // v1.6.50 H2: WriteFile成功才更新内存
 			}
 			// Cache encrypted config for next oneshot run (AES-256-GCM)
-				// 加密失败时拒绝写入，绝不以明文存储 DNS 凭据
+				// v1.6.50 H2: 目录创建失败后记录根因再继续, 后续 WriteFile 会二次失败→有明确错误日志
 				if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
-					log.Printf("[config] 缓存目录创建失败: %v", encErr)
+					log.Printf("[config] 缓存目录创建失败 (磁盘满/权限?): %v", encErr)
+					agentLog("配置缓存目录创建失败: %v", encErr)
 				}
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
 					getConfigCacheKey(cfg.Password, cfg.Fingerprint))
 				if encErr != nil {
 					log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
+					agentLog("缓存加密失败: %v", encErr)
 				} else if writeErr := os.WriteFile(configCachePath(), []byte(cacheData), 0600); writeErr != nil {
-					// v1.5.22 C3: 检查写入错误 (磁盘满/权限变更)
-					log.Printf("[config] 缓存写入失败: %v", writeErr)
-					agentLog("配置缓存写入失败: %v (磁盘可能已满)", writeErr)
+					log.Printf("[config] 缓存写入失败 (磁盘满/权限?): %v", writeErr)
+					agentLog("配置缓存写入失败: %v", writeErr)
 				}
 				// v1.6.28 H1: 配置变更后同步执行 DNS 更新, 失败时立即发送跟进心跳上报
 				// 修复 v1.5.29 C4 的 5 分钟延迟 — 异步 goroutine 导致失败静默到下一心跳
@@ -662,7 +666,7 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 		Status: model.NodeStatus{
 			AgentVersion: version,
 			CertPath:     cfg.CertPath,
-			CertHashes:   certHashMapRead(), // 只读拷贝, 避免锁竞争
+			CertHashes:   collectCertHashes(cfg), // v1.6.50 M2: 统一使用目录路径key, 对齐常规心跳和Manager精确匹配
 			CertErrors:   followCertErrors,  // v1.6.33 P5: 补全证书部署错误上报
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
@@ -706,7 +710,7 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		// 对齐 win-acme: 不同证书存不同位置, IIS 绑定按 CN/SAN 自动匹配
 		path := cu.TargetPath
 		if path == "" {
-			path = filepath.Join(cfg.CertPath, cu.BundleName)
+			path = filepath.Join(cfg.CertPath, model.SanitizeCertDirName(cu.BundleName))
 		}
 		if path == "" {
 			// M7: mark bundle as processed to prevent repeated push
@@ -1879,13 +1883,19 @@ func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
 // Win2022 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
 // certutilErrRe v1.6.42 C5: 包级编译一次 + 匹配任意长度 hex (覆盖 0x2/0x5/0x80070056)
 var certutilErrRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+// v1.6.50 L2: 二次匹配 Windows 符号错误名 (如 ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED)
+var certutilWinErrRe = regexp.MustCompile(`ERROR_[A-Z_]+`)
 
 // certutilErrorCode v1.6.17: 从certutil输出提取hex错误码, 避免中文乱码
 // certutil在中文Windows输出GBK, 直接log会出现"ָ 벻 ȷ"等乱码
 // v1.6.42 C5: 改用包级 regex + 匹配任意长度 hex 错误码 (不再限制恰好8位)
+// v1.6.50 L2: hex错误码未命中时尝试Windows符号错误名, 提高中文乱码环境诊断能力
 func certutilErrorCode(output string) string {
 	if m := certutilErrRe.FindString(output); m != "" {
 		return fmt.Sprintf("错误码=%s", m)
+	}
+	if m := certutilWinErrRe.FindString(output); m != "" {
+		return fmt.Sprintf("错误=%s", m)
 	}
 	// 回退: 取第一行非空文本的前100字符(ASCII safe)
 	for _, line := range strings.Split(output, "\n") {

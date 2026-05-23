@@ -193,6 +193,13 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 					if !n.Approved {
 						continue
 					}
+					if now.Sub(n.LastSeen) > 5*time.Minute && n.Status.DDNSHealth != nil && n.Status.DDNSHealth.Running {
+						n.Status.DDNSHealth.Running = false
+						old := n.Status.DDNSHealth.Status
+						n.Status.DDNSHealth.Status = "DOWN"
+						s.logMgr.LogWithNode("节点", "健康状态变更", "管理端",
+							fmt.Sprintf("%s 健康状态变更 %s → DOWN (离线 %v)", id, old, now.Sub(n.LastSeen).Round(time.Second)), "error")
+					}
 					if now.Sub(n.LastSeen) > 10*time.Minute {
 						// v1.6.10 H6: 记录详细时间差, 便于验证时区一致性
 						diff := now.Sub(n.LastSeen)
@@ -423,9 +430,14 @@ func (s *Server) initACMEManagers() {
 	s.acmeMu.Unlock() // ← 释放 acmeMu，允许 handleACMESaveAccountIndex 并发执行
 
 	// 阶段2: 后台注册账号 (不持任何锁，避免与 store.mu 形成反序)
+	// v1.6.50 M5: 用 semaphore 限制并发注册 goroutine 数 (最多3个并发), 防止配置大量ACME
+	// 账号时并发注册请求压垮ACME服务器或堆积goroutine
+	sem := make(chan struct{}, 3)
 	for _, init := range inits {
 		mgr, idx, email, ac := init.mgr, init.idx, init.email, init.ac
+		sem <- struct{}{} // 获取信号量
 		go func() {
+			defer func() { <-sem }() // 释放信号量
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := mgr.RegisterAccount(ctx); err != nil {

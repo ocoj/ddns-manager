@@ -75,6 +75,8 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 	// v1.6.46: 所有 IPv4/IPv6 状态字段在函数入口统一重置, 避免 DnsConf 空时
 	// 早期返回携带上次运行残留值 (如 IPv4Enabled=true 但实际已无配置)
+	u.status.IPv4 = ""
+	u.status.IPv6 = ""
 	u.status.IPv4OK = false
 	u.status.IPv6OK = false
 	u.status.IPv4Msg = ""
@@ -99,6 +101,9 @@ func (u *DNSUpdater) Run() DNSStatus {
 		if dc.Ipv4.Enable { u.status.IPv4Enabled = true }
 		if dc.Ipv6.Enable { u.status.IPv6Enabled = true }
 	}
+	// v1.6.49: 未启用的协议清空 IP，防止旧配置残留值污染显示
+	if !u.status.IPv4Enabled { u.status.IPv4 = "" }
+	if !u.status.IPv6Enabled { u.status.IPv6 = "" }
 
 	// v1.5.30 H4 + v1.6.10 C1: allOK + allFailedDomains 在循环内累积, 循环外统一赋值 status。
 	// segErrors 记录每段DnsConf的独立错误 (供 LastErrorDetail 使用)

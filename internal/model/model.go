@@ -177,6 +177,17 @@ type NodeConfigRequest struct {
 	IPv4         IPv4Config    `json:"ipv4"`
 	IPv6         IPv6Config    `json:"ipv6"`
 	CertBindings []CertBinding `json:"cert_bindings"`
+	// v1.6.48: 多 DNS 配置卡片 (替代顶层 ipv4/ipv6/dns_key_name)
+	DnsConfs []DnsConfItem `json:"dns_confs,omitempty"`
+}
+
+// DnsConfItem 单张 DNS 配置卡片 — 独立 DNS Key、IPv4/IPv6 获取方式、域名、TTL
+type DnsConfItem struct {
+	Name   string     `json:"name"`             // 卡片名称 (e.g. "阿里云-主")
+	DnsKey string     `json:"dns_key"`          // 引用的 DNS Key 名称
+	IPv4   IPv4Config `json:"ipv4"`
+	IPv6   IPv6Config `json:"ipv6"`
+	TTL    string     `json:"ttl"`
 }
 
 type IPv4Config struct {
@@ -223,6 +234,12 @@ type AgentConfig struct {
 // 返回 -1 (a<b), 0 (a==b), 1 (a>b)。
 // 自动去除 v 前缀，支持 pre-release 后缀 (如 1.5.10-beta1 → 1.5.10)。
 // v1.5.34 H2: 提取为公共函数，消除 agent 和 store 中重复实现的行为发散风险。
+// SanitizeCertDirName 将泛域名证书名中的 * 替换为 _，确保目录名跨平台合法。
+// v1.6.50: 从 cmd/agent 和 internal/server 重复定义中提取，统一为一处维护。
+func SanitizeCertDirName(name string) string {
+	return strings.ReplaceAll(name, "*", "_")
+}
+
 func CompareSemVer(a, b string) int {
 	a = strings.TrimPrefix(a, "v")
 	b = strings.TrimPrefix(b, "v")

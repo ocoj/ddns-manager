@@ -161,8 +161,8 @@ func fallbackBatchUpgrade(newExe, curExe string) error {
 	helperPath := filepath.Join(dir, "upgrade_helper.bat")
 	// C2: %s 替代 %[1]s/%[2]s — Go Sprintf 不支持位置参数
 	helper := fmt.Sprintf("@echo off\r\n"+
-		"rem v1.6.42 C2: 10次ping≈9秒等待 + 错误恢复逻辑\r\n"+
-		"ping -n 10 127.0.0.1 >nul\r\n"+
+		"rem v1.6.50 M1: 30次ping≈27秒等待 — SCM stop 可能需10-30秒, 9秒不足导致move失败→服务离线\r\n"+
+		"ping -n 30 127.0.0.1 >nul\r\n"+
 		"move /y \"%s\" \"%s\"\r\n"+
 		"if %%ERRORLEVEL%% NEQ 0 (\r\n"+
 		"  echo move failed, retrying with copy... >> \"%s.fail\"\r\n"+

@@ -55,7 +55,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(rec.Fingerprint), []byte(req.Fingerprint)) != 1 {
-		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("指纹不匹配 IP=%s", clientIP(r)), "warning")
+		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("指纹不匹配 IP=%s", clientIP(r)), "security")
 		jsonErr(w, http.StatusForbidden, "指纹不匹配")
 		return
 	}
@@ -71,6 +71,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	rec.Status.CertErrors = req.Status.CertErrors // v1.5.31 C1: 结构化存储证书部署错误, 供 WebUI 展示
 	rec.Status.CertPath = req.Status.CertPath     // v1.5.37: 持久化证书路径, 供 WebUI 获取 Agent CertPath
 	rec.Status.IISBoundSites = req.Status.IISBoundSites // v1.6.0: IIS 绑定快照
+	oldStatus := ""
+	if rec.Status.DDNSHealth != nil {
+		oldStatus = rec.Status.DDNSHealth.Status
+	}
 	if req.Status.DDNSHealth != nil {
 		rec.Status.DDNSHealth = req.Status.DDNSHealth
 	}
@@ -110,6 +114,23 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.Status, h.StatusMsg = "UNKNOWN", "unexpected state"
 	}
+	// v1.6.49: 健康状态变更日志 — 好变坏、坏变好都记录
+	if h.Status != oldStatus {
+		st := "info"
+		if h.Status == "ERR" || h.Status == "DOWN" {
+			st = "error"
+		} else if h.Status == "WARN" {
+			st = "warning"
+		} else if h.Status == "OK" {
+			st = "success"
+		}
+		from := oldStatus
+		if from == "" { from = "—" }
+		msg := h.StatusMsg
+		if msg == "" { msg = h.Status }
+		s.logMgr.LogWithNode("节点", "健康状态变更", "管理端",
+			fmt.Sprintf("%s 健康状态变更 %s → %s (%s)", nodeID, from, h.Status, msg), st)
+	}
 	if req.Hardware != nil {
 		rec.Hardware = req.Hardware
 	}
@@ -145,13 +166,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if i >= logLimit {
 			break
 		}
-		s.logMgr.LogWithNode("dns-update", "DNS日志", nodeID, logLine, "info")
+		s.logMgr.LogWithNode("dns-update", "DNS日志", nodeID, logLine, classifyLogStatus(logLine))
 	}
 	for i, logLine := range req.AgentLogs {
 		if i >= logLimit {
 			break
 		}
-		s.logMgr.LogWithNode("agent", "Agent操作", nodeID, logLine, "info")
+		s.logMgr.LogWithNode("agent", "Agent操作", nodeID, logLine, classifyLogStatus(logLine))
 	}
 	resp := model.HeartbeatResp{OK: true, Timestamp: s.nowInTZ().Format(time.RFC3339)}
 
@@ -323,11 +344,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s 所有文件加密失败", binding.BundleName), "warning")
 			continue
 		}
-		// v1.6.34: DeployPath 为空时 Manager 自动构造 {CertPath}/{BundleName}
+		// v1.6.34+v1.6.49: DeployPath 自动构造并消隐泛域名 * 号
 		// 每个证书独立子目录, 避免多证书覆盖; Agent 端二次校验在 agentBaseDir 内
 		targetPath := binding.DeployPath
 		if targetPath == "" && req.Status.CertPath != "" && binding.BundleName != "" {
-			targetPath = req.Status.CertPath + "/" + binding.BundleName
+			targetPath = req.Status.CertPath + "/" + model.SanitizeCertDirName(binding.BundleName)
+		} else if strings.Contains(targetPath, "*") {
+			targetPath = strings.ReplaceAll(targetPath, "*", "_")
 		}
 		resp.CertUpdates = append(resp.CertUpdates, &model.CertUpdate{
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
@@ -341,7 +364,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s (无PFX密码,Agent将用默认ddns) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
 		}
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
-			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], binding.DeployPath), "success")
+			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], targetPath), "success")
 	}
 	// persist all changes in a single write (LastSeen, Status, Hardware, ConfigHash)
 	s.store.PutNode(nodeID, rec)
@@ -405,6 +428,17 @@ func (s *Server) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 	s.logMgr.LogWithNode("节点", "已审批", id, "", "info")
 	jsonOK(w, map[string]string{"status": "approved"})
 }
+// classifyLogStatus 根据日志内容判定事件状态：含失败/错误关键词 → error，否则 info。
+func classifyLogStatus(line string) string {
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "失败") || strings.Contains(lower, "错误") ||
+		strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
+		strings.Contains(lower, "异常") {
+		return "error"
+	}
+	return "info"
+}
+
 func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 	// 限制请求体 1MB，防止大请求内存耗尽
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -420,11 +454,20 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 校验 DNS Key 存在性 — 防止保存不存在的 key 导致后续渲染失败
+	keys, _ := s.store.LoadDNSKeys()
 	if req.DNSKeyName != "" {
-		keys, _ := s.store.LoadDNSKeys()
 		if _, ok := keys[req.DNSKeyName]; !ok {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("DNS Key %q 不存在，请先在「DNS Key」页面创建", req.DNSKeyName))
 			return
+		}
+	}
+	// v1.6.49: 同样校验多卡片 dns_confs 中的每个 key
+	for _, ci := range req.DnsConfs {
+		if ci.DnsKey != "" {
+			if _, ok := keys[ci.DnsKey]; !ok {
+				jsonErr(w, http.StatusBadRequest, fmt.Sprintf("DNS卡片 %q 引用的 Key %q 不存在，请先在「DNS Key」页面创建", ci.Name, ci.DnsKey))
+				return
+			}
 		}
 	}
 	// v1.5.30 C1: 校验节点配置合法性（域名格式/TTL/URL/GetType 等）
@@ -440,17 +483,41 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// v1.6.36 C1: 必须在覆盖 ConfigYAML 之前提取旧 DNS key 名称
-	var oldDNSKeyName string
+	// v1.6.49: 同时从多卡片 dns_confs 提取旧 key 引用
+	var oldDNSKeyNames []string
 	if rec.ConfigYAML != "" {
 		var oldReq model.NodeConfigRequest
 		if json.Unmarshal([]byte(rec.ConfigYAML), &oldReq) == nil {
-			oldDNSKeyName = oldReq.DNSKeyName
-			if oldDNSKeyName == "" {
-				oldDNSKeyName = oldReq.DnsProvider // 兼容旧格式
+			if oldReq.DNSKeyName != "" {
+				oldDNSKeyNames = append(oldDNSKeyNames, oldReq.DNSKeyName)
+			}
+			if oldReq.DnsProvider != "" {
+				oldDNSKeyNames = append(oldDNSKeyNames, oldReq.DnsProvider)
+			}
+			for _, ci := range oldReq.DnsConfs {
+				if ci.DnsKey != "" {
+					oldDNSKeyNames = append(oldDNSKeyNames, ci.DnsKey)
+				}
 			}
 		}
 	}
 
+	// v1.6.49: deploy_path 自动填充并消隐泛域名 * 号
+	// 空路径 → 自动生成 {CertPath}/{sanitized_BundleName}
+	// 已有路径含 * → 替换为 _ (防止旧配置循环回带)
+	if rec.Status.CertPath != "" {
+		for i := range req.CertBindings {
+			if req.CertBindings[i].BundleName == "" {
+				continue
+			}
+			safeName := model.SanitizeCertDirName(req.CertBindings[i].BundleName)
+			if req.CertBindings[i].DeployPath == "" {
+				req.CertBindings[i].DeployPath = rec.Status.CertPath + "/" + safeName
+			} else if strings.Contains(req.CertBindings[i].DeployPath, "*") {
+				req.CertBindings[i].DeployPath = strings.ReplaceAll(req.CertBindings[i].DeployPath, "*", "_")
+			}
+		}
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "配置序列化失败")
@@ -487,30 +554,42 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		s.logMgr.LogWithNode("节点", "配置已保存(自动审批)", id, "", "info")
 	}
 	s.store.PutNode(id, rec)
-	s.logMgr.LogWithNode("config", "已保存", id, fmt.Sprintf("dnsKey=%s", req.DNSKeyName), "success")
+	// v1.6.49: 从多卡片 dns_confs 提取 DNS key 名称用于日志和引用追踪
+	var dnsKeyNames []string
+	seen := map[string]bool{}
+	for _, ci := range req.DnsConfs {
+		if ci.DnsKey != "" && !seen[ci.DnsKey] {
+			dnsKeyNames = append(dnsKeyNames, ci.DnsKey)
+			seen[ci.DnsKey] = true
+		}
+	}
+	dnsKeyLog := strings.Join(dnsKeyNames, ",")
+	if dnsKeyLog == "" {
+		dnsKeyLog = req.DNSKeyName // 兼容旧格式
+	}
+	s.logMgr.LogWithNode("config", "已保存", id, fmt.Sprintf("dnsKey=%s", dnsKeyLog), "success")
 
-	// v1.6.36 C3: 原子替换 DNS key 引用 — ReplaceNodeDNSKey 全程持写锁读-删-加-写,
-	// 消除 v1.6.35 中 RemoveNodeFromDNSKeys→TrackDNSKeyUsage 两步之间的 TOCTOU 竞态。
-	// 旧逻辑分两步调用: RemoveNodeFromDNSKeys(全量清除) + TrackDNSKeyUsage(单key添加),
-	// 若两步之间有并发 dns_keys 写操作, used_by_nodes 可能不一致。
+	// v1.6.36 C3: 原子替换 DNS key 引用 — 全程持写锁读-删-加-写
+	// v1.6.49: 追踪 dns_confs 中的所有 key（不再只看旧格式字段）
+	s.store.RemoveNodeFromDNSKeys(id)
+	for _, dn := range dnsKeyNames {
+		s.store.TrackDNSKeyUsage(dn, id)
+	}
+	// 兼容旧格式: 顶层 DNSKeyName + 域名级 key
 	newDNSKeyName := req.DNSKeyName
 	if newDNSKeyName == "" {
 		newDNSKeyName = req.DnsProvider
 	}
-
-	// v1.6.42: 多 DNS 绑定 — 全量重建 DNS Key 引用追踪
-	// 全局清除旧引用，再逐一添加所有引用过的 Key（顶层默认 + 域名级）
-	s.store.RemoveNodeFromDNSKeys(id)
-	if newDNSKeyName != "" {
+	if newDNSKeyName != "" && !seen[newDNSKeyName] {
 		s.store.TrackDNSKeyUsage(newDNSKeyName, id)
 	}
 	for _, d := range req.IPv4.Domains {
-		if d.DNSKeyName != "" && d.DNSKeyName != newDNSKeyName {
+		if d.DNSKeyName != "" && !seen[d.DNSKeyName] {
 			s.store.TrackDNSKeyUsage(d.DNSKeyName, id)
 		}
 	}
 	for _, d := range req.IPv6.Domains {
-		if d.DNSKeyName != "" && d.DNSKeyName != newDNSKeyName {
+		if d.DNSKeyName != "" && !seen[d.DNSKeyName] {
 			s.store.TrackDNSKeyUsage(d.DNSKeyName, id)
 		}
 	}
@@ -608,150 +687,141 @@ type ddnsGoConfig struct {
 
 // renderDDNSConfig 将 NodeConfigRequest JSON 转换为 ddns-go YAML 配置。
 // 返回 (yaml输出, sha256 hash, 错误)。DNS Key 缺失时返回明确错误供调用方处理。
+// v1.6.48: 支持新格式 dns_confs 数组，每段独立 DNS Key/IPv4/IPv6/TTL
 func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, hash string, err error) {
 	type nc struct {
-		DNSKeyName  string           `json:"dns_key_name"`
-		DnsProvider string           `json:"dns_provider"`
-		TTL         string           `json:"ttl"`
-		IPv4        model.IPv4Config `json:"ipv4"`
-		IPv6        model.IPv6Config `json:"ipv6"`
+		DNSKeyName  string             `json:"dns_key_name"`
+		DnsProvider string             `json:"dns_provider"`
+		TTL         string             `json:"ttl"`
+		IPv4        model.IPv4Config   `json:"ipv4"`
+		IPv6        model.IPv6Config   `json:"ipv6"`
+		DnsConfs    []model.DnsConfItem `json:"dns_confs"`
 	}
 	var c nc
 	if err := json.Unmarshal([]byte(jsonCfg), &c); err != nil {
 		return "", "", fmt.Errorf("JSON解析失败: %w", err)
 	}
 	keys, _ := s.LoadDNSKeys()
+
+	// helper: render one DnsConfItem to dnsConfItem (YAML struct)
+	renderOne := func(ci model.DnsConfItem) (*dnsConfItem, error) {
+		dk, ok := keys[ci.DnsKey]
+		if !ok {
+			return nil, fmt.Errorf("DNS密钥 %q 未找到", ci.DnsKey)
+		}
+		if dk.Provider == "" {
+			return nil, fmt.Errorf("DNS密钥 %q 的提供商字段为空", dk.Name)
+		}
+		ttl := ci.TTL
+		if ttl == "" {
+			ttl = "300"
+		}
+		// normalize getType
+		normGT := func(gt string) string {
+			gt = strings.ToLower(gt)
+			if gt == "netinterface" {
+				return "netInterface"
+			}
+			return gt
+		}
+		v4 := ci.IPv4
+		v4.GetType = normGT(v4.GetType)
+		v6 := ci.IPv6
+		v6.GetType = normGT(v6.GetType)
+		// defaults
+		if v4.Enable && v4.GetType == "" {
+			v4.GetType = "url"
+		}
+		if v4.Enable && v4.GetType == "url" && v4.URL == "" {
+			v4.URL = "http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org"
+		}
+		if v6.Enable && v6.GetType == "" {
+			v6.GetType = "url"
+		}
+		if v6.Enable && v6.GetType == "url" && v6.URL == "" {
+			v6.URL = "http://api6.ipify.org"
+		}
+		// domains: flatten DomainConfig → []string
+		v4Domains := make([]string, 0, len(v4.Domains))
+		for _, d := range v4.Domains {
+			if d.Domain != "" {
+				v4Domains = append(v4Domains, d.Domain)
+			}
+		}
+		v6Domains := make([]string, 0, len(v6.Domains))
+		for _, d := range v6.Domains {
+			if d.Domain != "" {
+				v6Domains = append(v6Domains, d.Domain)
+			}
+		}
+		// v1.6.49: 防呆 — 启用但无域名 → 视为未启用
+		if v4.Enable && len(v4Domains) == 0 { v4.Enable = false }
+		if v6.Enable && len(v6Domains) == 0 { v6.Enable = false }
+		return &dnsConfItem{
+			DNS: dnsAuth{Name: dk.Provider, ID: dk.AccessKeyID, Secret: dk.AccessKeySecret},
+			IPv4: ipConf{Enable: v4.Enable, GetType: v4.GetType, URL: v4.URL,
+				NetInterface: v4.NetInterface, Cmd: v4.Cmd, Domains: v4Domains},
+			IPv6: ipv6Conf{Enable: v6.Enable, GetType: v6.GetType, URL: v6.URL,
+				NetInterface: v6.NetInterface, Cmd: v6.Cmd, IPv6Reg: v6.IPv6Reg, Domains: v6Domains},
+			TTL: ttl,
+		}, nil
+	}
+
+	// v1.6.48: 优先新格式 dns_confs
+	if len(c.DnsConfs) > 0 {
+		var items []dnsConfItem
+		for _, ci := range c.DnsConfs {
+			item, err := renderOne(ci)
+			if err != nil {
+				return "", "", err
+			}
+			items = append(items, *item)
+		}
+		cfg := ddnsGoConfig{NotAllowWanAccess: true, DNSConf: items}
+		yamlBytes, _ := yaml.Marshal(&cfg)
+		yamlOut = "# ddns-go config generated by ddns-manager v2\n" + string(yamlBytes)
+		for i := range cfg.DNSConf {
+			cfg.DNSConf[i].DNS.Secret = ""
+		}
+		hash = "sha256:" + fmt.Sprintf("%x", sha256.Sum256([]byte(yamlOut)))
+		return
+	}
+
+	// ── 旧格式兼容 (ipv4/ipv6/dns_key_name 顶层字段) ──
 	var dk *model.DNSKeyRecord
 	if c.DNSKeyName != "" {
 		dk = keys[c.DNSKeyName]
 	} else if c.DnsProvider != "" {
-		// backward compat: find first key matching provider
 		for _, v := range keys {
-			if v.Provider == c.DnsProvider { dk = v; break }
+			if v.Provider == c.DnsProvider {
+				dk = v
+				break
+			}
 		}
 	}
 	if dk == nil {
-		return "", "", fmt.Errorf("DNS密钥未找到 (名称=%q 提供商=%q) — 请检查「DNS Key」页面是否已配置", c.DNSKeyName, c.DnsProvider)
+		return "", "", fmt.Errorf("DNS密钥未找到 (名称=%q 提供商=%q)", c.DNSKeyName, c.DnsProvider)
 	}
-	// v1.6.28 C2: 拒绝 Provider 为空的 DNS Key（旧数据迁移后 Provider 字段可能未填充）
-	// 空 Provider → ddns-go YAML 中 dns.name:"" → 所有 DNS 更新静默失败且 Agent 无法诊断
 	if dk.Provider == "" {
-		return "", "", fmt.Errorf("DNS密钥 %q 的提供商(Provider)字段为空 — 请编辑该 DNS Key 并指定提供商", dk.Name)
+		return "", "", fmt.Errorf("DNS密钥 %q 的提供商字段为空", dk.Name)
 	}
-
-	if c.TTL == "" {
-		c.TTL = "300"
+	// migrate old format to single-item dns_confs
+	migrated := model.DnsConfItem{
+		Name:   dk.Name,
+		DnsKey: dk.Name,
+		IPv4:   c.IPv4,
+		IPv6:   c.IPv6,
+		TTL:    c.TTL,
 	}
-
-	// v1.6.11 B2: normalize getType to ddns-go expected exact case
-	// ddns-go switch 用精确匹配: case "url" / case "netInterface" / case "cmd"
-	// 先转小写作归一化, 再对 "netinterface" 恢复 ddns-go 期望的 camelCase
-	normalizeGetType := func(gt string) string {
-		gt = strings.ToLower(gt)
-		if gt == "netinterface" { return "netInterface" }
-		return gt
-	}
-	c.IPv4.GetType = normalizeGetType(c.IPv4.GetType)
-	c.IPv6.GetType = normalizeGetType(c.IPv6.GetType)
-
-	// sensible defaults for IP detection service URLs
-	if c.IPv4.Enable {
-		if c.IPv4.GetType == "" {
-			c.IPv4.GetType = "url"
-		}
-		if c.IPv4.GetType == "url" && c.IPv4.URL == "" {
-			c.IPv4.URL = "http://ipv4.icanhazip.com,http://checkip.amazonaws.com,http://api.ipify.org"
-		}
-	}
-	if c.IPv6.Enable {
-		if c.IPv6.GetType == "" {
-			c.IPv6.GetType = "url"
-		}
-		if c.IPv6.GetType == "url" && c.IPv6.URL == "" {
-			c.IPv6.URL = "http://api6.ipify.org"
-		}
-	}
-
-	// v1.6.42: 多 DNS 提供商绑定 — 按域名各自的 DNS Key 分组，每组生成独立的 dnsConf
-	// domain→provider 映射：显式指定的用各自 Key，未指定的继承全局默认
-	providerMap := make(map[string]*dnsConfItem) // dk.Provider → *dnsConfItem
-
-	// helper: get or create dnsConfItem for a provider
-	getOrCreateItem := func(prov string, dk *model.DNSKeyRecord) *dnsConfItem {
-		if item, ok := providerMap[prov]; ok {
-			return item
-		}
-		item := &dnsConfItem{
-			DNS: dnsAuth{Name: dk.Provider, ID: dk.AccessKeyID, Secret: dk.AccessKeySecret},
-			IPv4: ipConf{Enable: c.IPv4.Enable, GetType: c.IPv4.GetType, URL: c.IPv4.URL,
-				NetInterface: c.IPv4.NetInterface, Cmd: c.IPv4.Cmd},
-			IPv6: ipv6Conf{Enable: c.IPv6.Enable, GetType: c.IPv6.GetType, URL: c.IPv6.URL,
-				NetInterface: c.IPv6.NetInterface, Cmd: c.IPv6.Cmd, IPv6Reg: c.IPv6.IPv6Reg},
-			TTL: c.TTL,
-		}
-		providerMap[prov] = item
-		return item
-	}
-
-	// resolve DNS key for a domain: explicit > global default
-	resolveDomainDK := func(d model.DomainConfig) *model.DNSKeyRecord {
-		if d.DNSKeyName != "" {
-			if k, ok := keys[d.DNSKeyName]; ok {
-				return k
-			}
-		}
-		return dk // fallback to global default
-	}
-
-	// group IPv4 domains by provider
-	for _, d := range c.IPv4.Domains {
-		if d.Domain == "" {
-			continue
-		}
-		domainDK := resolveDomainDK(d)
-		item := getOrCreateItem(domainDK.Provider, domainDK)
-		item.IPv4.Domains = append(item.IPv4.Domains, d.Domain)
-	}
-
-	// group IPv6 domains by provider
-	for _, d := range c.IPv6.Domains {
-		if d.Domain == "" {
-			continue
-		}
-		domainDK := resolveDomainDK(d)
-		item := getOrCreateItem(domainDK.Provider, domainDK)
-		item.IPv6.Domains = append(item.IPv6.Domains, d.Domain)
-	}
-
-	// 确保至少有一个默认 item（当所有域名为空时）
-	if len(providerMap) == 0 {
-		getOrCreateItem(dk.Provider, dk)
-	}
-
-	// build dnsConf array
-	var dnsConfs []dnsConfItem
-	for _, item := range providerMap {
-		dnsConfs = append(dnsConfs, *item)
-	}
-
-	cfg := ddnsGoConfig{
-		NotAllowWanAccess: true,
-		DNSConf:           dnsConfs,
-	}
-
-	yamlBytes, err := yaml.Marshal(&cfg)
+	item, err := renderOne(migrated)
 	if err != nil {
-		return "", "", fmt.Errorf("YAML序列化失败: %w", err)
+		return "", "", err
 	}
-	// v1.6.29 H3: YAML 包含明文 Secret (TLS 传输), 构建后立即清除内存中的密钥
-	// 防止后续代码误将 yamlOut 写入日志导致密钥泄露
+	cfg := ddnsGoConfig{NotAllowWanAccess: true, DNSConf: []dnsConfItem{*item}}
+	yamlBytes, _ := yaml.Marshal(&cfg)
 	yamlOut = "# ddns-go config generated by ddns-manager v2\n" + string(yamlBytes)
-	// 清除 cfg 中的 Secret, 仅在 yamlOut 字符串中保留 (YAML 由 TLS 保护)
-	for i := range cfg.DNSConf {
-		cfg.DNSConf[i].DNS.Secret = ""
-	}
-	h := sha256.Sum256([]byte(yamlOut))
-	hash = "sha256:" + fmt.Sprintf("%x", h[:])
+	cfg.DNSConf[0].DNS.Secret = ""
+	hash = "sha256:" + fmt.Sprintf("%x", sha256.Sum256([]byte(yamlOut)))
 	return
 }
 

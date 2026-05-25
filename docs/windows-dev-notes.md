@@ -9,7 +9,7 @@
 | 工具 | 问题 | 结论 |
 |------|------|------|
 | **批处理 (.bat)** | `chcp`/`timeout /t`/`setlocal` 在无控制台环境卡死；`reg add` 可能 Access Denied；孤儿进程累积 | ❌ 禁止 |
-| **PowerShell 脚本** | 版本兼容性极差 (5.1 vs 7.x)；模块 (`WebAdministration`) 非服务器版不存在；执行策略限制 | ⚠️ 仅限单行命令 + 优雅降级 |
+| **PowerShell 脚本** | 版本兼容性极差 (5.1 vs 7.x)；模块 (`WebAdministration`) 非服务器版不存在；执行策略限制；`Out-File`/`Add-Content` 破坏系统文件 ANSI 编码（hosts/cert 等）→ 文件格式损坏不可逆 | ⚠️ 仅限单行查询命令 + 优雅降级；**禁止写系统文件** |
 | **netsh 文本解析** | SYSTEM locale 输出中文标签 (`IP:端口`/`证书哈希`)，英文正则失效 | ❌ 禁止 |
 | **Go 原生 API** | 无兼容性问题 | ✅ 首选 |
 

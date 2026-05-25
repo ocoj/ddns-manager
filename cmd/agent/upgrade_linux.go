@@ -38,13 +38,6 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	defer src.Close()
 
 	dir := filepath.Dir(curExe)
-	// v1.6.29 H6: 解析符号链接到真实文件名, 避免删除 "node-agent" (symlink) 而非真实二进制
-	resolvedExe := curExe
-	if rp, err := filepath.EvalSymlinks(curExe); err == nil {
-		resolvedExe = rp
-	}
-	oldName := filepath.Base(resolvedExe) // e.g. "node-agent-v1.5.2-linux-amd64"
-
 	// 构建版本化文件名: node-agent-v{VERSION}-{os}-{arch}
 	// v1.6.10 L2: 增加时间戳兜底, 防止版本号提取失败时生成无效文件名
 	var versionedName string
@@ -105,15 +98,30 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 		return fmt.Errorf("替换符号链接失败: %w", err)
 	}
 
-	// 清理旧的版本化二进制（当前版本，非新版本）
-	// 只删与新版本名不同的旧版本化文件，避免误删
-	// v1.6.10 H3: 删除失败时记录日志, 防止旧二进制静默堆积
-	// v1.6.38: 加 "node-agent-v" 前缀检查 — 安装器写入的非版本化文件名 ("node-agent")
-	// 会被 os.Remove 误删, 导致符号链接丢失 → systemd 203/EXEC
-	if versionedName != oldName && strings.HasPrefix(oldName, "node-agent-v") {
-		oldVersionedPath := filepath.Join(dir, oldName)
-		if err := os.Remove(oldVersionedPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[upgrade] 删除旧版二进制失败: %s (%v)", oldName, err)
+	// v1.6.51: 清理所有旧版版本化二进制（非当前版本），防止历史版本堆积。
+	// 遍历目录中所有 node-agent-v* 文件，删除非当前版本的旧版。
+	entries, readErr := os.ReadDir(dir)
+	if readErr == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			// 防误删: 跳过目录、非版本化文件、当前版本
+			if entry.IsDir() {
+				continue
+			}
+			if name == versionedName || !strings.HasPrefix(name, "node-agent-v") {
+				continue
+			}
+			if strings.HasSuffix(name, ".sha256") ||
+				strings.HasSuffix(name, ".tmp") ||
+				strings.HasSuffix(name, ".linktmp") {
+				continue
+			}
+			oldPath := filepath.Join(dir, name)
+			if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("[upgrade] 删除旧版二进制失败: %s (%v)", name, err)
+			} else if err == nil {
+				log.Printf("[upgrade] 已清理旧版: %s", name)
+			}
 		}
 	}
 

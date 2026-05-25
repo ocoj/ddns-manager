@@ -87,6 +87,32 @@ func replaceRunningBinary(curExe, newExe, version string) error {
 	}
 	upgradeLogger("upgrade_helper.exe 已就绪: %s", helperPath)
 
+	// v1.6.51: 清理所有旧版版本化二进制（非当前版本），防止历史版本堆积。
+	// 遍历目录中所有 node-agent-v*.exe 删除非当前版本的旧版。
+	entries, readErr := os.ReadDir(dir)
+	versionedBase := filepath.Base(versionedPath)
+	if readErr == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			// 防误删: 跳过目录、非版本化文件、当前版本
+			if entry.IsDir() {
+				continue
+			}
+			if name == versionedBase {
+				continue
+			}
+			if !strings.HasPrefix(name, "node-agent-v") || !strings.HasSuffix(name, ".exe") {
+				continue
+			}
+			oldPath := filepath.Join(dir, name)
+			if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+				upgradeLogger("删除旧版二进制失败: %s (%v)", name, err)
+			} else if err == nil {
+				upgradeLogger("已清理旧版: %s", name)
+			}
+		}
+	}
+
 	// Phase 4: 启动升级助手 (DETACHED_PROCESS, 不继承控制台)
 	upgradeLogger("启动升级助手: %s %d %s %s", helperPath, pid, newBinaryPath, curExe)
 	cmd := exec.Command(helperPath, strconv.Itoa(pid), newBinaryPath, curExe)

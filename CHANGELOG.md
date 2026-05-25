@@ -1,3 +1,36 @@
+## v1.6.52 — 2026-05-25
+
+### 🔒 安全修复 (1)
+
+- **C1 TLS 证书验证默认关闭**: `AgentConfig.VerifySSL` 为零值 `false` → `loadConfig` 增加检测：YAML 未显式设置 `verify_ssl` 时默认 `true`，所有 Agent 连接 `manager.example.com:30443` 强制验证 TLS 证书（`cmd/agent/main.go`）
+
+### 📋 涉及文件
+`cmd/agent/main.go`, `VERSION` — 共 2 文件
+
+---
+
+## v1.6.51 — 2026-05-24
+
+### 🔍 审计修复 (4项) — 日志搜索修补 + 旧版自动清理
+
+DeepSeek V4-Pro 主审 + Kimi K2.6 交叉验证。审计报告: `docs/audits/2026-05-24-v1.6.51.md`
+
+- **C1 日志搜索磁盘 fallback**: `QueryByTime()`/`CountByTime()` 仅查内存环形缓冲区 (10000条) → 增加磁盘文件扫描 fallback, 搜索历史日志完整返回
+- **C2 KnownCategories 同步**: 3 个高频分类 `dns-update`/`agent`/`heartbeat` 不在硬编码列表中 → 同步实际使用分类 (前7类全部纳入)
+- **H1 Linux 旧版自动清理**: `replaceRunningBinary` 升级后只删当前旧版 → 遍历目录删除所有 `node-agent-v*` 非当前版本, 防二进制无限堆积
+- **H1b Windows 同步清理**: 同上, 仅清理 `node-agent-v*.exe` (不含 upgrade_helper)
+
+### 🧹 运维清理
+
+- **Manager (.30)**: 删除 32 个旧 Manager 二进制 (v1.6.10~v1.6.49) → ~300MB 回收
+- **Manager data/bin/**: 60→18 文件, 清理旧 installer/agent/helper/非标准文件
+- **Agent A (.38)**: 8 个旧版 node-agent 清理 + 废弃 `/opt/ddns-manager/` 测试目录删除 → ~120MB 回收
+- **build/**: 5.0GB→184MB (1157→44 文件)
+
+📁 `internal/logger/logger.go`, `cmd/agent/upgrade_linux.go`, `cmd/agent/upgrade_windows.go`, `VERSION`, `README.md` — 共 5 文件
+
+---
+
 ## v1.6.50 — 2026-05-23
 
 ### 🔒 全量审计修复 (6项)

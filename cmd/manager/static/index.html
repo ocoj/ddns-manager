@@ -142,6 +142,9 @@ td{padding:10px 12px;border-bottom:1px solid var(--c-border);overflow:hidden;tex
 tr:hover td{background:var(--c-bg)}
 th{text-align:left}
 .desk-only{display:block}.mob-only{display:none}
+.log-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:12px;padding:8px 0;border-top:1px solid var(--c-border);font-size:13px;color:var(--c-text2)}
+.log-page-info{white-space:nowrap}
+.log-page-btns{display:flex;gap:6px}
 .col-act{text-align:left;white-space:nowrap;width:188px;overflow:visible}
 /* 徽章列 — 居中窄列 */
 .col-badge{text-align:center;width:70px}
@@ -359,6 +362,11 @@ body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#
   .col-log-content{font-size:12px;white-space:normal!important;word-break:break-all;flex-basis:100%!important;order:1}
   /* 卡片内间距 */
   .log-table tr{padding:8px 0!important;border-bottom:1px solid var(--c-border)}
+  /* 分页栏移动端 */
+  .log-pagination{flex-direction:column;align-items:stretch;gap:6px}
+  .log-page-info{text-align:center;font-size:12px}
+  .log-page-btns{justify-content:center;gap:8px}
+  .log-page-btns .btn{flex:1;min-height:40px;font-size:14px}
   /* iOS安全区底距 */
   #content{padding-bottom:calc(20px + env(safe-area-inset-bottom, 0px))}
   #page-logs td{max-width:none!important;overflow:visible!important;text-overflow:clip!important}
@@ -2938,10 +2946,12 @@ async function loadLogsIncremental() {
 
 
 // 全量加载 (切页/手动搜索时使用)
-async function loadLogs(silent, filter) {
+async function loadLogs(silent, filter, page) {
+  if (!page) page = 1;
   if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载中...</div>';
   try {
-    var url = '/api/admin/logs?limit=500';
+    var P = 500;
+    var url = '/api/admin/logs?limit=' + P + '&offset=' + ((page-1)*P);
     if (filter) {
       if (filter.node) url += '&node=' + encodeURIComponent(filter.node);
       if (filter.category) url += '&category=' + encodeURIComponent(filter.category);
@@ -2962,10 +2972,10 @@ async function loadLogs(silent, filter) {
       });
     }
     window._logNodeNames = nodeNames;
-    renderLogs(r.data, filter);
+    renderLogs(r.data, filter, page);
   } catch(e) { if (!silent) document.getElementById('page-logs').innerHTML = '<div class="empty">加载失败</div>'; }
 }
-function renderLogs(data, filter) {
+function renderLogs(data, filter, page) {
   var events = normalizeEvents((data && data.events) || []);
   var categories = (data && data.categories) || [];
   var nodeNames = window._logNodeNames || [];
@@ -3008,9 +3018,19 @@ function renderLogs(data, filter) {
       h += '<td class="col-log-content">' + he(l.action + ' ' + l.detail) + '</td></tr>';
     });
   }
-  h += '</tbody></table></div></div>';
+  h += '</tbody></table></div>';
+  var total = data.total || events.length;
+  var P = 500;
+  var totalPages = Math.max(1, Math.ceil(total / P));
+  h += '<div class="log-pagination"><span class="log-page-info">共 ' + total + ' 条 &nbsp;|&nbsp; 第 ' + page + '/<b>' + totalPages + '</b> 页</span>';
+  if (totalPages > 1) {
+    h += '<div class="log-page-btns"><button class="btn btn-sm"' + (page <= 1 ? ' disabled' : ' onclick="goLogPage(' + (page-1) + ')"') + '>← 上一页</button><button class="btn btn-sm"' + (page >= totalPages ? ' disabled' : ' onclick="goLogPage(' + (page+1) + ')"') + '>下一页 →</button></div>';
+  }
+  h += '</div></div>';
   document.getElementById('page-logs').innerHTML = h;
+  document.getElementById('page-logs').scrollIntoView({behavior: 'smooth'});
 }
+function goLogPage(p) { loadLogs(false, window._logFilter, p); }
 function getLogFilter() {
   return {
     node: document.getElementById('log-filter-node') ? document.getElementById('log-filter-node').value : '',
@@ -3020,8 +3040,8 @@ function getLogFilter() {
     to: document.getElementById('log-filter-to') ? document.getElementById('log-filter-to').value : ''
   };
 }
-function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f); }
-function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; var st = document.getElementById('log-filter-status'); if (st) st.value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false); }
+function applyLogFilter() { var f = getLogFilter(); window._logFilter = f; loadLogs(false, f, 1); }
+function resetLogFilter() { window._logFilter = null; document.getElementById('log-filter-node').value=''; document.getElementById('log-filter-cat').value=''; var st = document.getElementById('log-filter-status'); if (st) st.value=''; document.getElementById('log-filter-from').value=''; document.getElementById('log-filter-to').value=''; loadLogs(false, null, 1); }
 function toggleLogFilter() { var b = document.querySelector('.log-filter-bar'); if (b) { b.classList.toggle('open'); var t = document.querySelector('.log-filter-toggle'); if (t) t.textContent = b.classList.contains('open') ? '筛选 ▴' : '筛选 ▾'; } }
 async function cleanupLogs() {
   confirmAction('清理日志', '确定清理旧日志？', function() {

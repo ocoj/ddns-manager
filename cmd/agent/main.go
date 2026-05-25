@@ -344,6 +344,14 @@ func loadConfig(path string) (*model.AgentConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	// v1.6.50: 默认启用 TLS 证书验证（所有 Agent 通过外网域名访问 Manager，
+	// 使用 ACME 公网证书，无需跳过验证。用户显式设置 false 才关闭）
+	var raw map[string]interface{}
+	if yaml.Unmarshal(data, &raw) == nil {
+		if _, exists := raw["verify_ssl"]; !exists {
+			cfg.VerifySSL = true
+		}
+	}
 	// v1.5.37: 确保 CertPath 有默认值, 否则心跳不携带此字段 → Manager 无法获取
 	// → 证书绑定 deploy_path 无法从 Agent 获取 → WebUI 配置困难
 	if cfg.CertPath == "" {

@@ -551,6 +551,69 @@ func (m *Manager) CountFiltered(category, status string) int {
 	return n
 }
 
+// queryDiskLogs scans log files (events.log + rotated events-*.log) for events
+// matching the given filters and time range. Used as a fallback when the ring
+// buffer does not cover the queried time range.
+func (m *Manager) queryDiskLogs(category, status, node string, from, to time.Time) []Event {
+	dir := filepath.Dir(m.logPath)
+	var files []string
+
+	entries, _ := os.ReadDir(dir)
+	foundCurrent := false
+	for _, e := range entries {
+		name := e.Name()
+		if name == filepath.Base(m.logPath) {
+			files = append(files, m.logPath)
+			foundCurrent = true
+		} else if strings.HasPrefix(name, "events-") && strings.HasSuffix(name, ".log") {
+			files = append(files, filepath.Join(dir, name))
+		}
+	}
+	if !foundCurrent {
+		files = append(files, m.logPath)
+	}
+
+	var results []Event
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			var e Event
+			if json.Unmarshal(scanner.Bytes(), &e) != nil {
+				continue
+			}
+			if !from.IsZero() && e.Time.Before(from) {
+				continue
+			}
+			if !to.IsZero() && e.Time.After(to) {
+				continue
+			}
+			if category != "" && e.Category != category {
+				continue
+			}
+			if status != "" && e.Status != status {
+				continue
+			}
+			if node != "" && e.Node != node {
+				continue
+			}
+			results = append(results, e)
+		}
+		f.Close()
+	}
+
+	if len(results) > 1 {
+		for i, j := 0, len(results)-1; i < j; i, j = i+1, j-1 {
+			results[i], results[j] = results[j], results[i]
+		}
+	}
+	return results
+}
+
 // QueryByTime returns events matching filters AND within a time range.
 // from/to can be zero-time (time.Time{}) meaning "no bound".
 // node="" means no node filter.
@@ -562,47 +625,72 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 		limit = 5000
 	}
 
-	m.mu.Lock()
-	total := m.writeIdx
-	if total > m.maxSize {
-		total = m.maxSize
-	}
-	start := m.writeIdx - total
-	if start < 0 {
-		start = 0
-	}
-	snapshot := make([]Event, 0, total)
-	for i := start; i < m.writeIdx; i++ {
-		e := m.events[i%m.maxSize]
-		if !e.Time.IsZero() {
-			snapshot = append(snapshot, e)
+	// v1.6.51: if query range starts before ring buffer oldest event,
+	// fall through to disk scan for complete results.
+	needDisk := false
+	if !from.IsZero() {
+		m.mu.Lock()
+		if m.writeIdx > 0 {
+			total := m.writeIdx
+			if total > m.maxSize {
+				total = m.maxSize
+			}
+			oldestIdx := m.writeIdx - total
+			if oldestIdx >= 0 {
+				oldest := m.events[oldestIdx%m.maxSize].Time
+				if from.Before(oldest) {
+					needDisk = true
+				}
+			}
 		}
+		m.mu.Unlock()
 	}
-	m.mu.Unlock()
 
 	var filtered []Event
-	for _, e := range snapshot {
-		if category != "" && e.Category != category {
-			continue
+	if needDisk {
+		filtered = m.queryDiskLogs(category, status, node, from, to)
+	} else {
+		m.mu.Lock()
+		total := m.writeIdx
+		if total > m.maxSize {
+			total = m.maxSize
 		}
-		if status != "" && e.Status != status {
-			continue
+		start := m.writeIdx - total
+		if start < 0 {
+			start = 0
 		}
-		if node != "" && e.Node != node {
-			continue
+		snapshot := make([]Event, 0, total)
+		for i := start; i < m.writeIdx; i++ {
+			e := m.events[i%m.maxSize]
+			if !e.Time.IsZero() {
+				snapshot = append(snapshot, e)
+			}
 		}
-		if !from.IsZero() && e.Time.Before(from) {
-			continue
-		}
-		if !to.IsZero() && e.Time.After(to) {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
+		m.mu.Unlock()
 
-	if len(filtered) > 1 {
-		for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
-			filtered[i], filtered[j] = filtered[j], filtered[i]
+		for _, e := range snapshot {
+			if category != "" && e.Category != category {
+				continue
+			}
+			if status != "" && e.Status != status {
+				continue
+			}
+			if node != "" && e.Node != node {
+				continue
+			}
+			if !from.IsZero() && e.Time.Before(from) {
+				continue
+			}
+			if !to.IsZero() && e.Time.After(to) {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+
+		if len(filtered) > 1 {
+			for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
+				filtered[i], filtered[j] = filtered[j], filtered[i]
+			}
 		}
 	}
 
@@ -619,6 +707,29 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 // CountByTime returns the total number of events matching the given filters (before offset/limit).
 // Used by handleGetLogs to return accurate pagination totals.
 func (m *Manager) CountByTime(category, status, node string, from, to time.Time) int {
+	// v1.6.51: if query range starts before ring buffer, scan disk for accurate count.
+	needDisk := false
+	if !from.IsZero() {
+		m.mu.Lock()
+		if m.writeIdx > 0 {
+			total := m.writeIdx
+			if total > m.maxSize {
+				total = m.maxSize
+			}
+			oldestIdx := m.writeIdx - total
+			if oldestIdx >= 0 {
+				oldest := m.events[oldestIdx%m.maxSize].Time
+				if from.Before(oldest) {
+					needDisk = true
+				}
+			}
+		}
+		m.mu.Unlock()
+	}
+	if needDisk {
+		return len(m.queryDiskLogs(category, status, node, from, to))
+	}
+
 	m.mu.Lock()
 	total := m.writeIdx
 	if total > m.maxSize {
@@ -666,8 +777,9 @@ func (m *Manager) CountByTime(category, status, node string, from, to time.Time)
 // even when some are not currently in the ring buffer.
 func (m *Manager) KnownCategories() []string {
 	return []string{
-		"auth", "system", "dns-key", "upgrade", "smtp", "api-key-verify",
-		"节点", "通知", "DDNS-Update", "报告",
+		"dns-update", "agent", "heartbeat", "auth", "upgrade",
+		"health", "config", "management", "cert", "dns-key",
+		"smtp", "system", "节点",
 	}
 }
 

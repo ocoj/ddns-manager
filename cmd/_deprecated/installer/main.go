@@ -25,7 +25,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 	"gopkg.in/yaml.v3"
 )
 

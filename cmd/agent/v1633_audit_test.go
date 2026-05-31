@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/provider"
 )
 
 // TestSegErrorsMultipleSegments v1.6.33 P2: 验证多段 DNS 配置时 segErrors 索引完整性。

@@ -22,10 +22,10 @@ if %errorlevel% neq 0 (
 )
 
 REM ── 定位安装器 (同目录) ──
-set "INSTALLER=%~dp0ddns-installer.exe"
+set "INSTALLER=%~dp0ddns-installer-windows-amd64.exe"
 if not exist "%INSTALLER%" (
-    echo [错误] 未找到 ddns-installer.exe
-    echo        请确保 install.bat 和 ddns-installer.exe 在同一目录
+    echo [错误] 未找到 ddns-installer-windows-amd64.exe
+    echo        请确保 install.bat 和 ddns-installer-windows-amd64.exe 在同一目录
     echo        当前目录: %~dp0
     echo.
     pause

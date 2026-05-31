@@ -25,6 +25,7 @@ check "Bin download"        "$BASE/bin/node-agent-linux-amd64" "200"
 check "Nodes (unauth)"      "$BASE/api/admin/nodes"       "401"
 
 # Check that default password is blocked
+# WARNING: 默认密码 Admin12345 仅用于测试环境，生产环境必须修改！
 TOKEN=$(echo -n "admin:Admin12345" | sha256sum | awk '{print $1}')
 code=$(curl -sk -o /dev/null -w "%{http_code}" "$BASE/api/admin/nodes" -H "Authorization: Bearer $TOKEN")
 if [ "$code" = "403" ]; then

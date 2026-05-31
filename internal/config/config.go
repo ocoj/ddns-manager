@@ -22,6 +22,7 @@ type ServerConfig struct {
 	TLSCert      string `yaml:"tls_cert"`
 	TLSKey       string `yaml:"tls_key"`
 	RedirectPort string `yaml:"redirect_port"` // HTTP→HTTPS redirect port
+	TrustedProxy string `yaml:"trusted_proxy"` // v1.6.56: 受信反向代理 IP，设置后信任其 IP 头
 }
 
 type CertConfig struct {

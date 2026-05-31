@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/provider"
 )
 
 type DDNSHealthInfo struct {

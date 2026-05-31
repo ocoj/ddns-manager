@@ -1,8 +1,10 @@
 package server
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -17,15 +19,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/store"
-	"github.com/kk/ddns-manager/internal/logger"
-	"github.com/kk/ddns-manager/internal/notify"
-	"github.com/kk/ddns-manager/internal/provider"
-	"golang.org/x/crypto/bcrypt"
 	"unicode/utf8"
+
+	"github.com/gorilla/mux"
+	"github.com/ocoj/ddns-manager/internal/logger"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/notify"
+	"github.com/ocoj/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/store"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// v1.6.58: 节点名字符白名单 — 仅允许字母、数字、连字符和下划线
+var validNodeIDRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	// v1.6.36 M6: 未设置 Agent 版本时返回 "-" 占位, 避免前端显示空字符串
@@ -42,7 +48,9 @@ func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Password string `json:"password"` }
+	var req struct {
+		Password string `json:"password"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
@@ -62,7 +70,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(token), []byte(s.getAdminToken())) != 1 {
 		if err := bcrypt.CompareHashAndPassword([]byte(st.TokenHash), []byte(token)); err != nil {
 			s.logMgr.LogAuth("登录失败", "admin", clientIP(r), "密码错误", "error")
-			s.tryNotify("security", "管理员登录失败", fmt.Sprintf("ip=%s", clientIP(r)))
+			s.tryNotify("security", "管理员登录失败", fmt.Sprintf("ip=%s", clientIP(r)), "")
 			jsonErr(w, http.StatusUnauthorized, "密码错误")
 			return
 		}
@@ -71,7 +79,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.logMgr.LogAuth("管理员登录", "admin", clientIP(r), "", "success")
 	jsonOK(w, map[string]interface{}{"token": token, "password_changed": st.PasswordChanged})
 }
-
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -85,6 +92,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.NodeID == "" || req.Fingerprint == "" {
 		jsonErr(w, http.StatusBadRequest, "node_id 和 fingerprint 为必填项")
+		return
+	}
+	// v1.6.58: 限制节点名字符白名单，防止日志注入和 WebUI 显示异常
+	if !validNodeIDRegexp.MatchString(req.NodeID) {
+		jsonErr(w, http.StatusBadRequest, "节点名仅允许字母、数字、连字符和下划线 (1-64字符)")
 		return
 	}
 	nodes, _ := s.store.LoadNodes()
@@ -124,7 +136,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 // ── heartbeat ──
 
-
 func (s *Server) handleListDNSKeys(w http.ResponseWriter, r *http.Request) {
 	keys, _ := s.store.LoadDNSKeys()
 	jsonOK(w, keys)
@@ -140,7 +151,9 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
 	}
-	if req.Name == "" { req.Name = req.Provider } // backward compat
+	if req.Name == "" {
+		req.Name = req.Provider
+	} // backward compat
 	if req.Name == "" || req.Provider == "" {
 		jsonErr(w, http.StatusBadRequest, "名称和提供商为必填项")
 		return
@@ -157,9 +170,15 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 	now := s.nowInTZ().Format(time.RFC3339)
 	keyName := req.Name
 	if existing, ok := keys[keyName]; ok {
-		if req.Provider != "" { existing.Provider = req.Provider }
-		if req.AccessKeyID != "" { existing.AccessKeyID = req.AccessKeyID }
-		if req.AccessKeySecret != "" { existing.AccessKeySecret = req.AccessKeySecret }
+		if req.Provider != "" {
+			existing.Provider = req.Provider
+		}
+		if req.AccessKeyID != "" {
+			existing.AccessKeyID = req.AccessKeyID
+		}
+		if req.AccessKeySecret != "" {
+			existing.AccessKeySecret = req.AccessKeySecret
+		}
 		existing.UpdatedAt = now
 	} else {
 		keys[keyName] = &model.DNSKeyRecord{
@@ -280,7 +299,9 @@ func (s *Server) handleLogsCleanup(w http.ResponseWriter, r *http.Request) {
 // ── admin: change password ──
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	var req struct{ NewPassword string `json:"new_password"` }
+	var req struct {
+		NewPassword string `json:"new_password"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
@@ -314,7 +335,6 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // ── admin: agent version ──
 
-
 // handleGetUpgradeState returns the server-side upgrade state for all nodes.
 // Replaces localStorage-based per-browser tracking for cross-device consistency.
 func (s *Server) handleGetUpgradeState(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +355,9 @@ func (s *Server) handleGetAgentVersion(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"latest_version": v})
 }
 func (s *Server) handleSetAgentVersion(w http.ResponseWriter, r *http.Request) {
-	var req struct{ LatestVersion string `json:"latest_version"` }
+	var req struct {
+		LatestVersion string `json:"latest_version"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
 		return
@@ -387,6 +409,7 @@ func (s *Server) handleListAgentBinaries(w http.ResponseWriter, r *http.Request)
 	}
 	jsonOK(w, list)
 }
+
 // v1.5.29: 上传后自动提取版本号 + 设置 Agent 版本 + Manager 自重启
 var reVersionedBinary = regexp.MustCompile(`-v(\d+\.\d+\.\d+)-`)
 
@@ -418,12 +441,12 @@ func (s *Server) handleUploadAgentBinary(w http.ResponseWriter, r *http.Request)
 			s.store.SaveAgentBinary(h.Filename, data)
 			s.logMgr.Log("agent", "已上传", fmt.Sprintf("%s (%d bytes)", h.Filename, len(data)), "success")
 
-		// v1.6.42 M6: 取所有上传文件中版本号最高者 (CompareSemVer), 避免只取首个文件版本
-		if m := reVersionedBinary.FindStringSubmatch(h.Filename); m != nil {
-			if detectedVer == "" || model.CompareSemVer(m[1], detectedVer) > 0 {
-				detectedVer = m[1]
+			// v1.6.42 M6: 取所有上传文件中版本号最高者 (CompareSemVer), 避免只取首个文件版本
+			if m := reVersionedBinary.FindStringSubmatch(h.Filename); m != nil {
+				if detectedVer == "" || model.CompareSemVer(m[1], detectedVer) > 0 {
+					detectedVer = m[1]
+				}
 			}
-		}
 			// 检测是否为 Manager 二进制
 			if strings.HasPrefix(h.Filename, "ddns-manager-v") {
 				hasManagerBinary = true
@@ -577,14 +600,23 @@ func (s *Server) scheduleManagerRestart(newVer string) {
 
 func (s *Server) handleGetRateLimit(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.store.LoadRateLimitConfig()
-	if err != nil { jsonErr(w, 500, err.Error()); return }
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
 	jsonOK(w, cfg)
 }
 
 func (s *Server) handleSaveRateLimit(w http.ResponseWriter, r *http.Request) {
 	var cfg store.RateLimitConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil { jsonErr(w, 400, "请求体格式错误"); return }
-	if err := s.store.SaveRateLimitConfig(&cfg); err != nil { jsonErr(w, 500, err.Error()); return }
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		jsonErr(w, 400, "请求体格式错误")
+		return
+	}
+	if err := s.store.SaveRateLimitConfig(&cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
 	s.reloadRateLimit(&cfg)
 	s.logMgr.Log("rate-limit", "配置已保存",
 		fmt.Sprintf("全局=%d 心跳=%d 登录=%d 启用=%v", cfg.RequestsPerMin, cfg.HeartbeatPerMin, cfg.LoginPerMin, cfg.Enabled), "success")
@@ -603,29 +635,33 @@ func (s *Server) handleGetSMTP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{
 		"host": masked.Host, "port": masked.Port, "username": masked.Username,
 		"password": masked.Password, "to": masked.To, "manager_url": masked.ManagerURL,
-		"cert_expiry_days":        masked.CertExpiryDays,
-		"notify_heartbeat_fail":   masked.NotifyHeartbeatFail,
-		"notify_security":          masked.NotifySecurity,
-		"notify_config_change":    masked.NotifyConfigChange,
-		"notify_system_error":     masked.NotifySystemError,
-		"notify_cert_expiry":      masked.NotifyCertExpiry,
-		"configured":              true,
+		"cert_expiry_days":      masked.CertExpiryDays,
+		"notify_heartbeat_fail": masked.NotifyHeartbeatFail,
+		"notify_security":       masked.NotifySecurity,
+		"notify_config_change":  masked.NotifyConfigChange,
+		"notify_system_error":   masked.NotifySystemError,
+		"notify_cert_expiry":    masked.NotifyCertExpiry,
+		"configured":            true,
 	})
 }
 func (s *Server) handleSaveSMTP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Host               string `json:"host"`
-		Port               int    `json:"port"`
-		Username           string `json:"username"`
-		Password           string `json:"password"`
-		To                 string `json:"to"`
-		ManagerURL         string `json:"manager_url"`
-		CertExpiryDays     int    `json:"cert_expiry_days"`
-		NotifyHeartbeatFail bool  `json:"notify_heartbeat_fail"`
-		NotifySecurity     bool   `json:"notify_security"`
-		NotifyConfigChange bool   `json:"notify_config_change"`
-		NotifySystemError  bool   `json:"notify_system_error"`
-		NotifyCertExpiry   bool   `json:"notify_cert_expiry"`
+		Host                string `json:"host"`
+		Port                int    `json:"port"`
+		Username            string `json:"username"`
+		Password            string `json:"password"`
+		To                  string `json:"to"`
+		ManagerURL          string `json:"manager_url"`
+		CertExpiryDays      int    `json:"cert_expiry_days"`
+		NotifyHeartbeatFail bool   `json:"notify_heartbeat_fail"`
+		NotifySecurity      bool   `json:"notify_security"`
+		NotifyConfigChange  bool   `json:"notify_config_change"`
+		NotifySystemError   bool   `json:"notify_system_error"`
+		NotifyCertExpiry    bool   `json:"notify_cert_expiry"`
+		// v1.6.53: cooldown configurable
+		HeartbeatFailCooldown int `json:"heartbeat_fail_cooldown"`
+		AuthFailCooldown      int `json:"auth_fail_cooldown"`
+		UnknownNodeCooldown   int `json:"unknown_node_cooldown"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "请求体格式错误")
@@ -644,6 +680,9 @@ func (s *Server) handleSaveSMTP(w http.ResponseWriter, r *http.Request) {
 		ManagerURL: req.ManagerURL, CertExpiryDays: req.CertExpiryDays, NotifyHeartbeatFail: req.NotifyHeartbeatFail,
 		NotifySecurity: req.NotifySecurity, NotifyConfigChange: req.NotifyConfigChange,
 		NotifySystemError: req.NotifySystemError, NotifyCertExpiry: req.NotifyCertExpiry,
+		HeartbeatFailCooldown: req.HeartbeatFailCooldown,
+		AuthFailCooldown:      req.AuthFailCooldown,
+		UnknownNodeCooldown:   req.UnknownNodeCooldown,
 	}
 	// 注入时区 — 邮件中的时间戳据此显示
 	if tzCfg, _ := s.store.LoadTimezoneConfig(); tzCfg != nil {
@@ -707,26 +746,33 @@ func (s *Server) handleBinFile(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		// 从请求中推断外部地址 (NPM 代理传递 X-Forwarded-* 头)
+		// v1.6.56: 仅受信代理传来的 X-Forwarded-* 头才信任，否则只用 Host
 		scheme := "https"
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-			scheme = proto // 信任代理头 (NPM 设置 https)
+		host := r.Host
+		trustProxy := false
+		if tp := s.GetTrustedProxy(); tp != "" {
+			if rhost := remoteHost(r); rhost != "" && isTrustedProxyHost(rhost, tp) {
+				trustProxy = true
+			}
+		}
+		if trustProxy {
+			if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+				scheme = proto
+			}
+			if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
+				host = fwdHost
+			}
 		} else if r.TLS == nil && !strings.Contains(r.Host, ":30443") {
 			scheme = "http"
 		}
-		host := r.Host
-		// NPM 代理时优先用 X-Forwarded-Host (外部域名), 否则退到 Host (可能被 NPM 重写为 localhost)
-		if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
-			host = fwdHost
-		}
 		managerURL := scheme + "://" + host
-		// 非标准端口: Host头不含端口时从 X-Forwarded-Port 补充
-		if !strings.Contains(host, ":") {
+		if !strings.Contains(host, ":") && trustProxy {
 			if port := r.Header.Get("X-Forwarded-Port"); port != "" && port != "80" && port != "443" {
 				managerURL += ":" + port
 			}
 		}
 		content = bytes.ReplaceAll(content, []byte("__MANAGER_URL__"), []byte(managerURL))
+		content = bytes.ReplaceAll(content, []byte("__INSTALLER_VERSION__"), []byte("v"+s.installerVersion))
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(content)
 		return
@@ -937,7 +983,6 @@ const readmeTemplate = `============================================
     C:\ddns-agent\ddns-installer.exe -uninstall
 `
 
-
 // ── Timezone ──
 
 func (s *Server) handleGetTimezone(w http.ResponseWriter, r *http.Request) {
@@ -950,7 +995,9 @@ func (s *Server) handleGetTimezone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Timezone string `json:"timezone"` }
+	var req struct {
+		Timezone string `json:"timezone"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, 400, "格式错误")
 		return
@@ -979,6 +1026,35 @@ func (s *Server) handleSaveTimezone(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "saved", "timezone": req.Timezone})
 }
 
+// ── Trusted Proxy (v1.6.58) ──
+
+func (s *Server) handleGetTrustedProxy(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"trusted_proxy": s.GetTrustedProxy()})
+}
+
+func (s *Server) handleSaveTrustedProxy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TrustedProxy string `json:"trusted_proxy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, 400, "格式错误")
+		return
+	}
+	// 允许空值以禁用
+	cfg := &store.ProxyConfig{TrustedProxy: req.TrustedProxy}
+	if err := s.store.SaveProxyConfig(cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.SetTrustedProxy(req.TrustedProxy)
+	if req.TrustedProxy != "" {
+		s.logMgr.Log("system", "受信代理已设置", req.TrustedProxy, "success")
+	} else {
+		s.logMgr.Log("system", "受信代理已禁用", "将使用 RemoteAddr", "info")
+	}
+	jsonOK(w, map[string]string{"status": "saved"})
+}
+
 // isMaskedPassword checks if a string looks like a masked password.
 // Detects both fully masked (****) and partially masked (PP************pY).
 // Frontend may send masked display value when user didn't modify the password field.
@@ -1005,7 +1081,38 @@ func isMaskedPassword(s string) bool {
 
 // tryNotify sends an email notification if SMTP is configured and the event type is enabled.
 // Runs in a background goroutine to avoid blocking the request handler.
-func (s *Server) tryNotify(eventType, title, detail string) {
+// cooldownNode is optional:
+//
+//	"unknown_node:actualID" → uses UnknownNodeCooldown (default 30)
+//	"auth_failure:actualID"  → uses AuthFailCooldown (default 30)
+//	"" or bare string        → no cooldown
+func (s *Server) tryNotify(eventType, title, detail, cooldownNode string) {
+	// v1.6.53: configurable cooldowns from SMTP config
+	if eventType == "security" && cooldownNode != "" {
+		cooldownMinutes := 0
+		cfg, _ := s.store.LoadSMTPConfig()
+		if strings.HasPrefix(cooldownNode, "unknown_node:") {
+			cooldownMinutes = cfg.UnknownNodeCooldown
+			if cooldownMinutes <= 0 {
+				cooldownMinutes = 30
+			}
+		} else if strings.HasPrefix(cooldownNode, "auth_failure:") {
+			cooldownMinutes = cfg.AuthFailCooldown
+			if cooldownMinutes <= 0 {
+				cooldownMinutes = 30
+			}
+		}
+		if cooldownMinutes > 0 {
+			s.notifyCooldownMu.Lock()
+			last, ok := s.notifyCooldown[cooldownNode]
+			if ok && time.Since(last) < time.Duration(cooldownMinutes)*time.Minute {
+				s.notifyCooldownMu.Unlock()
+				return
+			}
+			s.notifyCooldown[cooldownNode] = time.Now()
+			s.notifyCooldownMu.Unlock()
+		}
+	}
 	go func() {
 		cfg, err := s.store.LoadSMTPConfig()
 		if err != nil || cfg == nil {
@@ -1042,4 +1149,277 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// ── Backup & Restore ──
+
+// backupFiles lists files/dirs to include in the backup archive (relative to data dir).
+var backupFiles = []string{
+	"nodes.json",
+	"dns_keys.json",
+	"admin.json",
+	"acme_config.json",
+	".storage_key",
+	"smtp_config.json",
+	"rate_limit.json",
+	"timezone.json",
+	"proxy_config.json",
+	"agent_config.json",
+	"agent_manifest.json",
+	"certs", // recursive directory
+}
+
+// handleBackupDownload creates a tar.gz of all configuration and streams it.
+func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+	s.logMgr.Log("system", "配置备份已下载", fmt.Sprintf("ip=%s", clientIP(r)), "info")
+
+	ts := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("ddns-manager-backup-%s.tar.gz", ts)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+
+	gw := gzip.NewWriter(w)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	dataDir := s.cfg.DataDir
+
+	for _, name := range backupFiles {
+		fullPath := filepath.Join(dataDir, name)
+		fi, err := os.Stat(fullPath)
+		if os.IsNotExist(err) {
+			continue // optional files may not exist
+		}
+		if err != nil {
+			log.Printf("[backup] stat %s: %v", name, err)
+			continue
+		}
+
+		if fi.IsDir() {
+			filepath.Walk(fullPath, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					log.Printf("[backup] walk %s: %v", path, err)
+					return nil
+				}
+				if info.IsDir() {
+					return nil
+				}
+				rel, _ := filepath.Rel(dataDir, path)
+				return addFileToTar(tw, path, rel, info)
+			})
+		} else {
+			if err := addFileToTar(tw, fullPath, name, fi); err != nil {
+				log.Printf("[backup] add %s: %v", name, err)
+			}
+		}
+	}
+}
+
+func addFileToTar(tw *tar.Writer, fullPath, relPath string, fi os.FileInfo) error {
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	hdr := &tar.Header{
+		Name:    relPath,
+		Size:    fi.Size(),
+		Mode:    int64(fi.Mode()),
+		ModTime: fi.ModTime(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err = io.Copy(tw, f)
+	return err
+}
+
+// handleBackupRestore accepts a tar.gz backup and restores configuration.
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20)
+
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
+		jsonErr(w, http.StatusBadRequest, "文件过大或格式错误")
+		return
+	}
+
+	file, _, err := r.FormFile("backup_file")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "请选择备份文件")
+		return
+	}
+	defer file.Close()
+
+	tmpDir, err := os.MkdirTemp("", "ddns-restore-")
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "创建临时目录失败")
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "无法读取备份文件（不是有效的 gzip）")
+		return
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	fileCount := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "备份文件损坏: "+err.Error())
+			return
+		}
+
+		cleanName := filepath.Clean(hdr.Name)
+		if strings.HasPrefix(cleanName, "..") || filepath.IsAbs(cleanName) {
+			continue
+		}
+
+		targetPath := filepath.Join(tmpDir, cleanName)
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			os.MkdirAll(targetPath, 0700)
+		case tar.TypeReg:
+			os.MkdirAll(filepath.Dir(targetPath), 0700)
+			out, err := os.Create(targetPath)
+			if err != nil {
+				continue
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				continue
+			}
+			out.Close()
+			os.Chmod(targetPath, os.FileMode(hdr.Mode))
+			fileCount++
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "nodes.json")); os.IsNotExist(err) {
+		jsonErr(w, http.StatusBadRequest, "备份文件无效：缺少 nodes.json")
+		return
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, ".storage_key")); os.IsNotExist(err) {
+		jsonErr(w, http.StatusBadRequest, "备份文件无效：缺少 .storage_key（证书将无法解密）")
+		return
+	}
+
+	// backup current data before overwriting
+	backupDir, err := os.MkdirTemp("", "ddns-pre-restore-")
+	if err == nil {
+		for _, name := range backupFiles {
+			src := filepath.Join(s.cfg.DataDir, name)
+			if _, err := os.Stat(src); os.IsNotExist(err) {
+				continue
+			}
+			copyPath(backupDir, s.cfg.DataDir, name)
+		}
+		cleanOldBackups(filepath.Dir(backupDir), 10)
+	}
+
+	dataDir := s.cfg.DataDir
+	restored := 0
+	for _, name := range backupFiles {
+		src := filepath.Join(tmpDir, name)
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		dest := filepath.Join(dataDir, name)
+		os.RemoveAll(dest)
+		if err := copyPath(dataDir, tmpDir, name); err != nil {
+			log.Printf("[backup] restore %s: %v", name, err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("恢复 %s 失败: %v", name, err))
+			return
+		}
+		restored++
+	}
+
+	s.store.ResetCaches()
+	if err := s.store.ReloadStorageKey(); err != nil {
+		log.Printf("[backup] reload storage key: %v", err)
+	}
+
+	s.logMgr.Log("system", "配置已恢复",
+		fmt.Sprintf("ip=%s files=%d", clientIP(r), restored), "warning")
+
+	jsonOK(w, map[string]interface{}{
+		"ok":      true,
+		"message": fmt.Sprintf("已恢复 %d 个文件。建议重启服务以确保所有配置生效。", restored),
+	})
+}
+
+func copyPath(destDir, baseDir, srcRel string) error {
+	src := filepath.Join(baseDir, srcRel)
+	dest := filepath.Join(destDir, srcRel)
+	fi, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return copyDir(src, dest)
+	}
+	return copyFileContent(src, dest)
+}
+
+func copyFileContent(src, dest string) error {
+	os.MkdirAll(filepath.Dir(dest), 0700)
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dest + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	out.Close()
+	return os.Rename(tmp, dest)
+}
+
+func copyDir(src, dest string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dest, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		return copyFileContent(path, target)
+	})
+}
+
+func cleanOldBackups(parentDir string, keep int) {
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		return
+	}
+	var dirs []os.DirEntry
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "ddns-pre-restore-") {
+			dirs = append(dirs, e)
+		}
+	}
+	if len(dirs) <= keep {
+		return
+	}
+	for i := 0; i < len(dirs)-keep; i++ {
+		os.RemoveAll(filepath.Join(parentDir, dirs[i].Name()))
+	}
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // ─── L2: certutilErrorCode 增强正则 ───

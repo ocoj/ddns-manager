@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/notify"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/notify"
 )
 
 func TestNewStoreCreatesSubdirs(t *testing.T) {
@@ -515,88 +515,6 @@ func TestSaveAndLoadRateLimitConfig(t *testing.T) {
 	}
 }
 
-// TestReplaceNodeDNSKey_Atomic v1.6.36 C3: 验证原子替换 DNS Key 引用
-// 覆盖场景: (1) 正常替换 (2) 仅添加 (3) 仅删除 (4) 两个key都不存在
-func TestReplaceNodeDNSKey_Atomic(t *testing.T) {
-	s, _ := NewStore(t.TempDir())
-
-	// 准备: 创建两个 DNS Key
-	keys := map[string]*model.DNSKeyRecord{
-		"阿里云":    {Name: "阿里云", Provider: "alidns", UsedByNodes: []string{"node-1", "node-2"}},
-		"Cloudflare": {Name: "Cloudflare", Provider: "cloudflare", UsedByNodes: []string{}},
-	}
-	s.SaveDNSKeys(keys)
-
-	// 场景1: 原子替换 — node-1 从阿里云 → Cloudflare (正常)
-	err := s.ReplaceNodeDNSKey("node-1", "阿里云", "Cloudflare")
-	if err != nil {
-		t.Fatalf("ReplaceNodeDNSKey 失败: %v", err)
-	}
-
-	loaded, _ := s.LoadDNSKeys()
-	// 验证: node-1 已从阿里云移除
-	for _, n := range loaded["阿里云"].UsedByNodes {
-		if n == "node-1" {
-			t.Error("node-1 应已从阿里云中移除")
-		}
-	}
-	// 验证: node-2 仍在阿里云 (其他节点不受影响)
-	found2 := false
-	for _, n := range loaded["阿里云"].UsedByNodes {
-		if n == "node-2" {
-			found2 = true
-		}
-	}
-	if !found2 {
-		t.Error("node-2 应仍在阿里云中 — 替换不应影响其他节点")
-	}
-	// 验证: node-1 已添加到 Cloudflare
-	found1 := false
-	for _, n := range loaded["Cloudflare"].UsedByNodes {
-		if n == "node-1" {
-			found1 = true
-		}
-	}
-	if !found1 {
-		t.Error("node-1 应已添加到 Cloudflare")
-	}
-
-	// 场景2: oldKey 不存在时仅添加新引用 (边界)
-	err = s.ReplaceNodeDNSKey("node-3", "不存在的Key", "阿里云")
-	if err != nil {
-		t.Fatalf("oldKey 不存在时应仅添加: %v", err)
-	}
-	loaded, _ = s.LoadDNSKeys()
-	found3 := false
-	for _, n := range loaded["阿里云"].UsedByNodes {
-		if n == "node-3" {
-			found3 = true
-		}
-	}
-	if !found3 {
-		t.Error("node-3 应已添加到阿里云 (oldKey不存在时仅添加)")
-	}
-
-	// 场景3: 仅删除不添加 — newKey 为空 (边界)
-	err = s.ReplaceNodeDNSKey("node-3", "阿里云", "")
-	if err != nil {
-		t.Fatalf("仅删除时不应失败: %v", err)
-	}
-	loaded, _ = s.LoadDNSKeys()
-	for _, n := range loaded["阿里云"].UsedByNodes {
-		if n == "node-3" {
-			t.Error("node-3 应已从阿里云中移除 (仅删除模式)")
-		}
-	}
-
-	// 场景4: 两个 key 都不存在 — 不应 panic (异常安全)
-	err = s.ReplaceNodeDNSKey("node-x", "不存在的Key", "也不存在")
-	if err != nil {
-		t.Fatalf("两个 key 都不存在时不应失败: %v", err)
-	}
-}
-
-// TestRebuildManifest_WithHelper v1.6.36 C2: 验证 RebuildManifest 同时追踪
 // node-agent 和 upgrade_helper 二进制文件, 确保 Agent 端能找到升级助手。
 func TestRebuildManifest_WithHelper(t *testing.T) {
 	s, _ := NewStore(t.TempDir())

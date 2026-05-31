@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,9 +17,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/store"
-	mycrypto "github.com/kk/ddns-manager/internal/crypto"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/store"
+	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
@@ -44,13 +45,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	rec, ok := nodes[nodeID]
 	if !ok {
 		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, "未知节点ID", "warning")
-		s.tryNotify("security", "未知节点心跳", fmt.Sprintf("node=%s ip=%s", nodeID, clientIP(r)))
+		s.tryNotify("security", "未知节点心跳", fmt.Sprintf("node=%s ip=%s", nodeID, clientIP(r)), "unknown_node:"+nodeID)
 		jsonErr(w, http.StatusUnauthorized, "未知节点")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(rec.PasswordHash), []byte(password)); err != nil {
 		s.logMgr.LogWithNode("heartbeat", "认证失败", nodeID, fmt.Sprintf("密码错误 IP=%s", clientIP(r)), "warning")
-		s.tryNotify("security", "心跳认证失败", fmt.Sprintf("node=%s 密码错误 ip=%s", nodeID, clientIP(r)))
+		s.tryNotify("security", "心跳认证失败", fmt.Sprintf("node=%s 密码错误 ip=%s", nodeID, clientIP(r)), "auth_failure:"+nodeID)
 		jsonErr(w, http.StatusUnauthorized, "密码错误")
 		return
 	}
@@ -61,10 +62,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.LastSeen = s.nowInTZ()
 	if req.Status.IPv4 != "" {
-		rec.Status.IPv4 = req.Status.IPv4
+		rec.Status.IPv4 = sanitizeIP(req.Status.IPv4)
 	}
 	if req.Status.IPv6 != "" {
-		rec.Status.IPv6 = req.Status.IPv6
+		rec.Status.IPv6 = sanitizeIP(req.Status.IPv6)
 	}
 	rec.Status.AgentVersion = req.Status.AgentVersion
 	rec.Status.CertHashes = req.Status.CertHashes
@@ -162,6 +163,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// v1.5.29 C2: 处理 Agent 上报的 DNS 更新日志和操作日志
 	// 限制最多各 20 条，防止日志洪泛
 	logLimit := 100 // v1.6.44 H1: 20→100, 防升级/证书/配置操作日志被截断
+	// v1.6.56: 限制单条日志行长度，防止 DoS
+	const maxLogLineLen = 4096
 	for i, logLine := range req.Logs {
 		if i >= logLimit {
 			break
@@ -332,6 +335,14 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if matched {
 			continue
 		}
+		// 存量上传证书从未存过 PFXPassword（上传 Bug 历史遗留）。
+		// 首次心跳时检测到空密码 → 自动回填默认密码。
+		// 这些证书的 PFX 文件在创建时就是用默认密码加密的，
+		// 回填是陈述事实，hash 不变，不触发无意义部署。
+		if bundle.PFXPassword == "" {
+			bundle.PFXPassword = mycrypto.DefaultPFXPassword
+			s.store.SaveCertBundle(bundle)
+		}
 		encFiles := map[string]string{}
 		for name, content := range bundle.Files {
 			if ct, err := mycrypto.Encrypt(content, key); err == nil {
@@ -361,7 +372,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		// v1.5.22 H3: PFX 密码为空时记录日志
 		if bundle.PFXPassword == "" {
 			s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
-				fmt.Sprintf("bundle=%s (无PFX密码,Agent将用默认ddns) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
+				fmt.Sprintf("bundle=%s (无PFX密码,Agent将用默认值) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
 		}
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
 			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], targetPath), "success")
@@ -375,7 +386,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
-	nodes, _ := s.store.LoadNodes()
+	nodes, err := s.store.LoadNodes()
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "加载节点列表失败")
+		return
+	}
 	// 超时检测: 超过5分钟未心跳的节点标记为不在线
 	// （dashboard用handleStats独立计算，这里统一节点列表口径）
 	now := s.nowInTZ()  // v1.5.22 H4: 使用配置时区，与心跳时间源一致
@@ -415,6 +430,14 @@ func (s *Server) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.CertBindings != nil {
+		// v1.6.56: 校验证书绑定引用的 Bundle 是否存在
+		for _, cb := range req.CertBindings {
+			if _, err := s.store.LoadCertBundle(cb.BundleName); err != nil {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("证书集 %q 不存在", cb.BundleName))
+				return
+			}
+		}
 		rec.CertBindings = req.CertBindings
 	}
 	if req.Tags != nil {
@@ -433,7 +456,10 @@ func classifyLogStatus(line string) string {
 	lower := strings.ToLower(line)
 	if strings.Contains(lower, "失败") || strings.Contains(lower, "错误") ||
 		strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
-		strings.Contains(lower, "异常") {
+		strings.Contains(lower, "异常") ||
+		strings.Contains(lower, "timed") || strings.Contains(lower, "refused") ||
+		strings.Contains(lower, "denied") || strings.Contains(lower, "expired") ||
+		strings.Contains(lower, "forbidden") || strings.Contains(lower, "invalid") {
 		return "error"
 	}
 	return "info"
@@ -471,17 +497,34 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// v1.5.30 C1: 校验节点配置合法性（域名格式/TTL/URL/GetType 等）
-	if err := validateNodeConfig(&req); err != nil {
+	if err := validateNodeConfig(&req, keys); err != nil {
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// v1.5.30 H3: 校验证书绑定 DeployPath 防止路径穿越
+	// v1.6.54: 先自动填充 deploy_path，再校验 — 填充后绝对路径可在 certBase 白名单内通过
+// 空路径 → 自动生成 {CertPath}/{sanitized_BundleName}
+// 已有路径含 * → 替换为 _ (防止旧配置循环回带)
+if rec.Status.CertPath != "" {
+		for i := range req.CertBindings {
+			if req.CertBindings[i].BundleName == "" {
+				continue
+			}
+			safeName := model.SanitizeCertDirName(req.CertBindings[i].BundleName)
+			if req.CertBindings[i].DeployPath == "" {
+				req.CertBindings[i].DeployPath = rec.Status.CertPath + "/" + safeName
+			} else if strings.Contains(req.CertBindings[i].DeployPath, "*") {
+				req.CertBindings[i].DeployPath = strings.ReplaceAll(req.CertBindings[i].DeployPath, "*", "_")
+			}
+		}
+	}
+	// 填充后校验: 白名单 — 部署路径必须在 Agent 上报的证书目录下
 	for i, binding := range req.CertBindings {
-		if err := validateCertBinding(binding); err != nil {
+		if err := validateCertBinding(binding, rec.Status.CertPath); err != nil {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("证书绑定[%d]配置无效: %v", i, err))
 			return
 		}
 	}
+
 	// v1.6.36 C1: 必须在覆盖 ConfigYAML 之前提取旧 DNS key 名称
 	// v1.6.49: 同时从多卡片 dns_confs 提取旧 key 引用
 	var oldDNSKeyNames []string
@@ -502,22 +545,6 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// v1.6.49: deploy_path 自动填充并消隐泛域名 * 号
-	// 空路径 → 自动生成 {CertPath}/{sanitized_BundleName}
-	// 已有路径含 * → 替换为 _ (防止旧配置循环回带)
-	if rec.Status.CertPath != "" {
-		for i := range req.CertBindings {
-			if req.CertBindings[i].BundleName == "" {
-				continue
-			}
-			safeName := model.SanitizeCertDirName(req.CertBindings[i].BundleName)
-			if req.CertBindings[i].DeployPath == "" {
-				req.CertBindings[i].DeployPath = rec.Status.CertPath + "/" + safeName
-			} else if strings.Contains(req.CertBindings[i].DeployPath, "*") {
-				req.CertBindings[i].DeployPath = strings.ReplaceAll(req.CertBindings[i].DeployPath, "*", "_")
-			}
-		}
-	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "配置序列化失败")
@@ -891,6 +918,17 @@ func parseAuth(r *http.Request) (nodeID, password string, ok bool) {
 	return parts[0], parts[1], true
 }
 
+// sanitizeIP 规范化 Agent 上报的 IP 地址，非 IP 格式返回 "&lt;invalid&gt;"
+func sanitizeIP(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	if parsed := net.ParseIP(ip); parsed != nil {
+		return parsed.String()
+	}
+	return "&lt;invalid&gt;"
+}
+
 // ── v1.5.30 输入验证 ──
 
 // validDomainRE 域名格式校验：标准 FQDN 标签，不支持通配符和 IDN。
@@ -898,7 +936,7 @@ var validDomainRE = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0
 
 // validateNodeConfig 校验 NodeConfigRequest 的字段合法性，防止非法输入导致
 // ddns-go YAML 渲染异常或 DNS API 调用失败。
-func validateNodeConfig(req *model.NodeConfigRequest) error {
+func validateNodeConfig(req *model.NodeConfigRequest, keys map[string]*model.DNSKeyRecord) error {
 	// IPv4 域名校验
 	if req.IPv4.Enable {
 		if err := validateDomains(req.IPv4.Domains); err != nil {
@@ -991,19 +1029,19 @@ func validateIPConfig(getType, url, netInterface, cmd string) error {
 	return nil
 }
 
-// validateCertBinding 校验证书绑定的配置合法性，防路径穿越。
-func validateCertBinding(b model.CertBinding) error {
+// validateCertBinding 校验证书绑定的配置合法性，白名单防路径穿越。
+// certBase 为 Agent 上报的证书目录（如 /opt/ddns-agent/certs），
+// DeployPath 必须在 certBase 子树内。
+func validateCertBinding(b model.CertBinding, certBase string) error {
 	if b.BundleName == "" {
 		return fmt.Errorf("证书名称不能为空")
 	}
-	if b.DeployPath != "" {
-		if filepath.IsAbs(b.DeployPath) {
-			return fmt.Errorf("部署路径不能为绝对路径: %q", b.DeployPath)
-		}
-		cleaned := filepath.Clean(b.DeployPath)
-		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-			return fmt.Errorf("部署路径不能包含上级目录引用: %q", b.DeployPath)
-		}
+	if b.DeployPath == "" {
+		return fmt.Errorf("部署路径不能为空")
+	}
+	// 白名单: 只允许 certBase 或其子目录
+	if certBase != "" && !strings.HasPrefix(b.DeployPath, certBase+"/") && b.DeployPath != certBase {
+		return fmt.Errorf("部署路径必须在证书目录下: %q (当前: %q)", certBase, b.DeployPath)
 	}
 	return nil
 }

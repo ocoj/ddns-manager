@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/installer"
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/installer"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 var version = "dev"
@@ -33,6 +33,7 @@ func main() {
 	insecure := flag.Bool("insecure", false, "skip TLS verification")
 	uninstall := flag.Bool("uninstall", false, "remove all traces")
 	agentFile := flag.String("agent-file", "", "path to pre-downloaded agent binary (from install.sh)")
+	checksumFlag := flag.String("checksum", "", "agent binary SHA256 checksum (optional)")
 	flag.Parse()
 
 	if *uninstall {
@@ -45,14 +46,14 @@ func main() {
 		log.Fatal("需要 root 权限，请用 sudo 运行")
 	}
 
-	runInstall(*managerURL, *nodeName, *installDir, *insecure, *agentFile)
+	runInstall(*managerURL, *nodeName, *installDir, *insecure, *agentFile, *checksumFlag)
 }
 
 // Default path to agent.yaml in the install directory.
 // Must match the path that the agent binary reads (see cmd/agent/main.go:init()).
 var agentConfigPath string
 
-func runInstall(managerURL, nodeName, installDirParam string, insecure bool, agentFilePath string) {
+func runInstall(managerURL, nodeName, installDirParam string, insecure bool, agentFilePath string, checksum string) {
 	reader := bufio.NewReader(os.Stdin)
 
 	hostname, _ := os.Hostname()
@@ -108,6 +109,11 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 			installer.StopAgent()
 
 			binPath := findAgentFile(agentFilePath)
+			if binPath != "" {
+				if err := installer.VerifyAgentChecksum(binPath, checksum); err != nil {
+					log.Fatalf("[!] 二进制完整性校验失败: %v", err)
+				}
+			}
 			if binPath == "" {
 				log.Fatal("未找到 Agent 二进制，请检查 install.sh 是否正确下载")
 			}
@@ -250,6 +256,11 @@ func runInstall(managerURL, nodeName, installDirParam string, insecure bool, age
 	fmt.Println()
 	fmt.Println("  [3/4] 安装 Agent")
 	binPath := findAgentFile(agentFilePath)
+	if binPath != "" {
+		if err := installer.VerifyAgentChecksum(binPath, checksum); err != nil {
+			log.Fatalf("[!] 二进制完整性校验失败: %v", err)
+		}
+	}
 	if binPath == "" {
 		log.Fatal("未找到 Agent 二进制\n  确保 install.sh 已将 node-agent-v*-linux-* 下载到同目录")
 	}

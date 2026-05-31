@@ -314,7 +314,7 @@ body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#
   .btn-sm{height:28px;min-width:40px;padding:0 8px;font-size:11px}
 
   /* ===== 标签/徽章 — 触控目标 ===== */
-  .badge{padding:3px 10px;font-size:11px;min-height:22px}
+  .badge{padding:2px 7px;font-size:10px;min-height:22px}
   .event-item{gap:4px 8px;padding:6px 0;align-items:center;flex-wrap:wrap}
   .event-time{min-width:0;font-size:11px}
   .event-node{min-width:0;font-size:11px}
@@ -351,7 +351,7 @@ body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#
   /* 日志卡片: 时间+节点 行1, 类型+内容 行2 */
   .log-table thead{display:none}
   .log-table,.log-table tbody{display:block;width:100%}
-  .log-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
+  .log-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 4px}
   .log-table td{padding:1px 0;width:auto!important}
   .col-log-time{font-size:12px!important;color:var(--c-text)}
   .log-time-full{display:inline!important}
@@ -455,7 +455,7 @@ body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#
   /* 节点卡片: 行1节点名, 行2IP, 行3域名+健康/版本/状态/操作右对齐 */
   .node-table thead{display:none}
   .node-table,.node-table tbody{display:block;width:100%}
-  .node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:8px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
+  .node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:8px 0;border-bottom:1px solid var(--c-border);gap:2px 4px}
   .node-table td{padding:1px 0;width:auto!important}
   .node-table .col-dash-node{font-size:13px!important;font-weight:600;flex-basis:100%!important}
   .node-table .col-dash-node .meta-row{display:none!important}
@@ -469,17 +469,17 @@ body.dark .ncfg-help-content code,body.auto .ncfg-help-content code{background:#
   /* 仪表盘节点卡片: 行1节点名, 行2IP+域名+健康/版本/状态右对齐 */
   .dash-node-table thead{display:none}
   .dash-node-table,.dash-node-table tbody{display:block;width:100%}
-  .dash-node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 8px}
+  .dash-node-table tr{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);gap:2px 4px}
   .dash-node-table td{padding:1px 0;width:auto!important}
   .dash-node-table .col-dash-node{font-size:13px!important;font-weight:600;flex-basis:100%!important}
   .dash-node-table .col-dash-node .meta-row{display:none!important}
   /* IP: 长IPv6省略 */
-  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dash-node-table td:nth-child(2){font-size:11px;font-family:Consolas,Monaco,monospace;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* 域名+后续全部右对齐 */
-  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2);overflow:visible;white-space:nowrap;margin-left:auto}
+  .dash-node-table td:nth-child(3){font-size:11px;color:var(--c-text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   /* 健康右对齐 */
   .dash-node-table .col-badge:first-of-type{margin-left:auto}
-  .dash-node-table .col-ver{font-size:11px!important;font-family:Consolas,Monaco,monospace}
+  .dash-node-table .col-ver{font-size:10px!important;font-family:Consolas,Monaco,monospace}
   .dash-node-table .col-badge{width:auto!important}
 
   #page-logs .col-log-time{font-size:10px!important}
@@ -1516,6 +1516,11 @@ function drawPieChart(containerId, segments, totalLabel) {
   // Canvas 固定 180px, legend 在下方自然流 — 不再用 height:100%
   var W = rect.width, canvasH = 180;
   if (W <= 0) return;
+  // read CSS variables for dark/light mode adaptation
+  var cs = getComputedStyle(document.body);
+  var cardBg = cs.getPropertyValue('--c-card').trim() || '#fff';
+  var textColor = cs.getPropertyValue('--c-text').trim() || '#262626';
+  var text2Color = cs.getPropertyValue('--c-text2').trim() || '#8c8c8c';
   if (!canvas) {
     canvas = document.createElement('canvas');
     ct.appendChild(canvas);
@@ -1538,11 +1543,15 @@ function drawPieChart(containerId, segments, totalLabel) {
   if (total === 0) {
     ctx.fillStyle = '#d9d9d9';
     ctx.beginPath(); ctx.arc(cx, cy, outerR, 0, Math.PI * 2); ctx.fill();
-    if (innerR > 0) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx, cy, innerR, 0, Math.PI * 2); ctx.fill(); }
-    ctx.fillStyle = '#8c8c8c'; ctx.font = '12px -apple-system,sans-serif'; ctx.textAlign = 'center';
+    if (innerR > 0) { ctx.fillStyle = cardBg; ctx.beginPath(); ctx.arc(cx, cy, innerR, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = text2Color; ctx.font = '12px -apple-system,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('N/A', cx, cy + 4);
     return;
   }
+
+  // fill inner circle with card background so center text is readable in dark mode
+  ctx.fillStyle = cardBg;
+  ctx.beginPath(); ctx.arc(cx, cy, innerR, 0, Math.PI * 2); ctx.fill();
 
   var startAngle = -Math.PI / 2;
   segments.forEach(function(s, i) {
@@ -1558,12 +1567,12 @@ function drawPieChart(containerId, segments, totalLabel) {
   });
 
   // center text: show totalLabel (e.g. "2.1GB") on line 1, percentage on line 2
-  ctx.fillStyle = '#262626';
+  ctx.fillStyle = textColor;
   ctx.font = 'bold 15px -apple-system,sans-serif';
   ctx.textAlign = 'center';
   if (totalLabel) ctx.fillText(totalLabel, cx, cy - 4);
   ctx.font = '11px -apple-system,sans-serif';
-  ctx.fillStyle = '#8c8c8c';
+  ctx.fillStyle = text2Color;
   ctx.fillText(total.toFixed(1) + '%', cx, cy + 14);
 
   // legend — rendered as DOM, container uses min-height so it naturally fits
@@ -2382,9 +2391,12 @@ async function downloadCert(name) {
     URL.revokeObjectURL(url);
   } catch(e) { toast('下载失败', 'error'); }
 }
+// PFX 密码默认值 — 与 Go 端 crypto.DefaultPFXPassword 保持一致
+var DEFAULT_PFX_PASSWORD = 'ddns';
+
 async function downloadPFX(name) {
   // 自动获取已保存的 PFX 密码作为默认值
-  var defaultPw = 'ddns';
+  var defaultPw = DEFAULT_PFX_PASSWORD;
   try {
     var detail = await apiJSON('/api/admin/certs/' + encodeURIComponent(name));
     if (detail.ok && detail.data && detail.data.pfx_password) {
@@ -2395,7 +2407,7 @@ async function downloadPFX(name) {
   if (pw === null) return;
   if (pw.length < 6) { toast('密码至少 6 个字符', 'error'); return; }
   try {
-    var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/pfx?password=' + encodeURIComponent(pw));
+    var r = await api('/api/admin/certs/' + encodeURIComponent(name) + '/pfx', {method:'POST', body:{password:pw}});
     if (!r.ok) { var err = await r.text(); toast('下载失败: ' + (err || r.statusText), 'error'); return; }
     var blob = await r.blob();
     var url = URL.createObjectURL(blob);
@@ -2433,19 +2445,28 @@ async function showCertDetail(name) {
   if (isACME && d.ca) rows.push(['CA', he(d.ca)]);
   if (isACME && d.email) rows.push(['ACME 账号', he(d.email)]);
   if (d.hash) rows.push(['Hash', '<span class="mono">' + he(d.hash.substring(0,16)) + '...</span>']);
-  var h = '<table style="font-size:13px"><tbody>';
-  h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap">PFX 密码</td><td style="padding:6px 0"><input id="cert-pfxpw" value="'+he(d.pfx_password||'')+'" placeholder="ddns" style="width:140px;height:26px;font-size:12px;border:1px solid var(--c-input-border);border-radius:4px;outline:none"> <button class="btn btn-sm" onclick="saveCertPFXPassword(&#39;'+jsStr(name)+'&#39;)">保存</button></td></tr>';
+  var h = '<table style="font-size:13px"><colgroup><col style="width:160px"></colgroup><tbody>';
+  h += '<tr><td style="padding:6px 6px 6px 0;color:var(--c-text2);white-space:nowrap">PFX 密码</td><td style="padding:6px 0"><span style="display:inline-flex;align-items:center;gap:4px"><input id="cert-pfxpw" value="'+he(d.pfx_password||'')+'" placeholder="ddns" style="width:130px;height:26px;font-size:12px;border:1px solid var(--c-input-border);border-radius:4px;outline:none"><button class="btn btn-sm" style="padding:2px 4px;font-size:11px" onclick="genRandomPFXPassword()" title="生成随机密码">&#127922;</button><button class="btn btn-sm" onclick="saveCertPFXPassword(&#39;'+jsStr(name)+'&#39;)">保存</button></span></td></tr>';
   rows.forEach(function(r) {
-    h += '<tr><td style="padding:6px 12px 6px 0;color:var(--c-text2);white-space:nowrap;vertical-align:top">' + r[0] + '</td><td style="padding:6px 0">' + r[1] + '</td></tr>';
+    h += '<tr><td style="padding:6px 6px 6px 0;color:var(--c-text2);white-space:nowrap;vertical-align:top">' + r[0] + '</td><td style="padding:6px 0">' + r[1] + '</td></tr>';
   });
   h += '</tbody></table>';
   document.getElementById('cert-detail-body').innerHTML = h;
   openModal('modal-cert-detail');
 }
+function genRandomPFXPassword() {
+  var pwEl = document.getElementById('cert-pfxpw');
+  if (!pwEl) return;
+  var arr = new Uint8Array(18);
+  crypto.getRandomValues(arr);
+  var pw = btoa(Array.from(arr, function(b) { return String.fromCharCode(b); }).join(''))
+    .replace(/\+/g, '').replace(/\//g, '').replace(/=/g, '');
+  pwEl.value = pw;
+}
 async function saveCertPFXPassword(name) {
   var pwEl = document.getElementById('cert-pfxpw');
   if (!pwEl) { toast('输入框未找到', 'error'); return; }
-  var pw = pwEl.value.trim() || 'ddns';
+  var pw = pwEl.value.trim() || DEFAULT_PFX_PASSWORD;
   try {
     var r = await apiJSON('/api/admin/certs/' + encodeURIComponent(name) + '/pfx-password', {method: 'POST', body: {pfx_password: pw}});
     if (r.ok) { toast('PFX 密码已保存'); }
@@ -3072,10 +3093,11 @@ async function loadSettings(silent) {
     var sr = await apiJSON('/api/admin/smtp');
     var rr = await apiJSON('/api/admin/rate-limit');
     var tr = await apiJSON('/api/admin/timezone');
-    renderSettings(sr.data || {}, rr.data || {}, (tr.data || {}).timezone || 'Asia/Shanghai');
+    var pr = await apiJSON('/api/admin/trusted-proxy');
+    renderSettings(sr.data || {}, rr.data || {}, (tr.data || {}).timezone || 'Asia/Shanghai', (pr.data || {}).trusted_proxy || '');
   } catch(e) { if (!silent) document.getElementById('page-settings').innerHTML = '<div class="empty">加载失败</div>'; }
 }
-function renderSettings(smtp, rl, tz) {
+function renderSettings(smtp, rl, tz, proxyIP) {
   var h = '';
   // v1.6.27: 外观卡片
   var curTheme = localStorage.getItem('theme') || 'auto';
@@ -3092,6 +3114,11 @@ function renderSettings(smtp, rl, tz) {
   h += '<div class="tip" style="margin-top:4px">影响仪表盘图表时间轴、日志时间显示</div></div>';
   // 记录时区到全局变量，UI 时间显示使用
   window._tz = tz;
+  // 受信代理
+  h += '<div class="card"><div class="card-header"><h3>受信代理</h3></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>反向代理 IP</label><input id="proxy-ip" value="' + he(proxyIP) + '" placeholder="如 10.0.0.1" style="width:200px"></div>';
+  h += '<div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="saveTrustedProxy()">保存</button></div></div>';
+  h += '<div class="tip" style="margin-top:4px">Manager 信任该 IP 转发的 X-Real-IP 请求头，用于仪表盘展示真实客户端 IP。留空=禁用</div></div>';
   // 修改密码
   h += '<div class="card"><div class="card-header"><h3>修改密码</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>新密码</label><div style="display:flex;gap:8px"><input type="password" id="set-new-pwd" placeholder="新密码" style="flex:1"><input type="password" id="set-confirm-pwd" placeholder="确认密码" style="flex:1"></div></div>';
@@ -3114,7 +3141,11 @@ function renderSettings(smtp, rl, tz) {
   evs.forEach(function(ev) {
     h += '<label class="checkbox-row"><input type="checkbox" id="smtp-' + ev.k + '" class="smtp-event" value="' + ev.k + '"' + (smtp[ev.k] ? ' checked' : '') + '> ' + ev.v + '</label>';
   });
-  h += '</div><div class="btn-row" style="margin-top:16px"><button class="btn" onclick="testSMTP()">测试发送</button><button class="btn btn-primary" onclick="saveSMTP()">保存</button></div></div>';
+  h += '</div><div style="margin:12px 0"><b style="font-size:14px;color:var(--c-text)">节点事件通知冷却时间:</b></div><div class="form-row">';
+  h += '<div class="form-group"><label>节点离线冷却</label><input id="smtp-heartbeat-fail-cooldown" value="' + he(smtp.heartbeat_fail_cooldown || '60') + '" style="width:70px"> 分钟</div>';
+  h += '<div class="form-group"><label>认证失败冷却</label><input id="smtp-auth-fail-cooldown" value="' + he(smtp.auth_fail_cooldown || '30') + '" style="width:70px"> 分钟</div>';
+  h += '<div class="form-group"><label>未知节点冷却</label><input id="smtp-unknown-node-cooldown" value="' + he(smtp.unknown_node_cooldown || '30') + '" style="width:70px"> 分钟</div></div>';
+  h += '<div class="btn-row" style="margin-top:16px"><button class="btn" onclick="testSMTP()">测试发送</button><button class="btn btn-primary" onclick="saveSMTP()">保存</button></div></div>';
 
   h += '<div class="card"><div class="card-header"><h3>访问限流</h3></div>';
   h += '<div class="form-inline"><div class="form-group"><label>全局 (req/min)</label><input id="rl-global" value="' + he(rl.requests_per_min || '600') + '" style="width:90px"></div>';
@@ -3123,6 +3154,14 @@ function renderSettings(smtp, rl, tz) {
   h += '<label class="checkbox-row" style="margin:8px 0"><input type="checkbox" id="rl-enabled"' + (rl.enabled ? ' checked' : '') + '> 启用限流</label>';
   h += '<div class="tip">基于真实客户端IP，兼容NPM反代</div>';
   h += '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" onclick="saveRateLimit()">保存</button></div></div>';
+
+  // 备份与恢复
+  h += '<div class="card"><div class="card-header"><h3>备份与恢复</h3></div>';
+  h += '<div class="form-inline" style="gap:8px"><button class="btn" style="width:120px" onclick="downloadBackup()">下载配置备份</button>';
+  h += '<button class="btn btn-danger" style="width:120px" onclick="triggerRestore()">恢复配置...</button></div>';
+  h += '<div class="tip" style="margin-top:4px">备份包含节点、DNS Key、证书、SMTP 等全部配置。恢复将覆盖当前配置并需重启服务。</div>';
+  h += '<input type="file" id="restore-file-input" accept=".tar.gz,.tgz" style="display:none" onchange="uploadBackup(this.files[0])">';
+  h += '</div>';
 
   document.getElementById('page-settings').innerHTML = h;
   initSMTPDropdown();
@@ -3148,7 +3187,10 @@ async function saveSMTP() {
     password: document.getElementById('smtp-pass').value,
     to: document.getElementById('smtp-to').value,
     manager_url: document.getElementById('smtp-mgr-url').value,
-    cert_expiry_days: parseInt(document.getElementById('smtp-cert-days').value) || 7
+    cert_expiry_days: parseInt(document.getElementById('smtp-cert-days').value) || 7,
+    heartbeat_fail_cooldown: parseInt(document.getElementById('smtp-heartbeat-fail-cooldown').value) || 60,
+    auth_fail_cooldown: parseInt(document.getElementById('smtp-auth-fail-cooldown').value) || 30,
+    unknown_node_cooldown: parseInt(document.getElementById('smtp-unknown-node-cooldown').value) || 30
   };
   var cbs = document.querySelectorAll('.smtp-event:checked');
   for (var i = 0; i < cbs.length; i++) body[cbs[i].value] = true;
@@ -3255,6 +3297,56 @@ async function saveTimezone() {
     toast('时区已设为 '+tz, 'success');
     markPageClean();
   }
+}
+
+async function saveTrustedProxy() {
+  var ip = document.getElementById('proxy-ip').value.trim();
+  var r = await apiJSON('/api/admin/trusted-proxy', {method:'POST', body:{trusted_proxy: ip}});
+  if (r.ok) {
+    toast(ip ? '受信代理已设为 '+ip : '受信代理已禁用', 'success');
+    markPageClean();
+  }
+}
+
+// ── 备份与恢复 ──
+async function downloadBackup() {
+  try {
+    var resp = await api('/api/admin/backup');
+    if (!resp.ok) { toast('备份下载失败', 'error'); return; }
+    var blob = await resp.blob();
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    var disp = resp.headers.get('Content-Disposition') || '';
+    var m = disp.match(/filename="?(.+?)"?$/);
+    a.download = m ? m[1] : 'ddns-manager-backup.tar.gz';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('备份已下载', 'success');
+  } catch(e) { toast('备份下载失败: '+e.message, 'error'); }
+}
+
+function triggerRestore() {
+  document.getElementById('restore-file-input').click();
+}
+
+async function uploadBackup(file) {
+  if (!file) return;
+  if (!confirm('这将覆盖当前所有配置（节点、DNS Key、证书等），确定继续？')) {
+    document.getElementById('restore-file-input').value = '';
+    return;
+  }
+  try {
+    var fd = new FormData();
+    fd.append('backup_file', file);
+    var resp = await api('/api/admin/backup/restore', {method:'POST', body: fd});
+    var r = await resp.json();
+    if (resp.ok && r.ok) {
+      toast(r.message || '配置已恢复', 'success');
+    } else {
+      toast('恢复失败: ' + (r.error || '未知错误'), 'error');
+    }
+  } catch(e) { toast('恢复失败: '+e.message, 'error'); }
+  document.getElementById('restore-file-input').value = '';
 }
 
 // ========== HELPERS ==========

@@ -2,7 +2,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,8 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/notify"
+	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/notify"
 )
 
 // ManagerStore is the central data store with in-memory cache.
@@ -24,8 +27,9 @@ import (
 // v1.6.10 L3: 两个独立标志, 防止并发场景下 loadNodesToCache 设置 cacheLoaded=true
 // 导致 dnsKeysCache 被误标记为已加载 (两个 load 函数之前共享一个 cacheLoaded)
 type ManagerStore struct {
-	mu     sync.RWMutex
-	dir    string
+	mu         sync.RWMutex
+	dir        string
+	storageKey []byte // v1.6.56: at-rest encryption key for ACME secrets
 
 	// In-memory caches — populated on first read, kept in sync by write methods.
 	// Protected by mu (reads hold RLock, writes hold Lock).
@@ -42,10 +46,36 @@ func NewStore(dir string) (*ManagerStore, error) {
 			return nil, err
 		}
 	}
-	return &ManagerStore{dir: dir}, nil
+	s := &ManagerStore{dir: dir}
+	if err := s.initStorageKey(); err != nil {
+		return nil, fmt.Errorf("storage key: %w", err)
+	}
+	// F8: 自动迁移明文 ACME 私钥（非致命 — 失败仅记录日志，不阻塞启动）
+	if err := s.migrateACMEKeysIfNeeded(); err != nil {
+		log.Printf("[store] ACME 密钥迁移失败（非致命）: %v", err)
+	}
+	return s, nil
 }
 
 // ── Nodes ──
+
+// atomicWriteFile 原子写入：先写临时文件，确保落盘，再原子重命名
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	f, err := os.Open(tmp)
+	if err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+	return os.Rename(tmp, path)
+}
 
 func (s *ManagerStore) nodesPath() string { return filepath.Join(s.dir, "nodes.json") }
 
@@ -110,7 +140,7 @@ func (s *ManagerStore) saveNodesLocked(nodes map[string]*model.NodeRecord) error
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.nodesPath(), data, 0o600); err != nil {
+	if err := atomicWriteFile(s.nodesPath(), data, 0o600); err != nil {
 		return err
 	}
 	// Update in-memory cache (the caller's map becomes the cache)
@@ -202,6 +232,9 @@ type CertBundle struct {
 }
 
 func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
+	if err := sanitizeBundleName(name); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(s.dir, "certs", name)
 	metaPath := filepath.Join(dir, "meta.json")
 	data, err := os.ReadFile(metaPath)
@@ -233,6 +266,9 @@ func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
 }
 
 func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
+	if err := sanitizeBundleName(b.Name); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.dir, "certs", b.Name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -283,6 +319,14 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	return os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600)
 }
 
+// sanitizeBundleName validates cert bundle name, preventing path traversal.
+func sanitizeBundleName(name string) error {
+	if name == "" || filepath.Base(name) != name {
+		return fmt.Errorf("invalid cert bundle name: %q", name)
+	}
+	return nil
+}
+
 func (s *ManagerStore) ListCertBundles() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(s.dir, "certs"))
 	if err != nil {
@@ -301,6 +345,9 @@ func (s *ManagerStore) ListCertBundles() ([]string, error) {
 }
 
 func (s *ManagerStore) DeleteCertBundle(name string) error {
+	if err := sanitizeBundleName(name); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(s.dir, "certs", name))
 }
 
@@ -338,7 +385,7 @@ func (s *ManagerStore) SaveAdminState(st *AdminState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.adminPath(), data, 0o600)
+	return atomicWriteFile(s.adminPath(), data, 0o600)
 }
 
 // ── DNS Keys ──
@@ -410,10 +457,13 @@ func (s *ManagerStore) SaveDNSKeys(keys map[string]*model.DNSKeyRecord) error {
 	if err != nil {
 		return err
 	}
-	// Write-through: persist + update cache (v1.6.29 C4: 设置 loaded 标志)
+	// v1.6.56 M4: 先写文件，成功后再更新缓存（对齐 saveNodesLocked 模式）
+	if err := atomicWriteFile(s.dnsKeysPath(), data, 0o600); err != nil {
+		return err
+	}
 	s.dnsKeysCache = keys
 	s.dnsKeysCacheLoaded = true
-	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+	return nil
 }
 
 // DeleteDNSKeyAtomic removes a DNS key under write lock.
@@ -432,17 +482,26 @@ func (s *ManagerStore) DeleteDNSKeyAtomic(name string) error {
 	if _, ok := s.dnsKeysCache[name]; !ok {
 		return fmt.Errorf("DNS key %q not found", name)
 	}
-	delete(s.dnsKeysCache, name)
-
-	data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
+	// v1.6.56 M4: 操作缓存副本，写文件成功后更新缓存
+	cacheCopy := make(map[string]*model.DNSKeyRecord, len(s.dnsKeysCache))
+	for k, v := range s.dnsKeysCache {
+		if k != name {
+			cacheCopy[k] = v
+		}
+	}
+	data, err := json.MarshalIndent(cacheCopy, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+	if err := atomicWriteFile(s.dnsKeysPath(), data, 0o600); err != nil {
+		return err
+	}
+	s.dnsKeysCache = cacheCopy
+	return nil
 }
 
 // TrackDNSKeyUsage adds nodeID to the used_by_nodes list of a DNS key (by name).
-// v1.6.42 C7: 原子化 — 全程持写锁读-改-写, 消除与 SaveDNSKeys/ReplaceNodeDNSKey 的 TOCTOU 竞态
+// v1.6.42 C7: 原子化 — 全程持写锁读-改-写, 消除 TOCTOU 竞态
 func (s *ManagerStore) TrackDNSKeyUsage(keyName, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,62 +530,11 @@ func (s *ManagerStore) TrackDNSKeyUsage(keyName, nodeID string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+		return atomicWriteFile(s.dnsKeysPath(), data, 0o600)
 	}
 	return nil
 }
 
-// ReplaceNodeDNSKey v1.6.36 C3: 原子替换节点的 DNS Key 引用 — 在读-删-加-写四个步骤
-// 全程持写锁, 消除 v1.6.35 中 RemoveNodeFromDNSKeys→TrackDNSKeyUsage 两步之间的 TOCTOU 竞态。
-// oldKeyName="" 表示仅添加新引用 (不删除旧引用)。
-func (s *ManagerStore) ReplaceNodeDNSKey(nodeID, oldKeyName, newKeyName string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 确保缓存已加载
-	if s.dnsKeysCache == nil {
-		if err := s.loadDNSKeysToCache(); err != nil {
-			return err
-		}
-	}
-
-	// 从旧 key 中移除节点引用
-	if oldKeyName != "" {
-		if oldRec, ok := s.dnsKeysCache[oldKeyName]; ok {
-			for i, n := range oldRec.UsedByNodes {
-				if n == nodeID {
-					oldRec.UsedByNodes = append(oldRec.UsedByNodes[:i], oldRec.UsedByNodes[i+1:]...)
-					break
-				}
-			}
-		}
-	}
-
-	// 添加到新 key
-	if newKeyName != "" {
-		if newRec, ok := s.dnsKeysCache[newKeyName]; ok {
-			found := false
-			for _, n := range newRec.UsedByNodes {
-				if n == nodeID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				newRec.UsedByNodes = append(newRec.UsedByNodes, nodeID)
-			}
-		}
-	}
-
-	// 一次写盘
-	data, err := json.MarshalIndent(s.dnsKeysCache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
-}
-
-// RemoveNodeFromDNSKeys removes nodeID from all DNS key usage lists.
 // v1.6.46 H2: 全程持写锁, 操作缓存直接内存, 防止 Load→Modify→Save 竞态
 func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
 	s.mu.Lock()
@@ -558,7 +566,7 @@ func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.dnsKeysPath(), data, 0o600)
+	return atomicWriteFile(s.dnsKeysPath(), data, 0o600)
 }
 
 // ── Agent Version ──
@@ -607,7 +615,7 @@ func (s *ManagerStore) SaveAgentManifest(m map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.agentManifestPath(), data, 0o644)
+	return atomicWriteFile(s.agentManifestPath(), data, 0o644)
 }
 
 func (s *ManagerStore) LoadAgentConfig() (*AgentConfig, error) {
@@ -634,7 +642,7 @@ func (s *ManagerStore) SaveAgentConfig(cfg *AgentConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.agentConfigPath(), data, 0o600)
+	return atomicWriteFile(s.agentConfigPath(), data, 0o600)
 }
 
 // UpdateAgentConfigAtomic reads the config, applies the mutation under write lock,
@@ -658,7 +666,7 @@ func (s *ManagerStore) UpdateAgentConfigAtomic(fn func(*AgentConfig)) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.agentConfigPath(), out, 0o600)
+	return atomicWriteFile(s.agentConfigPath(), out, 0o600)
 }
 
 // ── Agent Binaries ──
@@ -905,7 +913,7 @@ func (s *ManagerStore) SaveSMTPConfig(cfg *notify.Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.smtpPath(), data, 0o600)
+	return atomicWriteFile(s.smtpPath(), data, 0o600)
 }
 
 type ACMEAccountConfig struct {
@@ -960,16 +968,37 @@ func (s *ManagerStore) UpdateACMEAccountsAtomic(fn func([]ACMEAccountConfig) err
 	return s.saveACMEAccountsLocked(accounts)
 }
 
-// saveACMEAccountsLocked writes to disk. Caller must hold s.mu.Lock().
+// saveACMEAccountsLocked writes to disk with at-rest encryption for sensitive fields (v1.6.56).
+// Caller must hold s.mu.Lock().
 func (s *ManagerStore) saveACMEAccountsLocked(accounts []ACMEAccountConfig) error {
-	data, err := json.MarshalIndent(accounts, "", "  ")
+	// Encrypt AccountKey and EABKey before persisting
+	encrypted := make([]ACMEAccountConfig, len(accounts))
+	for i, a := range accounts {
+		encrypted[i] = a
+		if a.AccountKey != "" {
+			ciphertext, err := s.encryptSensitive([]byte(a.AccountKey))
+			if err != nil {
+				return fmt.Errorf("encrypt account_key: %w", err)
+			}
+			encrypted[i].AccountKey = ciphertext
+		}
+		if a.EABKey != "" {
+			ciphertext, err := s.encryptSensitive([]byte(a.EABKey))
+			if err != nil {
+				return fmt.Errorf("encrypt eab_key: %w", err)
+			}
+			encrypted[i].EABKey = ciphertext
+		}
+	}
+	data, err := json.MarshalIndent(encrypted, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.acmeConfigPath(), data, 0o600)
+	return atomicWriteFile(s.acmeConfigPath(), data, 0o600)
 }
 
-// loadACMEAccountsLocked reads from disk. Caller must hold s.mu.Lock().
+// loadACMEAccountsLocked reads from disk with at-rest decryption (v1.6.56).
+// Caller must hold s.mu.Lock().
 func (s *ManagerStore) loadACMEAccountsLocked() ([]ACMEAccountConfig, error) {
 	data, err := os.ReadFile(s.acmeConfigPath())
 	if os.IsNotExist(err) {
@@ -981,6 +1010,23 @@ func (s *ManagerStore) loadACMEAccountsLocked() ([]ACMEAccountConfig, error) {
 	var accounts []ACMEAccountConfig
 	if err := json.Unmarshal(data, &accounts); err != nil {
 		return nil, err
+	}
+	// Decrypt AccountKey / EABKey (backward-compat: PEM headers = already plaintext)
+	for i := range accounts {
+		if accounts[i].AccountKey != "" && !strings.HasPrefix(accounts[i].AccountKey, "-----BEGIN") {
+			plain, err := s.decryptSensitive(accounts[i].AccountKey)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt account_key[%d]: %w", i, err)
+			}
+			accounts[i].AccountKey = string(plain)
+		}
+		if accounts[i].EABKey != "" && !strings.HasPrefix(accounts[i].EABKey, "-----BEGIN") {
+			plain, err := s.decryptSensitive(accounts[i].EABKey)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt eab_key[%d]: %w", i, err)
+			}
+			accounts[i].EABKey = string(plain)
+		}
 	}
 	return accounts, nil
 }
@@ -1059,7 +1105,7 @@ func (s *ManagerStore) SaveRateLimitConfig(cfg *RateLimitConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.rateLimitPath(), data, 0o600)
+	return atomicWriteFile(s.rateLimitPath(), data, 0o600)
 }
 
 // ── Timezone ──
@@ -1100,5 +1146,138 @@ func (s *ManagerStore) SaveTimezoneConfig(cfg *TimezoneConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.timezonePath(), data, 0o600)
+	return atomicWriteFile(s.timezonePath(), data, 0o600)
+}
+
+// ── Proxy (v1.6.58) ──
+
+type ProxyConfig struct {
+	TrustedProxy string `json:"trusted_proxy"` // 受信反向代理 IP (空=禁用)
+}
+
+func (s *ManagerStore) proxyConfigPath() string { return filepath.Join(s.dir, "proxy_config.json") }
+
+func (s *ManagerStore) LoadProxyConfig() (*ProxyConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := os.ReadFile(s.proxyConfigPath())
+	if os.IsNotExist(err) {
+		return &ProxyConfig{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cfg ProxyConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func (s *ManagerStore) SaveProxyConfig(cfg *ProxyConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(s.proxyConfigPath(), data, 0o600)
+}
+
+// ── v1.6.56: at-rest encryption helpers ──
+
+func (s *ManagerStore) storageKeyPath() string {
+	return filepath.Join(s.dir, ".storage_key")
+}
+
+// initStorageKey loads or generates the storage master key.
+func (s *ManagerStore) initStorageKey() error {
+	keyPath := s.storageKeyPath()
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
+		s.storageKey = data
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	// First run: generate 32 random bytes
+	s.storageKey = make([]byte, 32)
+	if _, err := rand.Read(s.storageKey); err != nil {
+		return err
+	}
+	return os.WriteFile(keyPath, s.storageKey, 0o600)
+}
+
+// migrateACMEKeysIfNeeded checks for plaintext ACME account keys and re-encrypts them.
+// Safe to call on every startup — only writes when plaintext PEM keys are detected.
+// F8: auto-migration for keys originally created before v1.6.56 encryption support.
+func (s *ManagerStore) migrateACMEKeysIfNeeded() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := os.ReadFile(s.acmeConfigPath())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Fast check: if file contains no PEM header, all keys are already encrypted
+	if !strings.Contains(string(data), "-----BEGIN") {
+		return nil
+	}
+
+	var accounts []ACMEAccountConfig
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return err
+	}
+
+	needMigration := false
+	for i := range accounts {
+		if accounts[i].AccountKey != "" && strings.HasPrefix(accounts[i].AccountKey, "-----BEGIN") {
+			needMigration = true
+			break
+		}
+	}
+	if !needMigration {
+		return nil
+	}
+
+	log.Printf("[store] 检测到明文 ACME 私钥，正在加密迁移...")
+	return s.saveACMEAccountsLocked(accounts)
+}
+
+// encryptSensitive encrypts plaintext using AES-256-GCM with a derived key.
+func (s *ManagerStore) encryptSensitive(plaintext []byte) (string, error) {
+	key := mycrypto.DeriveKey(hex.EncodeToString(s.storageKey), "storage", "acme-at-rest")
+	return mycrypto.Encrypt(plaintext, key)
+}
+
+// decryptSensitive decrypts a base64+GCM ciphertext.
+func (s *ManagerStore) decryptSensitive(ciphertext string) ([]byte, error) {
+	key := mycrypto.DeriveKey(hex.EncodeToString(s.storageKey), "storage", "acme-at-rest")
+	return mycrypto.Decrypt(ciphertext, key)
+}
+
+// ResetCaches clears in-memory node/DNS-key caches so next reads reload from disk.
+func (s *ManagerStore) ResetCaches() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodesCache = nil
+	s.dnsKeysCache = nil
+	s.nodesCacheLoaded = false
+	s.dnsKeysCacheLoaded = false
+}
+
+// ReloadStorageKey re-reads .storage_key from disk into memory.
+func (s *ManagerStore) ReloadStorageKey() error {
+	data, err := os.ReadFile(s.storageKeyPath())
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.storageKey = data
+	s.mu.Unlock()
+	return nil
 }

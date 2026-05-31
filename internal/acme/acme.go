@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	mycrypto "github.com/kk/ddns-manager/internal/crypto"
+	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
 	"golang.org/x/crypto/acme"
 )
 
@@ -210,6 +210,26 @@ func (m *Manager) LastError() error {
 	return m.lastRenewErr
 }
 
+// AcmeShAvailable returns true if acme.sh is configured and the binary is executable.
+// It performs an actual execution test (--version), more reliable than LookPath alone
+// which can succeed on dangling symlinks.
+// F5: startup health check for acme.sh availability.
+func (m *Manager) AcmeShAvailable() bool {
+	if m.acmeShPath == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, m.acmeShPath, "--version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[acme] acme.sh 不可用 (%s): %v — 自动续期将失效", m.acmeShPath, err)
+		return false
+	}
+	log.Printf("[acme] acme.sh 就绪: %s", strings.TrimSpace(string(out)))
+	return true
+}
+
 // AccountInfo returns the ACME account metadata.
 func (m *Manager) AccountInfo() AccountInfo {
 	m.mu.Lock()
@@ -328,27 +348,20 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 		return "", fmt.Errorf("create temp: %w", err)
 	}
 	envPath := envFile.Name()
-	defer os.Remove(envPath)
+	envFile.Close()
+	os.Remove(envPath)
+
+	// v1.6.56: 凭证注入改用 cmd.Env，消除 shell 注入风险
+	cmd := exec.CommandContext(ctx, m.acmeShPath, args...)
+	cmd.Dir = certDir
+	cmdEnv := os.Environ()
 	if mapping.env != "" {
-		fmt.Fprintf(envFile, "export %s='%s'\n", mapping.env, strings.ReplaceAll(dp.KeyID, "'", "'\\''"))
+		cmdEnv = append(cmdEnv, mapping.env+"="+dp.KeyID)
 	}
 	if mapping.secret != "" {
-		fmt.Fprintf(envFile, "export %s='%s'\n", mapping.secret, strings.ReplaceAll(dp.KeySecret, "'", "'\\''"))
+		cmdEnv = append(cmdEnv, mapping.secret+"="+dp.KeySecret)
 	}
-	// L1: 华为云等需要额外环境变量(如 HUAWEICLOUD_DomainID)
-	if mapping.extraEnv != "" {
-		// extraEnv 是环境变量名，值从 DNS Key 的 notes 字段中提取（如果用户配置了）
-		// 对于华为云: HUAWEICLOUD_DomainID 需要在 DNS Key 备注中配置 domain_id=xxx
-		fmt.Fprintf(envFile, "export %s='${%s:-}'\n", mapping.extraEnv, mapping.extraEnv)
-	}
-	envFile.Close()
-	os.Chmod(envPath, 0o600)
-
-	// Source the env file then run acme.sh
-	cmd := exec.CommandContext(ctx, "sh", "-c",
-		fmt.Sprintf(". '%s' && exec '%s' %s", envPath, m.acmeShPath, strings.Join(args, " ")))
-	cmd.Dir = certDir
-	cmd.Env = os.Environ()
+	cmd.Env = cmdEnv
 
 	log.Printf("[acme] %s %s", m.acmeShPath, strings.Join(args, " "))
 	out, err := cmd.CombinedOutput()
@@ -407,8 +420,18 @@ func (m *Manager) issueCert(ctx context.Context, domains []string, ct string) (s
 			return "", fmt.Errorf("accept: %w", err)
 		}
 		if _, err := m.acmeClient.WaitAuthorization(ctx, authz.URI); err != nil {
+			if ct == "http-01" {
+				m.challengeMu.Lock()
+				delete(m.challenges, challenge.Token)
+				m.challengeMu.Unlock()
+			}
 			m.AppendLog(fmt.Sprintf("Validation failed: %v\n", err))
 			return "", fmt.Errorf("wait: %w", err)
+		}
+		if ct == "http-01" {
+			m.challengeMu.Lock()
+			delete(m.challenges, challenge.Token) // v1.6.56 M6: 验证完成立即清理，防内存泄漏
+			m.challengeMu.Unlock()
 		}
 		m.AppendLog(fmt.Sprintf("Validation OK: %s\n", authz.Identifier.Value))
 	}
@@ -462,6 +485,18 @@ func (m *Manager) issueCert(ctx context.Context, domains []string, ct string) (s
 	return firstDomain, nil
 }
 
+// isACMECert checks whether meta.json data marks this cert as ACME-issued.
+// Uses json.Unmarshal instead of strings.Contains to be immune to JSON whitespace
+// differences (e.g. "acme":true vs "acme": true from json.MarshalIndent).
+func isACMECert(data []byte) bool {
+	var m map[string]interface{}
+	if json.Unmarshal(data, &m) != nil {
+		return false
+	}
+	v, ok := m["acme"]
+	return ok && v == true
+}
+
 func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 	m.mu.Lock()
 	certsDir := m.certsDir
@@ -478,7 +513,7 @@ func (m *Manager) Renew(ctx context.Context) (renewed []string) {
 		if !e.IsDir() { continue }
 		certDir := filepath.Join(certsDir, e.Name())
 		data, _ := os.ReadFile(filepath.Join(certDir, "meta.json"))
-		if !strings.Contains(string(data), `"acme":true`) { continue }
+		if !isACMECert(data) { continue }
 		// Only renew certs belonging to this ACME account.
 		// Legacy certs without "email" are handled by the first Manager that scans them.
 		if strings.Contains(string(data), `"email"`) && !strings.Contains(string(data), `"`+email+`"`) {
@@ -546,7 +581,7 @@ func (m *Manager) RenewByName(ctx context.Context, certName string) (renewed boo
 		setLastErr(fmt.Errorf("meta read: %w", err))
 		return false
 	}
-	if !strings.Contains(string(data), `"acme":true`) {
+	if !isACMECert(data) {
 		setLastErr(fmt.Errorf("not an ACME cert"))
 		return false
 	}
@@ -659,10 +694,26 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 	// C2: 先生成双 PFX 文件（Modern + Legacy），后续算 hash 时包含它们
 	// v1.5.36 C1: 从 meta.json 读取已存储的 PFX 密码，防止自动续签覆盖用户自定义密码
 	if certPEM != nil && keyPEM != nil {
-		pfxPassword := "ddns"
+		// 继承已存储的 PFX 密码。
+		// 优先从 meta.json 读取（首次签发时持久化的），
+		// 其次从 Manager bundle 目录读取（handleACMEIssue 写入的）。
+		pfxPassword := mycrypto.DefaultPFXPassword
 		if pw, ok := metaMap["pfx_password"]; ok {
 			if pws, ok := pw.(string); ok && pws != "" {
 				pfxPassword = pws
+			}
+		}
+		if pfxPassword == mycrypto.DefaultPFXPassword {
+			bundleDir := filepath.Join(filepath.Dir(certDir), "acme-"+filepath.Base(certDir))
+			if bundleData, err := os.ReadFile(filepath.Join(bundleDir, "meta.json")); err == nil {
+				var bundleMeta map[string]interface{}
+				if json.Unmarshal(bundleData, &bundleMeta) == nil {
+					if pw, ok := bundleMeta["pfx_password"]; ok {
+						if pws, ok := pw.(string); ok && pws != "" {
+							pfxPassword = pws
+						}
+					}
+				}
 			}
 		}
 		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword)

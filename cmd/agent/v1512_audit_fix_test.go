@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // TestReloadServicesPropagation validates C1 fix: ReloadServices is propagated

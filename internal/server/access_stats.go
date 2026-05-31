@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/sysinfo"
+	"github.com/ocoj/ddns-manager/internal/sysinfo"
 )
 
 // accessStats 持久化配置

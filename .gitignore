@@ -1,15 +1,16 @@
 # 构建产物
 build/
-agent.exe
 
 # 运行数据
 data/
+memory/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
@@ -18,18 +19,29 @@ Thumbs.db
 # 临时文件
 *.bak
 *.tmp
+*.new
+*.linktmp
 
-# 本地编译产物 (根目录)
+# 本地编译产物
 /agent
+/agent.exe
 /installer
+/installer.exe
+/installer-linux
+/installer-windows.exe
 /manager
-agent.exe
-ddns-manager
-node-agent
-ddns-installer
+/upgrade-helper.exe
+/ddns-manager-*
+/node-agent
+/ddns-installer*
 
-# 备份文件
-*.bak
+# 机密文件
 admin_token.txt
-installer.exe
-upgrade-helper.exe
+.storage_key
+.pfx_password
+
+# 内部开发文档（审计报告等，不公开）
+internal-docs/
+
+# 备份
+docs_backup_*

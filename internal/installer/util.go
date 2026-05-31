@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -66,7 +66,7 @@ func FindLocalAgent(dir string) string {
 			return filepath.Join(dir, e.Name())
 		}
 		// Linux: no .exe suffix
-		if runtime.GOOS != "windows" && strings.HasPrefix(n, "node-agent") && !strings.Contains(n, ".") {
+		if runtime.GOOS != "windows" && strings.HasPrefix(n, "node-agent") {
 			return filepath.Join(dir, e.Name())
 		}
 	}
@@ -173,6 +173,25 @@ func ReadLine(reader *bufio.Reader) (string, error) {
 		buf.WriteRune(r)
 		fmt.Print(string(r))
 	}
+}
+
+// ── Integrity ──
+
+// VerifyAgentChecksum validates the SHA256 checksum of a binary file.
+// If expected is empty, verification is skipped (backward-compatible).
+func VerifyAgentChecksum(path, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("读取二进制失败: %w", err)
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(data))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum 不匹配:\n  期望: %s\n  实际: %s", expected, actual)
+	}
+	return nil
 }
 
 // ── Retry ──

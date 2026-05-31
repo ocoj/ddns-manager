@@ -1,0 +1,4 @@
+bash: line 28: warning: here-document at line 2 delimited by end-of-file (wanted `SCRIPTEOF')
+[sudo] password for lsj: Sorry, try again.
+[sudo] password for lsj: Sorry, try again.
+[sudo] password for lsj: sudo: 3 incorrect password attempts

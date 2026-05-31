@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // TestCertDeploy_IISFailKeepsOldHash validates C1:

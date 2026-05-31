@@ -1,4 +1,4 @@
-module github.com/kk/ddns-manager
+module github.com/ocoj/ddns-manager
 
 go 1.25.0
 

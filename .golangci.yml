@@ -1,0 +1,48 @@
+# golangci-lint 配置文件
+# 文档: https://golangci-lint.run/usage/configuration/
+---
+version: "2"
+run:
+  timeout: 3m
+  tests: true
+  allow-parallel-runners: true
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  sort-results: true
+linters:
+  default: none
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - misspell
+    - gofmt
+    - whitespace
+  settings:
+    staticcheck:
+      checks:
+        - all
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party/
+      - vendor/
+      - _deprecated/
+      - data/
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

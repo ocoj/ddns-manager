@@ -4,7 +4,7 @@ package server
 import (
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // TestReloadServices_Propagation 验证 C1 修复：

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // replaceRunningBinary 用版本化文件名+符号链接替换当前运行的 Agent。

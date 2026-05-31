@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // TestCompareVer_SemanticComparison verifies that model.CompareSemVer correctly

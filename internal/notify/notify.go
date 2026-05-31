@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
+	"mime"
 	"net"
 	"net/smtp"
 	"strings"
@@ -32,6 +33,10 @@ type Config struct {
 	NotifyConfigChange  bool `json:"notify_config_change"`
 	NotifySystemError   bool `json:"notify_system_error"`
 	NotifyCertExpiry    bool `json:"notify_cert_expiry"`
+	// notification cooldown in minutes (0 = no cooldown, -1 = use default)
+	HeartbeatFailCooldown int `json:"heartbeat_fail_cooldown"` // 默认 60
+	AuthFailCooldown      int `json:"auth_fail_cooldown"`       // 默认 30
+	UnknownNodeCooldown   int `json:"unknown_node_cooldown"`    // 默认 30
 }
 
 func (c *Config) now() time.Time {
@@ -200,8 +205,10 @@ func (c *Config) send(subject, body string) error {
 	// v1.5.33: 发件人显示名 "DDNS-Manager", HTML 邮件支持
 	displayFrom := fmt.Sprintf("DDNS-Manager <%s>", c.Username)
 	htmlBody := wrapHTML(subject, body)
+	// v1.6.57 L5: RFC 2047 编码非 ASCII Subject，兼容严格邮件服务器
+	encodedSubject := mime.BEncoding.Encode("UTF-8", subject)
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		displayFrom, c.To, subject, htmlBody)
+		displayFrom, c.To, encodedSubject, htmlBody)
 
 	if c.Port == 465 {
 		return c.sendTLS(addr, msg)

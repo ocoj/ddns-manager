@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 	"golang.org/x/sys/windows"
 )
 

@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/installer"
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/installer"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 var version = "dev"
@@ -28,6 +29,8 @@ var defaultBaseDir = `C:\ddns-agent`
 
 func main() {
 	uninstall := flag.Bool("uninstall", false, "remove all traces")
+	checksumFlag := flag.String("checksum", "", "agent binary SHA256 checksum (optional)")
+	insecure := flag.Bool("insecure", false, "skip TLS verification (dev only)")
 	flag.Parse()
 
 	if *uninstall {
@@ -36,12 +39,13 @@ func main() {
 		return
 	}
 
-	runInstall()
+	runInstall(*checksumFlag, *insecure)
 }
 
-func runInstall() {
+func runInstall(checksum string, insecure bool) {
 	reader := bufio.NewReader(os.Stdin)
 	installer.SetConsoleUTF8()
+	winInsecure = insecure // v1.6.58: 支持自签证书环境
 
 	if !installer.IsAdmin() {
 		fmt.Println("[错误] 请右键以管理员身份运行 install.bat")
@@ -90,6 +94,11 @@ func runInstall() {
 			installer.StopAgent()
 
 			binPath := installer.FindLocalAgent(installer.ExeDir())
+			if binPath != "" {
+				if err := installer.VerifyAgentChecksum(binPath, checksum); err != nil {
+					log.Fatalf("[!] 二进制完整性校验失败: %v", err)
+				}
+			}
 			if binPath == "" {
 				log.Fatal("未找到 node-agent-*.exe\n  请确保 ZIP 内所有文件已完整解压到同一目录")
 			}
@@ -160,7 +169,7 @@ func runInstall() {
 		}
 		baseURL = strings.TrimRight(managerURL, "/")
 		fmt.Printf("  测试连接 %s/api/ping ... ", baseURL)
-		pingResp, pingErr := http.Get(baseURL + "/api/ping")
+		pingResp, pingErr := winHTTPClient().Get(baseURL + "/api/ping")
 		if pingErr != nil {
 			fmt.Printf("失败: %v\n", pingErr)
 			fmt.Print("  重新输入, 或输入 Q 退出: ")
@@ -251,6 +260,11 @@ func runInstall() {
 	fmt.Println()
 	fmt.Println("  [3/4] 安装 Agent")
 	binPath := installer.FindLocalAgent(installer.ExeDir())
+	if binPath != "" {
+		if err := installer.VerifyAgentChecksum(binPath, checksum); err != nil {
+			log.Fatalf("[!] 二进制完整性校验失败: %v", err)
+		}
+	}
 	if binPath == "" {
 		log.Fatal("未找到 node-agent-*.exe\n  请确保 ZIP 内所有文件已完整解压到同一目录")
 	}
@@ -286,7 +300,7 @@ func runInstall() {
 		Fingerprint: fingerprint,
 		Password:    password,
 		CertPath:    filepath.Join(defaultBaseDir, "certs"),
-		VerifySSL:   true,
+		VerifySSL:   !insecure, // v1.6.58: 与 -insecure 标志同步
 	}
 	if err := installer.SaveConfig(cfg, agentConfigPath); err != nil {
 		log.Fatalf("写入配置失败: %v", err)
@@ -313,13 +327,26 @@ func runInstall() {
 
 // ── Networking ──
 
+// newHTTPClient v1.6.58: 支持 -insecure 跳过 TLS 验证 (内网自签证书环境)。
+var winInsecure bool
+
+func winHTTPClient() *http.Client {
+	if winInsecure {
+		return &http.Client{
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			Timeout:   15 * time.Second,
+		}
+	}
+	return &http.Client{Timeout: 15 * time.Second}
+}
+
 func registerNode(baseURL, nodeName, fingerprint, password string) error {
 	body, _ := json.Marshal(map[string]string{
 		"node_id":     nodeName,
 		"fingerprint": fingerprint,
 		"password":    password,
 	})
-	resp, err := http.Post(baseURL+"/api/register", "application/json", strings.NewReader(string(body)))
+	resp, err := winHTTPClient().Post(baseURL+"/api/register", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
@@ -339,7 +366,7 @@ type checkResult struct {
 }
 
 func checkNodeFingerprint(baseURL, nodeName string) (bool, string) {
-	resp, err := http.Get(baseURL + "/api/nodes/" + nodeName + "/fingerprint")
+	resp, err := winHTTPClient().Get(baseURL + "/api/nodes/" + nodeName + "/fingerprint")
 	if err != nil {
 		return false, ""
 	}

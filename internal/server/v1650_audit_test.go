@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // ─── H1: Server 端 SanitizeCertDirName 调用验证 ───

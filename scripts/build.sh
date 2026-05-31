@@ -148,7 +148,7 @@ build_manager() {
 
     out="$BUILD_DIR/ddns-manager-linux-${arch}"
     GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
-        go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
+        go build -trimpath -ldflags "$LDFLAGS -X main.installerVersion=${INSTALLER_VERSION}" -o "$out" .
 
     ver_out="$BUILD_DIR/ddns-manager-v${VER_NUM}-linux-${arch}"
     cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
@@ -196,6 +196,10 @@ build_installer_linux() {
         go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
     chmod +x "$out"
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
+    ver_out="$BUILD_DIR/ddns-installer-v${INSTALLER_VERSION}-linux-${arch}"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
+    chmod +x "$ver_out"
+    echo "  ✅ $ver_out (versioned)"
 }
 
 # ── Windows 安装器 (新, v1.6.30+) ──
@@ -210,6 +214,9 @@ build_installer_windows() {
     GOOS=windows GOARCH="$arch" CGO_ENABLED=0 \
         go build -trimpath -ldflags "$INSTALLER_LDFLAGS" -o "$out" .
     echo "  ✅ $out ($(du -h "$out" | cut -f1))"
+    ver_out="$BUILD_DIR/ddns-installer-v${INSTALLER_VERSION}-windows-${arch}.exe"
+    cp "$out" "$ver_out.tmp" && mv "$ver_out.tmp" "$ver_out"
+    echo "  ✅ $ver_out (versioned)"
 }
 
 # ── Installer (旧版 v1.0.0 冻结, v1.6.42 归档到 cmd/_deprecated/installer/ — 以下函数保留为历史参考) ──
@@ -263,16 +270,16 @@ pack_windows_zip() {
     echo "  OK install.bat (v${VER_NUM})"
 
     # 生成 README.txt（替换版本号占位符）
-    local readme_src="$PROJECT_DIR/build/README.txt.in"
+    local readme_src="$PROJECT_DIR/cmd/manager/static/README.txt.in"
     local readme_out="$BUILD_DIR/README.txt"
     sed "s/__VERSION__/${VER_NUM}/g" "$readme_src" > "$readme_out"
     echo "  OK README.txt (v${VER_NUM})"
 
-    # 打包 zip: installer.exe + node-agent.exe + install.bat + README.txt
+    # 打包 zip: 使用非版本化文件名（install.bat 依赖固定名称查找）
     local zip_name="ddns-manager-install-v${VER_NUM}-windows-amd64.zip"
     local zip_path="$BUILD_DIR/$zip_name"
-    local installer_exe="$BUILD_DIR/ddns-installer-v${VER_NUM}-windows-amd64.exe"
-    local agent_exe="$BUILD_DIR/node-agent-v${VER_NUM}-windows-amd64.exe"
+    local installer_exe="$BUILD_DIR/ddns-installer-windows-amd64.exe"
+    local agent_exe="$BUILD_DIR/node-agent-windows-amd64.exe"
 
     if command -v zip &>/dev/null; then
         cd "$BUILD_DIR"

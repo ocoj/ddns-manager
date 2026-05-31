@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/provider"
 )
 
 // ── LogBuffer ──

@@ -341,6 +341,9 @@ func (m *Manager) rotateIfNeeded() {
 	if time.Since(m.lastRotate) < 5*time.Minute {
 		return
 	}
+	// v1.6.57 L4: 持 fileMu 保护 m.file 读写，消除与 Log() 中文件写入的 data race
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
 	info, err := m.file.Stat()
 	if err != nil {
 		return
@@ -360,6 +363,11 @@ func (m *Manager) rotateIfNeeded() {
 	f, err := os.OpenFile(m.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		log.Printf("[logger] 轮转失败: %v", err)
+		// v1.6.56 M5: 重试一次打开以防瞬态错误，避免 m.file 指向已关闭 fd
+		if f2, err2 := os.OpenFile(m.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err2 == nil {
+			m.file = f2
+			m.lastRotate = time.Now()
+		}
 		return
 	}
 	m.file = f
@@ -627,6 +635,7 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 
 	// v1.6.51: if query range starts before ring buffer oldest event,
 	// fall through to disk scan for complete results.
+	// v1.6.53: also trigger disk scan when only "to" is set and buffer has rotated
 	needDisk := false
 	if !from.IsZero() {
 		m.mu.Lock()
@@ -644,6 +653,11 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 			}
 		}
 		m.mu.Unlock()
+	}
+	// v1.6.53: when only "to" is set, buffer rotation means older events
+	// within the range may have been evicted → fall back to disk for completeness
+	if !needDisk && !to.IsZero() && m.writeIdx > m.maxSize {
+		needDisk = true
 	}
 
 	var filtered []Event
@@ -708,6 +722,7 @@ func (m *Manager) QueryByTime(category, status, node string, from, to time.Time,
 // Used by handleGetLogs to return accurate pagination totals.
 func (m *Manager) CountByTime(category, status, node string, from, to time.Time) int {
 	// v1.6.51: if query range starts before ring buffer, scan disk for accurate count.
+	// v1.6.53: also trigger disk scan when only "to" is set and buffer has rotated
 	needDisk := false
 	if !from.IsZero() {
 		m.mu.Lock()
@@ -725,6 +740,11 @@ func (m *Manager) CountByTime(category, status, node string, from, to time.Time)
 			}
 		}
 		m.mu.Unlock()
+	}
+	// v1.6.53: when only "to" is set, buffer rotation means older events
+	// within the range may have been evicted → fall back to disk for completeness
+	if !needDisk && !to.IsZero() && m.writeIdx > m.maxSize {
+		needDisk = true
 	}
 	if needDisk {
 		return len(m.queryDiskLogs(category, status, node, from, to))
@@ -779,7 +799,7 @@ func (m *Manager) KnownCategories() []string {
 	return []string{
 		"dns-update", "agent", "heartbeat", "auth", "upgrade",
 		"health", "config", "management", "cert", "dns-key",
-		"smtp", "system", "节点",
+		"smtp", "system", "节点", "rate-limit", "installer", "acme",
 	}
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"net"
 	"net/http"
@@ -8,9 +9,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/store"
+	"github.com/ocoj/ddns-manager/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// ctxKeyTrustedProxy 上下文键：标记请求来自受信反向代理
+type ctxKey int
+
+const ctxKeyTrustedProxy ctxKey = iota
 
 type rateLimiter struct {
 	mu       sync.Mutex
@@ -24,7 +30,6 @@ type tokenBucket struct {
 	tokens   float64
 	lastTime time.Time
 }
-
 
 func newRateLimiter(reqPerMin int) *rateLimiter {
 	rl := &rateLimiter{
@@ -63,7 +68,9 @@ func (rl *rateLimiter) cleanupStale() {
 }
 
 func (rl *rateLimiter) allow(clientIP string) bool {
-	if rl.capacity <= 0 { return true }
+	if rl.capacity <= 0 {
+		return true
+	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
@@ -75,17 +82,82 @@ func (rl *rateLimiter) allow(clientIP string) bool {
 	}
 	elapsed := now.Sub(b.lastTime).Seconds()
 	b.tokens += elapsed * float64(rl.capacity) / rl.interval.Seconds()
-	if b.tokens > float64(rl.capacity) { b.tokens = float64(rl.capacity) }
+	if b.tokens > float64(rl.capacity) {
+		b.tokens = float64(rl.capacity)
+	}
 	b.lastTime = now
-	if b.tokens >= 1 { b.tokens--; return true }
+	if b.tokens >= 1 {
+		b.tokens--
+		return true
+	}
+	return false
+}
+
+// applyTrustedProxy sets the trusted proxy context flag on the request
+// if the connection originates from one of the configured trusted proxy IPs or CIDR ranges.
+func (s *Server) applyTrustedProxy(r *http.Request) *http.Request {
+	tp := s.GetTrustedProxy()
+	if tp == "" {
+		return r
+	}
+	host := remoteHost(r)
+	if host != "" && isTrustedProxyHost(host, tp) {
+		ctx := context.WithValue(r.Context(), ctxKeyTrustedProxy, true)
+		return r.WithContext(ctx)
+	}
+	return r
+}
+
+func remoteHost(r *http.Request) string {
+	if r == nil || r.RemoteAddr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func isTrustedProxyHost(host, cfg string) bool {
+	if host == "" || cfg == "" {
+		return false
+	}
+	for _, entry := range strings.Split(cfg, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if ip := net.ParseIP(entry); ip != nil {
+			if host == ip.String() {
+				return true
+			}
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			if parsedHost := net.ParseIP(host); parsedHost != nil && network.Contains(parsedHost) {
+				return true
+			}
+			continue
+		}
+		if host == entry {
+			return true
+		}
+	}
 	return false
 }
 
 func clientIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" { return ip }
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if i := strings.IndexByte(fwd, ','); i >= 0 { return strings.TrimSpace(fwd[:i]) }
-		return fwd
+	// v1.6.56: 仅当受信代理中间件设置了上下文标记时才信任 X-Real-IP / X-Forwarded-For
+	if _, ok := r.Context().Value(ctxKeyTrustedProxy).(bool); ok {
+		if ip := r.Header.Get("X-Real-IP"); ip != "" {
+			return ip
+		}
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			if i := strings.IndexByte(fwd, ','); i >= 0 {
+				return strings.TrimSpace(fwd[:i])
+			}
+			return fwd
+		}
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return host
@@ -93,6 +165,7 @@ func clientIP(r *http.Request) string {
 
 func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = s.applyTrustedProxy(r)
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") {
 			jsonErr(w, http.StatusUnauthorized, "unauthorized")
@@ -127,7 +200,9 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 // ── public ──
 
 func (s *Server) reloadRateLimit(cfg *store.RateLimitConfig) {
-	if cfg == nil { return }
+	if cfg == nil {
+		return
+	}
 	s.rateLock.Lock()
 	defer s.rateLock.Unlock()
 
@@ -154,6 +229,7 @@ func (s *Server) reloadRateLimit(cfg *store.RateLimitConfig) {
 // rateLimitMiddleware applies rate limiting based on config.
 func (s *Server) rateLimitMiddleware(h http.HandlerFunc, isHeartbeat, isLogin bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r = s.applyTrustedProxy(r)
 		s.accessCollector.record(clientIP(r))
 		s.rateLock.RLock()
 		hbLim := s.heartbeatLimiter

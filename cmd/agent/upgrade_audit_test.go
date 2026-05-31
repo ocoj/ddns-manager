@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/crypto"
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/crypto"
+	"github.com/ocoj/ddns-manager/internal/model"
 )
 
 // ====== Test 1: 正常场景 — ReplaceRunningBinary 版本化文件名正确 ======

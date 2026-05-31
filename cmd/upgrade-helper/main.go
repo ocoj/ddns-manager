@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +47,14 @@ func main() {
 	oldPidStr := os.Args[1]
 	newExe := os.Args[2]
 	curExe := os.Args[3]
+
+	// v1.6.56: 纵深防御 — 约束 newExe 必须在 curExe 同目录下
+	curDir := filepath.Dir(filepath.Clean(curExe))
+	newClean := filepath.Clean(newExe)
+	if !strings.HasPrefix(newClean, curDir+string(os.PathSeparator)) {
+		fmt.Fprintf(os.Stderr, "[!] 安全拒绝: newExe %q 不在 Agent 目录 %q 下\n", newExe, curDir)
+		os.Exit(1)
+	}
 
 	// 将 stderr/stdout 重定向到日志文件
 	logPath := curExe + ".upgrade.log"
@@ -132,12 +141,19 @@ func replaceBinary(newExe, curExe string) bool {
 	if err != nil {
 		fmt.Printf("[%s] MoveFileEx 失败: %v, 尝试 delete+rename\n",
 			time.Now().Format(time.RFC3339), err)
-		// 降级方案: 先尝试删除旧文件, 再 rename
-		os.Remove(curExe)
-		if err := os.Rename(newExe, curExe); err != nil {
-			fmt.Printf("[%s] rename 也失败: %v\n", time.Now().Format(time.RFC3339), err)
+		// v1.6.56 H2: 降级方案 — 备份-替换-清理 模式，防止先删后改失败导致永久离线
+		oldBak := curExe + ".bak"
+		os.Remove(oldBak) // 清理上次残留备份
+		if err := os.Rename(curExe, oldBak); err != nil {
+			fmt.Printf("[%s] 备份旧文件失败: %v\n", time.Now().Format(time.RFC3339), err)
 			return false
 		}
+		if err := os.Rename(newExe, curExe); err != nil {
+			fmt.Printf("[%s] 新文件替换失败: %v, 正在恢复旧文件\n", time.Now().Format(time.RFC3339), err)
+			os.Rename(oldBak, curExe) // 尽力恢复
+			return false
+		}
+		os.Remove(oldBak) // 成功, 清理备份
 	}
 	return true
 }

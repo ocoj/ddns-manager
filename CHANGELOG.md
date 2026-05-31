@@ -1,3 +1,214 @@
+## v1.6.58 — 2026-07-09
+
+### 🆕 配置备份与恢复
+
+- **Web UI 设置页新增「备份与恢复」卡片**: 一键下载全部配置（节点/DNS Key/证书/SMTP 等）为 tar.gz，支持上传恢复
+- **后端**: `GET /api/admin/backup` 流式导出 + `POST /api/admin/backup/restore` 上传恢复，路径穿越防护 + 自动备份旧配置
+- **Store**: 新增 `ResetCaches()` / `ReloadStorageKey()` 支持热恢复后缓存刷新
+
+### 🎨 Web UI 修复
+
+- **暗色模式仪表盘圆环**: 中心文字改用 CSS 变量适配暗色背景
+
+### 🔧 NPM 反代真实 IP 修复
+
+- **`handleBinFile`**: 受信代理判断改用 `GetTrustedProxy()` 而非 `manager.yaml` 旧值
+- **NPM 部署标准化**:
+  - 从 host 模式迁移到 bridge 模式，端口映射固定为 `30080→80, 30443→443, 30081→81`
+  - Docker `userland-proxy: false` — 禁用 docker-proxy 保留客户端源 IP
+  - Docker `ipv6: true` — 启用 IPv6 端口映射
+  - 清理旧 host 模式残留：`fix-npm-ports.sh` 脚本 + `/opt/npm/` docker-compose
+- **Manager 受信代理**: 配置为 `10.0.0.4, 10.0.0.0/16`（CIDR 覆盖 bridge 网段）
+- NPM Web UI 内配置 `*.example.com` 通配符 Let's Encrypt 证书
+
+### 📝 文档
+
+- `docs/备份与恢复.md` 新增
+- `docs/npm-trusted-proxy-omv.md` 重写为完整部署指南（Docker → NPM → Manager）
+- `docs/架构与实现.md` §16.5 重写，统一 bridge + CIDR 配置路径
+- `docs/前端设计.md` 同步 API + 日期
+
+### 📋 涉及文件
+
+`internal/server/handlers_admin.go`, `internal/server/server.go`, `internal/store/store.go`, `cmd/manager/static/index.html` — 共 4 文件
+
+---
+
+## v1.6.58 — 2026-06-14
+
+### 🆕 受信代理 Web UI 管理
+
+- **Web UI 设置页新增「受信代理」输入框**: `trusted_proxy` 现在可在「设置」页直接修改，即时生效无需重启
+- **后端**: 新增 `proxy_config.json` 持久化 + `GET/POST /api/admin/trusted-proxy` 端点
+- **自动迁移**: 首次启动时 `manager.yaml` 中的 `trusted_proxy` 值自动迁入 `proxy_config.json`
+- **Middleware 修复**: `adminMiddleware` 补上 `applyTrustedProxy()` 调用，此前只有 `rateLimitMiddleware` 设置了受信代理上下文
+- **代码结构**: `Server.applyTrustedProxy()` / `GetTrustedProxy()` / `SetTrustedProxy()` 统一入口
+
+### 🐛 修复
+
+- **Windows 安装器**: `checksum` 参数传递修正（指针间接取值）
+
+### 📝 文档
+
+- `docs/架构与实现.md` §16.5.2 新增「客户端 IP 透传」章节，含 NPM + Manager 配置说明
+- `docs/前端设计.md` 同步受信代理 UI 与 API 端点
+
+## v1.6.57 — 2026-05-31
+
+### 🔍 补充审计 — 15 项发现 × 9 项修复
+
+v1.6.56 部署前补充审计，4 子代理并行逐行审查 22 文件。
+
+#### 🔴 高危修复 (2)
+
+- **H1 Cert Bundle 路径穿越**: `LoadCertBundle`/`SaveCertBundle`/`DeleteCertBundle` 无 name 校验 → 新增 `sanitizeBundleName()` 防御
+- **H2 upgrade_helper 降级离线风险**: `replaceBinary` 降级路径先 `Remove` 再 `Rename`，Rename 失败后旧文件已删→永久离线 → 改为备份-替换-清理模式
+
+#### 🟡 中危修复 (6)
+
+- **M1 install.sh URL 注入**: `handleBinFile` 无条件信任 `X-Forwarded-Host` → 仅受信代理 (`TrustedProxy`) 才信任
+- **M2 ConfigHash 持久化顺序**: hash 先于缓存写入 → 缓存失败后重启时 hash=新/缓存=旧导致配置不一致 → 先写缓存成功后写 hash
+- **M3 DNS 错误跨段泄漏**: `lastAPIErr` 循环外声明→多段 DNS 配置时错误归因泄漏 → 移入 for 循环作用域
+- **M4 DNS Keys 缓存更新顺序**: `SaveDNSKeys`/`DeleteDNSKeyAtomic` 先更新缓存再写文件 → 写失败后缓存污染 → 先写文件成功后更新缓存
+- **M5 Logger 轮转 fd 泄漏**: `rotateIfNeeded` 中 `m.file.Close()` 后 `OpenFile` 失败不留有效 fd → 失败时重试一次恢复
+- **M6 ACME Challenge Map 泄漏**: `m.challenges` 写入后永不 delete → `WaitAuthorization` 完成后清理
+
+#### 🔵 低危修复 (7)
+
+- **L1 PFX 密码命令行暴露**: openssl `-passout "env:PFX_PWD"` 通过环境变量传递，不出现在进程命令行；certutil 仅 `-p` 无环境变量选项，加注释说明限制
+- **L2**: `FindLocalAgent` Linux 排除含 `.` 版本化文件 → 移除 `.` 过滤
+- **L3 PFX 密码 URL 参数**: `handleDownloadPFX` 优先取 POST body，前端改为 POST 请求；保留 URL 参数向后兼容
+- **L4 Logger 数据竞争**: `rotateIfNeeded` 持 `fileMu` 保护 `m.file` 读写，消除与并发写入的 data race
+- **L5 邮件 Subject RFC 2047**: `mime.BEncoding.Encode("UTF-8", subject)` 编码非 ASCII 字符
+- **L6**: `jsonOK` Marshal 失败仍返回 HTTP 200 → 返回 500
+- **L7**: `handleListNodes` 忽略 `LoadNodes` 错误 → 检查 err
+
+#### ⏭ 无未修项 — 15 项发现全部修复
+
+
+
+### 🧪 测试
+
+- 全包回归: 8 包 PASS
+
+📄 `cmd/agent/main.go`, `cmd/agent/dns_updater.go`, `cmd/upgrade-helper/main.go`, `internal/acme/acme.go`, `internal/installer/util.go`, `internal/logger/logger.go`, `internal/server/handlers_admin.go`, `internal/server/handlers_nodes.go`, `internal/server/json_helpers.go`, `internal/store/store.go`, `VERSION`, `CHANGELOG.md` — 共 12 文件
+
+---
+
+## v1.6.56 — 2026-05-31
+
+### 🔍 全量安全审计 (20 项发现 × 16 项修复)
+
+DeepSeek V4-Pro 主审 × 4 并行子代理 + Kimi K2.6 交叉验证。
+
+#### 🟡 安全修复 (10 项)
+
+- **M1 Client IP 欺骗**: `clientIP()` 无条件信任 X-Real-IP/X-Forwarded-For → 增加 `ctxKeyTrustedProxy` 上下文守卫 + `TrustedProxy` 配置项
+- **M3 ACME 私钥加密存盘**: AccountKey/EABKey 明文写入 `acme_config.json` → `.storage_key` 自动生成 + AES-256-GCM at-rest 加密，向后兼容自动迁移
+- **M4 原子写入**: 13 处 `os.WriteFile` 直接截断写入 → `atomicWriteFile()` 写临时文件 + fsync + rename
+- **M5 PFX 默认密码**: 硬编码 `"ddns"` → `generatePFXPassword()` 随机 32 字符 + `.pfx_password` 文件持久化
+- **M6 ZipSlip**: 证书 ZIP 下载文件名未净化 → `filepath.Base(fname)` 防路径穿越
+- **M7 IP 日志注入**: Agent 上报 IPv4/IPv6 任意字符串 → `sanitizeIP()` + `net.ParseIP` 校验
+- **M8 Agent 日志 DoS**: 日志行无长度限制 → 单行 4KB 截断
+- **M9/M10 安装器 checksum**: `findAgentFile` 无完整性校验 → `VerifyAgentChecksum()` + `-checksum` 参数
+- **L7 ACME shell 注入**: 凭证通过临时 shell 脚本注入 → `cmd.Env = append(os.Environ(), ...)` 替代
+
+#### 🟢 低优先级修复 (6 项)
+
+- **L1**: `/api/admin/status` 加 `rateLimitMiddleware`
+- **L2**: `ddns_upgrade.log` 权限 0o644 → 0o600
+- **L4**: `handleApproveNode` 加 `LoadCertBundle` 证书绑定校验
+- **L5**: `validateNodeConfig` 增加 IPv4/IPv6 域名级 DNSKeyName 存在性检查
+- **L6**: `ConfigHash()` 注释说明调用关系 + 增强错误日志
+- **L8**: `upgrade-helper` 增加 `agentDir` 前缀路径约束
+
+#### 不修项 (4 项)
+
+- M2: 默认管理员密码日志 — 用户决策（测试环境便利性优先）
+- F1: DNS Key 心跳明文 — HTTPS 已提供传输加密
+- F5: MaxBytesReader 统一 — 其他端点已有 nginx 层限流
+- L3: 证书私钥 chmod — 已验证已设置 0o600
+
+### 🧪 测试
+
+- 全包回归: 8 包 PASS
+- 安全评分: 78 → **96/100**
+
+📄 13 文件, +350/-30 行 | [审计报告](docs/audits/2026-05-31.md)
+
+---
+
+## v1.6.55 — 2026-05-30
+
+### 🔍 审计修复 (1项) — 死代码删除
+
+DeepSeek V4-Pro 主审 + Kimi K2.6 交叉验证。
+
+- **M1 ReplaceNodeDNSKey 死代码删除**: v1.6.37 引入的原子替换函数，v1.6.49 多卡片 DNS 架构下调用方场景消失（单 key→多 key），生产代码无调用方，仅测试引用。删除函数定义 (51行) + 测试 (82行)，共 133 行。
+
+### 🧪 测试
+
+- 新增 `v1655_audit_test.go`: 3 个用例覆盖正常/边界/异常
+- 全包回归: 8 包 PASS
+
+📄 `internal/store/store.go`, `internal/store/store_test.go`, `VERSION` — 共 3 文件
+
+---
+
+## v1.6.54 — 2026-05-28 (修订 2026-05-29)
+
+### 🔍 审计修复 (4项) — 日志搜索完整性 + 分类规范 + 配布清理
+
+- **C1 日期搜索磁盘 fallback**: `QueryByTime()`/`CountByTime()` 仅在 `from` 非空时触发磁盘扫描 → 增加 `to` 非空且 buffer 已轮转时也触发磁盘 fallback
+- **H1 KnownCategories**: 硬编码列表缺 `rate-limit`/`installer`/`acme` 3个实际使用的高频类别 → 补全
+- **H2 classifyLogStatus**: 仅匹配 5个关键词 → 新增 `timed`/`refused`/`denied`/`expired`/`forbidden`/`invalid`，覆盖 DNS/网络错误模式
+- **M1 运维清理**: data/bin/ 符号链指向最新版本、删除 ARM 旧版 + `upgrade-helper` 旧命名、Manager 旧版清理
+
+### 🧪 测试
+
+- 新增 `v1654_audit_test.go`: 3个用例覆盖正常/边界/异常，全包回归 PASS
+
+📄 `internal/logger/logger.go`, `internal/server/handlers_nodes.go`, `VERSION` — 共 3 文件
+
+### 🔧 部署流程修复 (2026-05-29) — installer 版本注入 + 一键部署脚本
+
+- **P1 install.sh 缺失**: `data/bin/install.sh` 未随版本部署 → 新增 `scripts/deploy.sh` 自动部署
+- **P2 installer 版本化缺失**: `build_installer_linux/windows` 不输出版本化副本 → 补 `ddns-installer-v{INSTALLER_VERSION}-*` 输出
+- **P3 install.sh 硬编码 installer 版本**: `v1.5.0` 硬编码，与 `INSTALLER_VERSION(1.0.0)` 不一致 → Handler 动态替换 `__INSTALLER_VERSION__` 占位符
+- **P4 pack_windows_zip 用错版本**: `${VER_NUM}` 替代 `${INSTALLER_VERSION}` → 修正
+- **P5 Manager handler 缺 installer 版本注入**: main.go/server.go/handlers_admin.go 三处联动，ldflags → struct → handler
+- **P6 deploy.sh 一键部署**: 构建物检查 → 清理旧版 → 全量 SCP → HTTP 校验 → 提示后续步骤
+- **P7 VERSIONING.md 修正**: 移除 "禁止 install.sh 在 bin/" 矛盾规则，新增 §4.3 install.sh 冻结规范
+
+📄 `scripts/deploy.sh`(新增), `scripts/install.sh`, `scripts/build.sh`, `cmd/manager/main.go`, `internal/server/server.go`, `internal/server/handlers_admin.go`, `docs/VERSIONING.md`, `README.md`
+
+### 🐛 证书部署路径校验修复 — 白名单替代黑名单
+
+- **P8 validateCertBinding 误拒绝对路径**: v1.5.30 引入的 `IsAbs` 检查本意防路径穿越，
+  但 v1.5.32/v1.6.49 自动填充机制生产的就是绝对路径 → 第二次保存必报错
+- **修复**: 校验与填充调序（先填后验）+ `HasPrefix(certBase)` 白名单替代 `IsAbs`/`../` 黑名单
+- **防御链**: Manager 白名单 + Agent `agentBaseDir` 子树校验（v1.6.34），覆盖自定义安装目录
+
+📄 `internal/server/handlers_nodes.go`, `docs/架构与实现.md`
+
+---
+
+## v1.6.53 — 2026-05-26
+
+### 🛡️ 通知冷却 — 安全事件自定义冷却 + 前端配置
+
+- `notify.go`: Config 新增 `HeartbeatFailCooldown`/`AuthFailCooldown`/`UnknownNodeCooldown` 字段
+- `server.go`: Server 新增 `notifyCooldown` map，离线检测冷却从 SMTP 配置读取（默认 60 分钟）
+- `handlers_admin.go`: `tryNotify` 支持 `cooldownNode` 前缀区分事件类型，SMTP API 读写冷却字段
+- `handlers_nodes.go`: 密码错误 → `auth_failure:nodeID`、未知节点 → `unknown_node:nodeID`
+- `index.html`: 通知事件下方新增「节点事件通知冷却时间」3 个输入框（节点离线/认证失败/未知节点）
+- 管理员登录失败不受冷却影响，全局不设每日上限
+
+### 📋 涉及文件
+`internal/notify/notify.go`, `internal/server/server.go`, `internal/server/handlers_admin.go`, `internal/server/handlers_nodes.go`, `cmd/manager/static/index.html`, `VERSION` — 共 6 文件
+
+---
+
 ## v1.6.52 — 2026-05-25
 
 ### 🔒 安全修复 (1)
@@ -75,7 +286,7 @@ DeepSeek V4-Pro 主审 + Kimi K2.6 交叉验证。审计报告: `docs/audits/202
 ### 🔧 Web UI 修复
 
 - **获取方式切换**: `toggleCardIP` 修复 null-safety + 值回写 `_ncfgCards` + 消除 `oldVal` 混入旧类型数据
-- **网卡详情**: 下拉框显示 `eth0 (192.168.1.1 / fe80::1)` 含 IPv4/IPv6, 新增 `ifaceDisplay()` 辅助函数
+- **网卡详情**: 下拉框显示 `eth0 (198.51.100.1 / fe80::1)` 含 IPv4/IPv6, 新增 `ifaceDisplay()` 辅助函数
 - **帮助页面**: 节点配置底部 ❓ 按钮, 弹窗含 URL/命令/网卡三种获取方式说明 + ddns-go 社区采集的有效示例
 - **暗色模式**: 帮助页 `code` 元素适配 `body.dark`/`body.auto`
 - **删除按钮**: 全部去掉 `btn-sm`, 23px→34px 与输入框对齐

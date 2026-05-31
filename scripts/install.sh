@@ -26,12 +26,13 @@ detect_version() {
         return
     fi
     local json=$(curl -fsSL --connect-timeout 10 "$MANAGER/api/ping" 2>/dev/null || true)
-    local v=$(echo "$json" | sed -n 's/.*"agent_version":"\([^"]*\)".*/\1/p')
-    if [ -n "$v" ]; then
+    # v1.6.58: 用 grep+cut 替代 sed 正则解析 JSON, 更稳健
+    local v=$(echo "$json" | grep -o '"agent_version":"[^"]*"' | cut -d'"' -f4)
+    if [ -n "$v" ] && [ "$v" != "-" ]; then
         echo "$v"
         return
     fi
-    v=$(echo "$json" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+    v=$(echo "$json" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
     if [ -n "$v" ]; then
         echo "$v"
         return
@@ -51,7 +52,7 @@ VER=$(detect_version)
 echo "  版本: v$VER"
 
 # ── 下载安装器 (固定版本 v1.5.0) ──
-INST="ddns-installer-v1.5.0-linux-${ARCH}"
+INST="ddns-installer-__INSTALLER_VERSION__-linux-${ARCH}"
 echo "  下载安装器: $INST ..."
 curl -fsSL --connect-timeout 30 "$MANAGER/bin/$INST" -o /tmp/ddns-installer || {
     echo "[!] 安装器下载失败" >&2
@@ -69,7 +70,22 @@ curl -fsSL --connect-timeout 60 "$MANAGER/bin/$AGENT" -o "/tmp/$AGENT" || {
 }
 chmod +x "/tmp/$AGENT"
 
+# ── 下载 Agent SHA256 校验文件 ──
+echo "  下载校验文件: $AGENT.sha256 ..."
+curl -fsSL --connect-timeout 30 "$MANAGER/bin/$AGENT.sha256" -o "/tmp/$AGENT.sha256" || {
+    echo "[!] 校验文件下载失败: /bin/$AGENT.sha256" >&2
+    rm -f /tmp/ddns-installer "/tmp/$AGENT"
+    exit 1
+}
+CHECKSUM=$(cut -d' ' -f1 "/tmp/$AGENT.sha256")
+if [ -z "$CHECKSUM" ]; then
+    echo "[!] 校验文件内容无效" >&2
+    rm -f /tmp/ddns-installer "/tmp/$AGENT" "/tmp/$AGENT.sha256"
+    exit 1
+fi
+
 # ── 启动安装器 (Agent 路径通过 -agent-file 传入) ──
 exec /tmp/ddns-installer \
     -manager-url "$MANAGER" \
-    -agent-file "/tmp/$AGENT"
+    -agent-file "/tmp/$AGENT" \
+    -checksum "$CHECKSUM"

@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/kk/ddns-manager/internal/acme"
-	srvcfg "github.com/kk/ddns-manager/internal/config"
-	"github.com/kk/ddns-manager/internal/logger"
-	"github.com/kk/ddns-manager/internal/notify"
-	"github.com/kk/ddns-manager/internal/store"
+	"github.com/ocoj/ddns-manager/internal/acme"
+	srvcfg "github.com/ocoj/ddns-manager/internal/config"
+	"github.com/ocoj/ddns-manager/internal/logger"
+	"github.com/ocoj/ddns-manager/internal/notify"
+	"github.com/ocoj/ddns-manager/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -32,6 +32,7 @@ type Server struct {
 	logMgr          *logger.Manager
 	adminToken      string // protected by adminTokenMu
 	version         string // Manager version (from ldflags)
+	installerVersion string // Installer version (from ldflags)
 	accessCollector *accessStatsCollector
 	// rate limiting
 	globalLimiter    *rateLimiter
@@ -49,6 +50,12 @@ type Server struct {
 	// timezone cache (from timezone.json, defaults to Asia/Shanghai)
 	timezoneMu sync.RWMutex
 	timezone   *time.Location
+	// notification cooldown (v1.6.53): 安全事件 30min 冷却
+	notifyCooldown   map[string]time.Time
+	notifyCooldownMu sync.Mutex
+	// trusted proxy config (from proxy_config.json, runtime modifiable via Web UI)
+	proxyConfigMu sync.RWMutex
+	proxyConfig   *store.ProxyConfig
 }
 
 
@@ -118,6 +125,23 @@ func (s *Server) SetTimezone(loc *time.Location) {
 	if s.logMgr != nil {
 		s.logMgr.SetTimezone(loc)
 	}
+}
+
+// GetTrustedProxy returns the runtime trusted proxy IP (empty = disabled, use RemoteAddr).
+func (s *Server) GetTrustedProxy() string {
+	s.proxyConfigMu.RLock()
+	defer s.proxyConfigMu.RUnlock()
+	if s.proxyConfig != nil {
+		return s.proxyConfig.TrustedProxy
+	}
+	return ""
+}
+
+// SetTrustedProxy updates the runtime trusted proxy IP (called after Web UI save).
+func (s *Server) SetTrustedProxy(ip string) {
+	s.proxyConfigMu.Lock()
+	s.proxyConfig = &store.ProxyConfig{TrustedProxy: ip}
+	s.proxyConfigMu.Unlock()
 }
 
 // nowInTZ returns current time in the configured timezone.
@@ -203,7 +227,12 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 					if now.Sub(n.LastSeen) > 10*time.Minute {
 						// v1.6.10 H6: 记录详细时间差, 便于验证时区一致性
 						diff := now.Sub(n.LastSeen)
-						if lastNotified, ok := notified[id]; ok && now.Sub(lastNotified) < 1*time.Hour {
+						// v1.6.53: 离线通知冷却从 SMTP 配置读取（默认 60 分钟）
+						heartbeatCooldown := 60
+						if smtpCfg, _ := s.store.LoadSMTPConfig(); smtpCfg != nil && smtpCfg.HeartbeatFailCooldown > 0 {
+							heartbeatCooldown = smtpCfg.HeartbeatFailCooldown
+						}
+						if lastNotified, ok := notified[id]; ok && now.Sub(lastNotified) < time.Duration(heartbeatCooldown)*time.Minute {
 							continue
 						}
 						notified[id] = now
@@ -211,7 +240,7 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 							fmt.Sprintf("diff=%v lastSeen=%s now=%s",
 								diff, n.LastSeen.Format(time.RFC3339), now.Format(time.RFC3339)), "warning")
 						s.tryNotify("heartbeat_fail", "节点离线",
-							fmt.Sprintf("节点 %s 超过10分钟未心跳 (diff=%v, 最后心跳: %s)", id, diff, n.LastSeen.Format("01-02 15:04")))
+							fmt.Sprintf("节点 %s 超过10分钟未心跳 (diff=%v, 最后心跳: %s)", id, diff, n.LastSeen.Format("01-02 15:04")), "")
 					}
 				}
 			case <-shutdown:
@@ -327,13 +356,15 @@ func (s *Server) StartBinWatcher(shutdown <-chan struct{}) {
 	}()
 }
 
-func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string) *Server {
+func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string, installerVersion string) *Server {
 	svr := &Server{
 		cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr,
 		version:         version,
+		installerVersion: installerVersion,
 		accessCollector: newAccessStatsCollector(cfg.DataDir),
 		pingLimiter:     newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
 		bcryptLimiter:   newRateLimiter(5),    // H3: bcrypt 回退限流 5 req/min per IP
+		notifyCooldown:  make(map[string]time.Time),
 	}
 	st, err := s.LoadAdminState()
 	if err != nil {
@@ -374,6 +405,14 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	}
 	// 统一设置：Server自身缓存 + accessCollector + logger
 	svr.SetTimezone(loc)
+	// 加载受信代理配置：优先 proxy_config.json，回退到 manager.yaml
+	proxyCfg, _ := s.LoadProxyConfig()
+	if proxyCfg != nil && proxyCfg.TrustedProxy != "" {
+		svr.proxyConfig = proxyCfg
+	} else if cfg.Server.TrustedProxy != "" {
+		svr.proxyConfig = &store.ProxyConfig{TrustedProxy: cfg.Server.TrustedProxy}
+		_ = s.SaveProxyConfig(svr.proxyConfig) // 迁入 JSON（只迁移非空值）
+	}
 	return svr
 }
 
@@ -454,6 +493,12 @@ func (s *Server) initACMEManagers() {
 		}()
 	}
 	log.Printf("[acme] 已加载 %d 个 ACME 帐号", mgrCount)
+
+	// F5: 后台验证 acme.sh 实际可用性（不阻塞启动，仅第一个 Manager 检查即可）
+	if mgrCount > 0 {
+		first := s.acmeMgrs[0]
+		go first.AcmeShAvailable()
+	}
 }
 
 // v1.6.30 H4: 原子化 updateACMEMgrKey, 使用 store 级写锁保护 Load→Modify→Save
@@ -476,7 +521,7 @@ func (s *Server) Router() *mux.Router {
 	// public (with rate limiting)
 	r.HandleFunc("/api/ping", s.pingRateLimitMiddleware(s.handlePing)).Methods("GET")
 	r.HandleFunc("/api/auth/login", s.rateLimitMiddleware(s.handleLogin, false, true)).Methods("POST")
-	r.HandleFunc("/api/admin/status", s.handleAdminStatus).Methods("GET")
+	r.HandleFunc("/api/admin/status", s.rateLimitMiddleware(s.handleAdminStatus, false, false)).Methods("GET")
 	r.HandleFunc("/api/heartbeat", s.rateLimitMiddleware(s.handleHeartbeat, true, false)).Methods("POST")
 	r.HandleFunc("/api/register", s.rateLimitMiddleware(s.handleRegister, false, false)).Methods("POST")
 	// fingerprint lookup (public) — installer pre-check for node name conflicts
@@ -540,6 +585,12 @@ func (s *Server) Router() *mux.Router {
 	// timezone
 	a.HandleFunc("/timezone", s.handleGetTimezone).Methods("GET")
 	a.HandleFunc("/timezone", s.handleSaveTimezone).Methods("POST")
+	// trusted proxy
+	a.HandleFunc("/trusted-proxy", s.handleGetTrustedProxy).Methods("GET")
+	a.HandleFunc("/trusted-proxy", s.handleSaveTrustedProxy).Methods("POST")
+	// backup & restore
+	a.HandleFunc("/backup", s.handleBackupDownload).Methods("GET")
+	a.HandleFunc("/backup/restore", s.handleBackupRestore).Methods("POST")
 
 	// static
 

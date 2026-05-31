@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/acme"
-	"github.com/kk/ddns-manager/internal/config"
-	"github.com/kk/ddns-manager/internal/logger"
-	"github.com/kk/ddns-manager/internal/server"
-	"github.com/kk/ddns-manager/internal/store"
+	"github.com/ocoj/ddns-manager/internal/acme"
+	"github.com/ocoj/ddns-manager/internal/config"
+	"github.com/ocoj/ddns-manager/internal/logger"
+	"github.com/ocoj/ddns-manager/internal/server"
+	"github.com/ocoj/ddns-manager/internal/store"
 )
 
 //go:embed static/*
@@ -27,6 +27,9 @@ var staticFiles embed.FS
 
 // version is set at build time via -ldflags "-X main.version=x.y.z"
 var version = "dev"
+
+// installerVersion is set at build time via -ldflags "-X main.installerVersion=x.y.z"
+var installerVersion = "unknown"
 
 func main() {
 	showVersion := flag.Bool("version", false, "show version and exit")
@@ -128,7 +131,7 @@ func main() {
 		}
 	}
 
-	mgr := server.New(cfg, st, acmeMgr, logMgr, version)
+	mgr := server.New(cfg, st, acmeMgr, logMgr, version, installerVersion)
 
 	// auto-renew goroutine for all ACME accounts
 	shutdownACME := make(chan struct{})
@@ -161,7 +164,7 @@ func main() {
 		http.FileServer(http.FS(staticFS)).ServeHTTP(w, r)
 	}))
 
-	log.Printf("[admin] 默认管理员密码: Admin12345 (请在首次登录后修改)")
+	log.Printf("[admin] 默认管理员密码已设置（请立即登录 Web UI 修改）")
 	if acmeMgr != nil {
 		log.Println("[acme] Let's Encrypt 已启用 (http-01 验证端口 :80)")
 	}

@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/kk/ddns-manager/internal/acme"
-	mycrypto "github.com/kk/ddns-manager/internal/crypto"
-	"github.com/kk/ddns-manager/internal/store"
+	"github.com/ocoj/ddns-manager/internal/acme"
+	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
+	"github.com/ocoj/ddns-manager/internal/store"
 )
 
 func (s *Server) handleListCerts(w http.ResponseWriter, r *http.Request) {
@@ -186,13 +186,27 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 	if hasCert && hasKey {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
 		pfxPassword := r.FormValue("pfx_password")
-	if pfxPassword == "" { pfxPassword = "ddns" }
-	if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
+		if pfxPassword == "" {
+			if rp := mycrypto.GenerateRandomPFXPassword(); rp != "" {
+				pfxPassword = rp
+			} else {
+				pfxPassword = mycrypto.DefaultPFXPassword
+			}
+		}
+		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
 			files["cert.pfx"] = pfxData
 		}
 		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
 			files["cert-modern.pfx"] = modernData
 		}
+		bundle := &store.CertBundle{Name: name, Files: files, Hash: computeBundleHash(files), PFXPassword: pfxPassword}
+		if err := s.store.SaveCertBundle(bundle); err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.logMgr.Log("cert", "已上传", name, "success")
+		jsonOK(w, map[string]string{"status": "uploaded", "name": name})
+		return
 	}
 	bundle := &store.CertBundle{Name: name, Files: files, Hash: computeBundleHash(files)}
 	if err := s.store.SaveCertBundle(bundle); err != nil {
@@ -232,7 +246,8 @@ func (s *Server) handleDownloadCert(w http.ResponseWriter, r *http.Request) {
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 	for fname, data := range b.Files {
-		fw, _ := zw.Create(fname)
+		safeName := filepath.Base(fname)
+		fw, _ := zw.Create(safeName)
 		fw.Write(data)
 	}
 }
@@ -560,16 +575,41 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	if certPEM != nil && keyPEM != nil {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
 		pfxPassword := r.FormValue("pfx_password")
-	if pfxPassword == "" { pfxPassword = "ddns" }
+	if pfxPassword == "" {
+		if rp := mycrypto.GenerateRandomPFXPassword(); rp != "" {
+			pfxPassword = rp
+		} else {
+			pfxPassword = mycrypto.DefaultPFXPassword
+		}
+	}
 	if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
 			bundle.Files["cert.pfx"] = pfxData
 		}
 		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
 			bundle.Files["cert-modern.pfx"] = modernData
 		}
+		// F9: 记录 PFX 密码到 bundle，使 meta.json 包含 pfx_password
+		bundle.PFXPassword = pfxPassword
 	}
 	bundle.Hash = computeBundleHash(bundle.Files)
-	s.store.SaveCertBundle(bundle)
+
+	// F4-A: 从原始签发目录预写 meta.json 到目标目录，确保 SaveCertBundle
+	// 的 extra 保留机制能读取到 ACME 元数据（acme/ca/email/provider/key_type）
+	if !strings.HasPrefix(certName, "acme-") {
+		if metaData, err := os.ReadFile(filepath.Join(certDir, "meta.json")); err == nil {
+			targetMetaDir := filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName)
+			os.MkdirAll(targetMetaDir, 0o700)
+			os.WriteFile(filepath.Join(targetMetaDir, "meta.json"), metaData, 0o600)
+		}
+	}
+
+	// F4-B: 检查 SaveCertBundle 返回值，失败时不删除原始目录
+	if err := s.store.SaveCertBundle(bundle); err != nil {
+		os.RemoveAll(filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName))
+		log.Printf("[acme] SaveCertBundle 失败: %v", err)
+		jsonErr(w, http.StatusInternalServerError, "保存证书失败: "+err.Error())
+		return
+	}
 	// clean up the original cert dir (issueViaAcmeSh creates certs/domain/, we save to certs/acme-domain/)
 	if !strings.HasPrefix(certName, "acme-") {
 		os.RemoveAll(certDir)
@@ -586,7 +626,14 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 // ?format=legacy → single Legacy .pfx  |  ?format=modern → single Modern .pfx
 func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
+	// v1.6.57 L3: prefer POST body over URL query (reduces log/browser history leakage)
 	password := r.URL.Query().Get("password")
+	if r.Method == "POST" {
+		var req struct{ Password string `json:"password"` }
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Password != "" {
+			password = req.Password
+		}
+	}
 	if password == "" {
 		jsonErr(w, http.StatusBadRequest, "password 参数为必填项")
 		return
@@ -726,7 +773,7 @@ func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "格式错误")
 		return
 	}
-	if req.PFXPassword == "" { req.PFXPassword = "ddns" }
+	if req.PFXPassword == "" { req.PFXPassword = mycrypto.DefaultPFXPassword }
 
 	bundle, err := s.store.LoadCertBundle(name)
 	if err != nil {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/store"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/store"
 )
 
 // ====== Test 1: 正常场景 — 升级退避 (E1) ======

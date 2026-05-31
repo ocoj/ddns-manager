@@ -31,8 +31,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kk/ddns-manager/internal/crypto"
-	"github.com/kk/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/crypto"
+	"github.com/ocoj/ddns-manager/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -116,7 +116,10 @@ func initAgentEventsLog() {
 			old := filepath.Join(agentBaseDir, fmt.Sprintf("agent_events.%d.log", i))
 			if i < 3 {
 				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent_events.%d.log", i+1))
-				os.Rename(old, next)
+				// v1.6.58: 检查 Rename 错误, 防止轮转失败静默
+				if err := os.Rename(old, next); err != nil {
+					log.Printf("[agent] 事件日志轮转 Rename 失败: %s→%s (%v)", old, next, err)
+				}
 			} else {
 				// v1.6.42 L1: 检查删除错误, 防止轮转失败静默
 				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
@@ -162,7 +165,10 @@ func initAgentLog() {
 			old := filepath.Join(agentBaseDir, fmt.Sprintf("agent.%d.log", i))
 			if i < 3 {
 				next := filepath.Join(agentBaseDir, fmt.Sprintf("agent.%d.log", i+1))
-				os.Rename(old, next)
+				// v1.6.58: 检查 Rename 错误, 防止轮转失败静默
+				if err := os.Rename(old, next); err != nil {
+					log.Printf("[agent] Agent日志轮转 Rename 失败: %s→%s (%v)", old, next, err)
+				}
 			} else {
 				// v1.6.42 L1: 检查删除错误, 防止轮转失败静默
 				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
@@ -530,21 +536,13 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			if err := dnsUpdater.ApplyConfig([]byte(resp.Config.YAML)); err != nil {
 				log.Printf("配置应用失败: %v", err)
 			} else {
-			// v1.6.50 H2: 持久化 hash 到文件, oneshot 模式跨进程不丢失
-			// v1.6.50 H2: lastConfigHash 在 WriteFile 成功后更新, 避免磁盘满时内存已更新→持久化失败→
-			// 重启后 hash 不匹配但无新配置缓存→需额外心跳拉取→DNS更新延迟一个周期
-			if err := os.WriteFile(configHashPath(), []byte(resp.Config.Hash), 0600); err != nil {
-				agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
-				log.Printf("[config] hash持久化失败: %v (managerHash已丢弃, 下次心跳重推)", err)
+			// v1.6.56 M2: 先持久化配置缓存，成功后写 hash — 缓存失败则 hash 不更新
+			// 避免 hash=新但缓存=旧导致重启后配置不一致永久报错
+			cacheWritten := false
+			if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
+				log.Printf("[config] 缓存目录创建失败 (磁盘满/权限?): %v", encErr)
+				agentLog("配置缓存目录创建失败: %v", encErr)
 			} else {
-				lastConfigHash = resp.Config.Hash  // v1.6.50 H2: WriteFile成功才更新内存
-			}
-			// Cache encrypted config for next oneshot run (AES-256-GCM)
-				// v1.6.50 H2: 目录创建失败后记录根因再继续, 后续 WriteFile 会二次失败→有明确错误日志
-				if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
-					log.Printf("[config] 缓存目录创建失败 (磁盘满/权限?): %v", encErr)
-					agentLog("配置缓存目录创建失败: %v", encErr)
-				}
 				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
 					getConfigCacheKey(cfg.Password, cfg.Fingerprint))
 				if encErr != nil {
@@ -553,7 +551,18 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				} else if writeErr := os.WriteFile(configCachePath(), []byte(cacheData), 0600); writeErr != nil {
 					log.Printf("[config] 缓存写入失败 (磁盘满/权限?): %v", writeErr)
 					agentLog("配置缓存写入失败: %v", writeErr)
+				} else {
+					cacheWritten = true
 				}
+			}
+			if cacheWritten {
+				if err := os.WriteFile(configHashPath(), []byte(resp.Config.Hash), 0600); err != nil {
+					agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
+					log.Printf("[config] hash持久化失败: %v (managerHash已丢弃, 下次心跳重推)", err)
+				} else {
+					lastConfigHash = resp.Config.Hash
+				}
+			}
 				// v1.6.28 H1: 配置变更后同步执行 DNS 更新, 失败时立即发送跟进心跳上报
 				// 修复 v1.5.29 C4 的 5 分钟延迟 — 异步 goroutine 导致失败静默到下一心跳
 				if dnsUpdateRunning.CompareAndSwap(false, true) {
@@ -818,10 +827,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			pwdSource = "配置级(agent.yaml)"
 		}
 		if pfxPwd == "" {
-			pfxPwd = "ddns"
-			pwdSource = "默认(ddns)"
+			pfxPwd = crypto.DefaultPFXPassword
+			pwdSource = "默认"
 			agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
-			log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 ddns", cu.BundleName)
+			log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 %s", cu.BundleName, crypto.DefaultPFXPassword)
 		}
 		agentLog("证书部署: PFX密码来源=%s bundle=%s", pwdSource, cu.BundleName)
 		log.Printf("[cert] %s: PFX密码来源=%s", cu.BundleName, pwdSource)
@@ -884,7 +893,10 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		// 如果 IIS 绑定失败，保留旧 hash，下次心跳 Manager 会重新推送
 		if iisOK {
 			hashFile := filepath.Join(path, ".cert_hash")
-			os.WriteFile(hashFile, []byte(cu.CertHash), 0o644) // v1.6.37: 644 无敏感信息
+			// v1.6.58: 原子写入 — tmp+Rename 防止崩溃残留半截文件
+			tmpHashFile := hashFile + ".tmp"
+			os.WriteFile(tmpHashFile, []byte(cu.CertHash), 0o644)
+			os.Rename(tmpHashFile, hashFile)
 			// v1.5.22 M1: 正常路径也更新 certHashMap，使清理逻辑生效
 			certHashMapMu.Lock()
 			certHashMap[cu.BundleName] = cu.CertHash
@@ -928,7 +940,13 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 
 // reloadService reloads or restarts a system service after cert deployment.
 // Supports systemd service names (Linux) and Windows service names.
+// v1.6.58: 服务名限定白名单 — 防止管理员误配导致关键系统服务被误操作。
 func reloadService(svc string) bool {
+	// v1.6.58: 服务名白名单校验
+	if !isAllowedService(svc) {
+		log.Printf("[cert] 服务名 %q 不在白名单中, 已跳过", svc)
+		return false
+	}
 	if runtime.GOOS == "windows" {
 		// Windows: try appcmd recycle first (IIS), then net stop/start
 		if strings.Contains(strings.ToLower(svc), "iis") || strings.Contains(strings.ToLower(svc), "w3svc") {
@@ -977,6 +995,28 @@ func reloadService(svc string) bool {
 	}
 	log.Printf("[cert] 服务已重载: %s", svc)
 	return true
+}
+
+// isAllowedService v1.6.58: 服务名白名单 — 仅允许常见 Web/反向代理服务。
+// 防止管理员在 WebUI 误配导致关键系统服务被 sc stop/systemctl restart。
+func isAllowedService(svc string) bool {
+	allowed := map[string]bool{
+		"nginx": true, "apache2": true, "httpd": true, "caddy": true,
+		"haproxy": true, "traefik": true, "lighttpd": true, "openresty": true,
+		"iisadmin": true, "w3svc": true, "w3logsvc": true, "ftpsvc": true,
+		"apphostsvc": true, "was": true,
+	}
+	lower := strings.ToLower(svc)
+	if allowed[lower] {
+		return true
+	}
+	// 允许以已知前缀开头的自定义服务 (如 nginx@custom, apache2@site1)
+	for prefix := range allowed {
+		if strings.HasPrefix(lower, prefix+"@") || strings.HasPrefix(lower, prefix+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // recycleIISAppPools recycles all IIS application pools so the new certificate
@@ -1281,7 +1321,7 @@ func upgradeLogger(format string, args ...interface{}) {
 	upgradeLogFileMu.Lock()
 	if upgradeLogFile == nil {
 		f, err := os.OpenFile(filepath.Join(agentBaseDir, "ddns_upgrade.log"),
-			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			upgradeLogFileMu.Unlock()
 			return
@@ -1444,6 +1484,7 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 	if oldThumb != "" {
 		exec.Command("certutil", "-delstore", "My", oldThumb).Run()
 	}
+	// v1.6.57: certutil 不支持环境变量传密码，仅能通过 -p 参数。openssl 路径已改用 env。
 	importArgs := []string{"-importpfx", "-p", pfxPassword, "-enterprise", pfxFile}
 	out, err := exec.Command("certutil", importArgs...).CombinedOutput()
 	if err != nil {
@@ -1451,8 +1492,8 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 		// 已知问题: 部分 Windows 节点 PFX 传输后 certutil 报告密码不匹配
 		errMsg := string(out)
 		if strings.Contains(errMsg, "0x80070056") || strings.Contains(errMsg, "ERROR_INVALID_PASSWORD") {
-			log.Printf("[cert] certutil 密码错误(0x80070056), 尝试 ddns 兜底: %s", bundleName)
-			retryArgs := []string{"-importpfx", "-p", "ddns", "-enterprise", pfxFile}
+			log.Printf("[cert] certutil 密码错误(0x80070056), 尝试默认密码兜底: %s", bundleName)
+			retryArgs := []string{"-importpfx", "-p", crypto.DefaultPFXPassword, "-enterprise", pfxFile}
 			retryOut, retryErr := exec.Command("certutil", retryArgs...).CombinedOutput()
 			if retryErr == nil {
 				log.Printf("[cert] certutil ddns兜底导入成功: %s", bundleName)
@@ -1537,9 +1578,11 @@ func importToIIS(certDir, bundleName string, bindings []model.CertToIISBinding, 
 	// 2. import to Windows cert store (LocalMachine\My) via certutil (v1.5.32: 替代 PowerShell)
 	// v1.5.37: 使用 pfxPassword 替代硬编码 "ddns", 支持用户自定义密码
 	pfxFile := filepath.Join(certDir, bundleName+".pfx")
+	// v1.6.57 L1: 密码通过环境变量传递，不出现在进程命令行
 	cmd := exec.Command(openssl, "pkcs12", "-export",
 		"-in", certFile, "-inkey", keyFile, "-out", pfxFile,
-		"-passout", "pass:"+pfxPassword)
+		"-passout", "env:PFX_PWD")
+	cmd.Env = append(os.Environ(), "PFX_PWD="+pfxPassword)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[cert] openssl PFX导出失败: %v: %s", err, string(out))
 		agentLog("证书部署: openssl PFX导出失败 %s: %s", bundleName, strings.TrimSpace(string(out)))
@@ -1748,7 +1791,7 @@ func cutAnyPrefix(s string, prefixes ...string) (after string, ok bool) {
 // fitsBinding 对齐 win-acme Fits() 三级 hostname 匹配 (v1.6.0)。
 // 返回 (分数, 原因描述): 精确匹配=100, 泛域名匹配=50, 无匹配=0。
 func fitsBinding(iisHost, certCN string) (int, string) {
-	// 精确匹配: sp.example.com == sp.example.com
+	// 精确匹配: sub.example.com == sub.example.com
 	if strings.EqualFold(iisHost, certCN) {
 		return 100, "精确匹配"
 	}

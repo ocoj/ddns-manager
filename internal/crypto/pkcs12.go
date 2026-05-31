@@ -5,11 +5,28 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 
 	"software.sslmate.com/src/go-pkcs12"
 )
+
+// DefaultPFXPassword is the legacy fallback used when no explicit PFX password
+// is configured. Kept for backward compatibility with existing certificates
+// and as a last-resort fallback in agent certutil retry.
+const DefaultPFXPassword = "ddns"
+
+// GenerateRandomPFXPassword returns a 32-character random password
+// (24 bytes base64-encoded). Returns "" on system entropy failure;
+// callers should fallback to DefaultPFXPassword.
+func GenerateRandomPFXPassword() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
 
 // ParseCertAndKey decodes PEM-encoded certificate chain and private key,
 // returning the leaf certificate, CA chain, and parsed private key.

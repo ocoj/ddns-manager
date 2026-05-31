@@ -3,8 +3,8 @@ package server
 import (
 	"testing"
 
-	"github.com/kk/ddns-manager/internal/model"
-	"github.com/kk/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/model"
+	"github.com/ocoj/ddns-manager/internal/provider"
 )
 
 // TestNodeApproval_NewRegistrationDefault 验证新注册节点默认 Approved=false（边界条件）。

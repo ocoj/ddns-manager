@@ -36,7 +36,7 @@ func TestGeneratePFX_EC(t *testing.T) {
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
 	// Generate PFX
-	pfx, err := GeneratePFX(certPEM, keyPEM, "ddns")
+	pfx, err := GeneratePFX(certPEM, keyPEM, DefaultPFXPassword)
 	if err != nil {
 		t.Fatalf("GeneratePFX failed: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestGeneratePFX_RSA(t *testing.T) {
 
 func TestGeneratePFX_BadInput(t *testing.T) {
 	// Invalid PEM
-	_, err := GeneratePFX([]byte("not pem"), []byte("not pem"), "ddns")
+	_, err := GeneratePFX([]byte("not pem"), []byte("not pem"), DefaultPFXPassword)
 	if err == nil {
 		t.Error("expected error for invalid PEM, got nil")
 	}
@@ -93,7 +93,7 @@ func TestGeneratePFX_BadInput(t *testing.T) {
 
 	// Cert without key
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{0x30, 0x00}})
-	_, err = GeneratePFX(certPEM, []byte("not pem"), "ddns")
+	_, err = GeneratePFX(certPEM, []byte("not pem"), DefaultPFXPassword)
 	if err == nil {
 		t.Error("expected error for missing key, got nil")
 	}

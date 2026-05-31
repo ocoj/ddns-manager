@@ -31,6 +31,8 @@ func jsonOK(w http.ResponseWriter, v interface{}) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		log.Printf("[http] JSON 编码失败: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
 		return
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

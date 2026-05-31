@@ -19,7 +19,7 @@ import (
 
 	ddnsconfig "github.com/jeessy2/ddns-go/v6/config"
 	"github.com/jeessy2/ddns-go/v6/util"
-	"github.com/kk/ddns-manager/internal/provider"
+	"github.com/ocoj/ddns-manager/internal/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -115,9 +115,9 @@ func (u *DNSUpdater) Run() DNSStatus {
 		detail   string
 	}
 	var segErrors []segErr
-	var lastAPIErr string // v1.6.44 C1: DNS API 实际错误，用于域名级失败日志
 
 	for _, dc := range u.cfg.DnsConf {
+		var lastAPIErr string // v1.6.56 M3: 每段独立，防止跨段泄漏
 		// Create the appropriate DNS provider (v1.6.28 M1: 统一注册表)
 		provider := provider.NewProvider(dc.DNS.Name)
 		if provider == nil {
@@ -334,6 +334,10 @@ func (u *DNSUpdater) ApplyConfig(yamlData []byte) error {
 }
 
 // ConfigHash returns the SHA256 hash of the current config.
+// ConfigHash returns a stable SHA256 hash of the current ddns-go config.
+// Note: production heartbeat uses Manager-pushed config hash (lastConfigHash),
+// not this local hash. This function is primarily used in tests for consistency checks.
+// If Marshal fails, returns empty string — caller should treat empty as "unknown hash".
 func (u *DNSUpdater) ConfigHash() string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -342,7 +346,7 @@ func (u *DNSUpdater) ConfigHash() string {
 	}
 	data, err := yaml.Marshal(u.cfg)
 	if err != nil {
-		log.Printf("[dns] ConfigHash 序列化失败: %v", err)
+		log.Printf("[dns] ConfigHash 序列化失败 (ddns-go 配置结构异常): %v", err)
 		return ""
 	}
 	h := sha256.Sum256(data)

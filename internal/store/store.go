@@ -931,18 +931,7 @@ func (s *ManagerStore) acmeConfigPath() string { return filepath.Join(s.dir, "ac
 func (s *ManagerStore) LoadACMEAccounts() ([]ACMEAccountConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, err := os.ReadFile(s.acmeConfigPath())
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var accounts []ACMEAccountConfig
-	if err := json.Unmarshal(data, &accounts); err != nil {
-		return nil, err
-	}
-	return accounts, nil
+	return s.loadACMEAccountsLocked()
 }
 
 func (s *ManagerStore) SaveACMEAccounts(accounts []ACMEAccountConfig) error {

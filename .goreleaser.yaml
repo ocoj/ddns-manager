@@ -1,0 +1,189 @@
+# ddns-manager goreleaser 配置
+# 文档: https://goreleaser.com
+#
+# 使用方法:
+#   1. 打标签: git tag v1.6.58
+#   2. 发布:  goreleaser release --clean
+#   3. 试运行: goreleaser release --clean --snapshot
+#
+# 注意: 本配置跳过 Windows 代码签名 (SIGNCERT_*),
+#       需要签名时在 CI 中设置对应环境变量。
+
+version: 2
+
+project_name: ddns-manager
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # ── Manager (Linux only) ──
+  - id: manager
+    main: ./cmd/manager
+    binary: ddns-manager
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.installerVersion={{ .Env.INSTALLER_VERSION | default "1.0.0" }}
+
+  # ── Node Agent (Linux) ──
+  - id: node-agent-linux
+    main: ./cmd/agent
+    binary: node-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  # ── Node Agent (Windows, 含版本资源) ──
+  - id: node-agent-windows
+    main: ./cmd/agent
+    binary: node-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    hooks:
+      pre:
+        # 生成 Windows 版本资源 (.syso) - 需要 goversioninfo
+        - cmd: goversioninfo -64 -o resource.syso versioninfo.json
+          dir: ./cmd/agent
+      post:
+        # 清理临时文件
+        - cmd: rm -f resource.syso
+          dir: ./cmd/agent
+
+  # ── Upgrade Helper (Windows) ──
+  - id: upgrade-helper
+    main: ./cmd/upgrade-helper
+    binary: upgrade_helper
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # ── Linux Installer ──
+  - id: installer-linux
+    main: ./cmd/installer-linux
+    binary: ddns-installer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION | default "1.0.0" }}
+
+archives:
+  - id: manager
+    builds:
+      - manager
+    name_template: >-
+      {{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - none*
+
+  - id: node-agent
+    builds:
+      - node-agent-linux
+      - node-agent-windows
+    name_template: >-
+      node-agent-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - tar.gz
+      - zip # windows 用 zip
+    files:
+      - none*
+
+  - id: upgrade-helper
+    builds:
+      - upgrade-helper
+    name_template: >-
+      upgrade_helper-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - zip
+    files:
+      - none*
+
+  - id: installer-linux
+    builds:
+      - installer-linux
+    name_template: >-
+      ddns-installer-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - none*
+
+checksum:
+  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore"
+      - "^ci:"
+      - merge conflict
+      - Merge pull request
+      - Merge remote-tracking branch
+
+release:
+  # GitHub 仓库信息 - 发布前改为实际仓库
+  # github:
+  #   owner: ocoj
+  #   name: ddns-manager
+  name_template: "v{{ .Version }}"
+  header: |
+    # ddns-manager v{{ .Version }}
+
+    > 请查阅 [CHANGELOG](./CHANGELOG.md) 获取完整变更记录。
+
+  footer: |
+    ---
+
+    **完整变更记录**: [CHANGELOG](./CHANGELOG.md)
+  extra_files:
+    - glob: ./VERSION
+    - glob: ./INSTALLER_VERSION
+    - glob: ./CHANGELOG.md
+    - glob: ./scripts/install.sh
+    - glob: ./build/install.bat
+    - glob: ./README.md
+
+# 首次使用需初始化: goreleaser init
+# 然后根据实际需求调整上述配置

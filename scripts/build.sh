@@ -96,7 +96,7 @@ build_windows() {
             /tr "$TIMESTAMP_URL" \
             /td SHA256 \
             /d "ddns-manager Node Agent" \
-            /du "https://github.com/kk/ddns-manager" \
+            /du "https://github.com/ocoj/ddns-manager" \
             "$out"
         echo "  ✅ 已签名"
     else

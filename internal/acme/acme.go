@@ -122,12 +122,14 @@ func NewWithKey(certsDir, email, httpPort string, keyPEM []byte) (*Manager, erro
 	var err error
 	if len(keyPEM) > 0 {
 		signer, err = loadKeyFromPEM(keyPEM)
-	}
-	if signer == nil {
+		if err != nil {
+			return nil, fmt.Errorf("load account key: %w", err)
+		}
+	} else {
 		signer, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("gen key: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("gen key: %w", err)
+		}
 	}
 	m.accountKey = signer
 	m.acmeClient = &acme.Client{Key: signer, DirectoryURL: m.ca.URL}

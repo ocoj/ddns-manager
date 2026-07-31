@@ -76,8 +76,8 @@ sanitize_check() {
     FILES=$(cd "$PROJECT_DIR" && { git ls-files; git ls-files --others --exclude-standard; })
 
     # 白名单: 允许出现的文件 (相对于项目根)
+    # 注意: 不再豁免任何文件。发布计划等敏感文档不应出现在仓库中。
     local WHITELIST_FILES=(
-        "脱敏映射表.md"    # 发布计划自身含脱敏映射表
     )
 
     # 白名单: 允许出现的行内容 grep 模式
@@ -124,7 +124,7 @@ sanitize_check() {
         echo ""
         err "脱敏核验失败: 发现 $hits 处疑似敏感信息"
         echo "   请检查上述文件，确认敏感信息已脱敏后重试。"
-        echo "   参考替换表: 脱敏映射表.md"
+        echo "   参考脱敏映射表: internal-docs/ 目录下文档"
         exit 1
     fi
     ok "脱敏核验通过"

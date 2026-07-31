@@ -9,6 +9,7 @@ memory/
 # IDE
 .idea/
 .vscode/
+.deepcode/
 *.swp
 *.swo
 *.code-workspace

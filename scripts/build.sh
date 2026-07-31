@@ -66,7 +66,6 @@ build_windows() {
     if command -v goversioninfo &>/dev/null; then
         echo "  → goversioninfo: embedding version resource..."
         goversioninfo -64 -o resource.syso versioninfo.json
-        trap 'rm -f resource.syso' EXIT
     else
         echo "  ⚠️  goversioninfo not found — install with:"
         echo "     go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest"
@@ -76,6 +75,7 @@ build_windows() {
     out="$BUILD_DIR/node-agent-windows-${arch}.exe"
     GOOS=windows GOARCH="$arch" CGO_ENABLED=0 \
         go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
+    rm -f resource.syso  # 立即清理，防止 ARM 交叉编译污染
 
     # versioned copy: node-agent-v{VERSION}-windows-amd64.exe
     ver_out="$BUILD_DIR/node-agent-v${VER_NUM}-windows-${arch}.exe"

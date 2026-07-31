@@ -100,9 +100,22 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Env.INSTALLER_VERSION | default "1.0.0" }}
 
+  # ── Windows Installer ──
+  - id: installer-windows
+    main: ./cmd/installer-windows
+    binary: ddns-installer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION | default "1.0.0" }}
+
 archives:
   - id: manager
-    builds:
+    ids:
       - manager
     name_template: >-
       {{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}
@@ -112,7 +125,7 @@ archives:
       - none*
 
   - id: node-agent
-    builds:
+    ids:
       - node-agent-linux
       - node-agent-windows
     name_template: >-
@@ -124,7 +137,7 @@ archives:
       - none*
 
   - id: upgrade-helper
-    builds:
+    ids:
       - upgrade-helper
     name_template: >-
       upgrade_helper-{{ .Version }}-{{ .Os }}-{{ .Arch }}
@@ -134,7 +147,7 @@ archives:
       - none*
 
   - id: installer-linux
-    builds:
+    ids:
       - installer-linux
     name_template: >-
       ddns-installer-{{ .Version }}-{{ .Os }}-{{ .Arch }}
@@ -143,12 +156,22 @@ archives:
     files:
       - none*
 
+  - id: installer-windows
+    ids:
+      - installer-windows
+    name_template: >-
+      ddns-installer-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - zip
+    files:
+      - none*
+
 checksum:
   name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
   algorithm: sha256
 
 snapshot:
-  name_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+  version_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
 
 changelog:
   sort: asc
@@ -163,10 +186,9 @@ changelog:
       - Merge remote-tracking branch
 
 release:
-  # GitHub 仓库信息 - 发布前改为实际仓库
-  # github:
-  #   owner: ocoj
-  #   name: ddns-manager
+  github:
+    owner: ocoj
+    name: ddns-manager
   name_template: "v{{ .Version }}"
   header: |
     # ddns-manager v{{ .Version }}
@@ -184,6 +206,14 @@ release:
     - glob: ./scripts/install.sh
     - glob: ./build/install.bat
     - glob: ./README.md
+
+dockers:
+  - image_templates:
+      - "ghcr.io/ocoj/ddns-manager:{{ .Version }}"
+      - "ghcr.io/ocoj/ddns-manager:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64,linux/arm64"
 
 # 首次使用需初始化: goreleaser init
 # 然后根据实际需求调整上述配置

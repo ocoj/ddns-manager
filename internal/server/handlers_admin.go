@@ -499,6 +499,15 @@ func (s *Server) handleDeleteAgentBinary(w http.ResponseWriter, r *http.Request)
 // v1.6.42 H7: 增加日志记录, 使自重启操作可追踪
 func (s *Server) scheduleManagerRestart(newVer string) {
 	s.logMgr.Log("system", "Manager自重启", fmt.Sprintf("触发版本=%s", newVer), "info")
+
+	// v1.6.59: 容器环境跳过 systemctl 自重启，改为提示重建镜像
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		log.Printf("[deploy] 容器环境检测到 /.dockerenv, 跳过自重启")
+		s.logMgr.Log("system", "Manager自重启已跳过",
+			"容器环境需重建镜像以更新二进制, 请执行: docker compose up -d --build", "info")
+		return
+	}
+
 	binDir := s.store.AgentBinDir()
 	// 查找刚上传的 manager 二进制
 	entries, err := os.ReadDir(binDir)

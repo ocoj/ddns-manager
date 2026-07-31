@@ -1,3 +1,24 @@
+## v1.6.59 — 2026-07-31
+
+### 📦 ddns-go 上游升级 v6.17.0 → v6.17.4
+
+- **v6.17.4**: Cloudflare 代理状态同步修复 — 无 IP 变化时也能同步代理开关状态
+- **v6.17.3**: 拼写修正 `Your's` → `Your`
+- **v6.17.2**: `newHTTPDialer` 保留自定义 DNS 解析器 + 语言下拉框优化 + 依赖升级
+- **v6.17.1**: HiPM DNSMgr 双层查询优化 + 日志国际化 + x/net→0.55.0, x/crypto→0.52.0
+- **代码适配**: 0 行 — `dns.DNS` 接口 / `ddnsconfig.Config` / `util.IpCache` 均未变更
+- **连带升级**: x/crypto 0.50.0→0.54.0, x/sys 0.43.0→0.47.0, x/term 0.42.0→0.45.0, x/net 0.53.0→0.57.0, x/text 0.36.0→0.40.0
+
+### 🔧 ARM 交叉编译修复
+
+- **build.sh** ARM 构建失败: Windows `resource.syso` 残留导致 `unsupported arch 1` → 构建后清理 `.syso`
+
+### 📋 涉及文件
+
+`go.mod`, `go.sum`, `CHANGELOG.md` — 共 3 文件
+
+---
+
 ## v1.6.58 — 2026-07-09
 
 ### 🆕 配置备份与恢复
@@ -599,7 +620,7 @@ location = /bin/install.sh {
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Port $server_port;
-    proxy_pass http://172.17.0.1:9877;
+    proxy_pass http://HOST_IP:9877;
 }
 ```
 详细说明见 `docs/架构与实现.md §16.5.1`

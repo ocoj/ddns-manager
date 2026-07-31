@@ -1,0 +1,380 @@
+version: 2
+project_name: ddns-manager
+release:
+  github:
+    owner: ocoj
+    name: ddns-manager
+  name_template: v{{ .Version }}
+  extra_files:
+    - glob: ./VERSION
+    - glob: ./INSTALLER_VERSION
+    - glob: ./CHANGELOG.md
+    - glob: ./scripts/install.sh
+    - glob: ./build/install.bat
+    - glob: ./README.md
+  header: |
+    # ddns-manager v{{ .Version }}
+
+    > 请查阅 [CHANGELOG](./CHANGELOG.md) 获取完整变更记录。
+  footer: |
+    ---
+
+    **完整变更记录**: [CHANGELOG](./CHANGELOG.md)
+builds:
+  - id: manager
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "6"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - linux_amd64_v1
+      - linux_arm64_v8.0
+    dir: .
+    main: ./cmd/manager
+    binary: ddns-manager
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.installerVersion={{ .Env.INSTALLER_VERSION}}
+    env:
+      - CGO_ENABLED=0
+  - id: node-agent-linux
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "7"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - linux_amd64_v1
+      - linux_arm64_v8.0
+      - linux_arm_7
+    dir: .
+    main: ./cmd/agent
+    binary: node-agent
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    env:
+      - CGO_ENABLED=0
+  - id: node-agent-windows
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "6"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - windows_amd64_v1
+      - windows_arm64_v8.0
+    dir: .
+    main: ./cmd/agent-win
+    binary: node-agent
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    env:
+      - CGO_ENABLED=0
+  - id: upgrade-helper
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "6"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - windows_amd64_v1
+      - windows_arm64_v8.0
+    dir: .
+    main: ./cmd/upgrade-helper
+    binary: upgrade_helper
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w
+    env:
+      - CGO_ENABLED=0
+  - id: installer-linux
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "6"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - linux_amd64_v1
+      - linux_arm64_v8.0
+    dir: .
+    main: ./cmd/installer-linux
+    binary: ddns-installer
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION}}
+    env:
+      - CGO_ENABLED=0
+  - id: installer-windows
+    goos:
+      - windows
+    goarch:
+      - amd64
+    goamd64:
+      - v1
+    go386:
+      - sse2
+    goarm:
+      - "6"
+    goarm64:
+      - v8.0
+    gomips:
+      - hardfloat
+    goppc64:
+      - power8
+    goriscv64:
+      - rva20u64
+    targets:
+      - windows_amd64_v1
+    dir: .
+    main: ./cmd/installer-windows
+    binary: ddns-installer
+    builder: go
+    tool: go
+    command: build
+    ldflags:
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION}}
+    env:
+      - CGO_ENABLED=0
+archives:
+  - id: manager
+    ids:
+      - manager
+    builds_info:
+      mode: 493
+    name_template: '{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}'
+    formats:
+      - tar.gz
+    files:
+      - src: none*
+  - id: node-agent
+    ids:
+      - node-agent-linux
+      - node-agent-windows
+    builds_info:
+      mode: 493
+    name_template: node-agent-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - tar.gz
+      - zip
+    files:
+      - src: none*
+  - id: upgrade-helper
+    ids:
+      - upgrade-helper
+    builds_info:
+      mode: 493
+    name_template: upgrade_helper-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - zip
+    files:
+      - src: none*
+  - id: installer-linux
+    ids:
+      - installer-linux
+    builds_info:
+      mode: 493
+    name_template: ddns-installer-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - src: none*
+  - id: installer-windows
+    ids:
+      - installer-windows
+    builds_info:
+      mode: 493
+    name_template: ddns-installer-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    formats:
+      - zip
+    files:
+      - src: none*
+srpm:
+  nfpmrpm: {}
+  package_name: ddns-manager
+  file_name_template: '{{ .PackageName }}-{{ .Version }}.src.rpm'
+  bins:
+    ddns-manager: '%{goipath}'
+snapshot:
+  version_template: '{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}'
+checksum:
+  name_template: '{{ .ProjectName }}-{{ .Version }}-checksums.txt'
+  algorithm: sha256
+docker_digest:
+  name_template: digests.txt
+changelog:
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - ^chore
+      - '^ci:'
+      - merge conflict
+      - Merge pull request
+      - Merge remote-tracking branch
+  sort: asc
+  format: '{{ .SHA }} {{ .Message }}'
+dist: dist
+env_files:
+  github_token: ~/.config/goreleaser/github_token
+  gitlab_token: ~/.config/goreleaser/gitlab_token
+  gitea_token: ~/.config/goreleaser/gitea_token
+before:
+  hooks:
+    - go mod tidy
+    - cp -r cmd/agent cmd/agent-win && cd cmd/agent-win && goversioninfo -64 -o resource.syso versioninfo.json
+source:
+  name_template: '{{ .ProjectName }}-{{ .Version }}'
+  format: tar.gz
+gomod:
+  gobinary: go
+announce:
+  twitter:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+  mastodon:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    server: ""
+  reddit:
+    title_template: '{{ .ProjectName }} {{ .Tag }} is out!'
+    url_template: '{{ .ReleaseURL }}'
+  slack:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    username: GoReleaser
+  discord:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    author: GoReleaser
+    color: "3888754"
+    icon_url: https://goreleaser.com/static/avatar.png
+  teams:
+    title_template: '{{ .ProjectName }} {{ .Tag }} is out!'
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    color: '#2D313E'
+    icon_url: https://goreleaser.com/static/avatar.png
+  smtp:
+    subject_template: '{{ .ProjectName }} {{ .Tag }} is out!'
+    body_template: 'You can view details from: {{ .ReleaseURL }}'
+  mattermost:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    title_template: '{{ .ProjectName }} {{ .Tag }} is out!'
+    color: '#2D313E'
+    username: GoReleaser
+  linkedin:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+  telegram:
+    message_template: '{{ print .ProjectName " " .Tag " is out! Check it out at " .ReleaseURL | mdv2escape }}'
+    parse_mode: MarkdownV2
+  webhook:
+    message_template: '{ "message": "{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}"}'
+    content_type: application/json; charset=utf-8
+    expected_status_codes:
+      - 200
+      - 201
+      - 202
+      - 204
+  opencollective:
+    title_template: '{{ .Tag }}'
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out!<br/>Check it out at <a href="{{ .ReleaseURL }}">{{ .ReleaseURL }}</a>'
+  bluesky:
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+  discourse:
+    title_template: '{{ .ProjectName }} {{ .Tag }} is out!'
+    message_template: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'
+    username: system
+git:
+  tag_sort: -version:refname
+mcp:
+  name: ""
+  title: ""
+  auth:
+    type: none
+retry:
+  attempts: 10
+  delay: 10s
+  max_delay: 5m0s
+github_urls:
+  download: https://github.com
+gitlab_urls:
+  download: https://gitlab.com

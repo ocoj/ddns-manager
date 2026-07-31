@@ -66,12 +66,14 @@ sanitize_check() {
         "example\.com"            # 真实域名
         "example\.org"             # 真实域名
         "example\.org"              # 真实域名
-        "REDACTED"         # SSH/sudo 密码
+        # 密码检测: 匹配8位以上字母+数字组合（疑似密码/Token），但不包含已知公开字符串
+        "[A-Z][a-z]+[0-9]{8,}"  # 疑似密码模式
     )
 
     # 扫描范围: git tracked 且不在 .gitignore 的文件
     local FILES
-    FILES=$(cd "$PROJECT_DIR" && git ls-files)
+    # git ls-files (tracked) + git ls-files --others (untracked, 非gitignore)
+    FILES=$(cd "$PROJECT_DIR" && { git ls-files; git ls-files --others --exclude-standard; })
 
     # 白名单: 允许出现的文件 (相对于项目根)
     local WHITELIST_FILES=(

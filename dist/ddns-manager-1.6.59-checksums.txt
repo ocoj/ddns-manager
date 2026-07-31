@@ -1,0 +1,17 @@
+14d99d4358b50b176751d2eb5602baf7dcb67c70115596e2a4d02eea9a626b3e  ddns-installer-1.6.59-linux-amd64.tar.gz
+ea505549cc73c7a3dcde698dde4b65af6f2bb3213a3dc7b523b7a79c9dbb6461  ddns-installer-1.6.59-linux-arm64.tar.gz
+b38338ab5fd87224f2915fe211e1b839e697a89c091227cb65d145e221ea040d  ddns-installer-1.6.59-windows-amd64.zip
+64ed8b56821bfb9466fdf53e231747c03ddbd1595e8625d14b6aae7f92e61247  ddns-manager-1.6.59-linux-amd64.tar.gz
+f78ccc9266078610b66f9a4a7edf286657fa18b612b9ed781116217404a7f7e3  ddns-manager-1.6.59-linux-arm64.tar.gz
+02016b3e9c647e77d40542333af97236618e1af14ecdf733660ad0c41a9b8e34  node-agent-1.6.59-linux-amd64.tar.gz
+c7ef2f4547dabae709929195643106d8ed35fb72b9445617e3fd1822ed67896a  node-agent-1.6.59-linux-amd64.zip
+8239258692549e9a4c795e3df7d2c5a749139b4f88e65f8672ed7502810812ba  node-agent-1.6.59-linux-arm.tar.gz
+ee33380420f76c4409fd6d887b06ccb6dec49f5b864ad25857d901a6a8ce72a3  node-agent-1.6.59-linux-arm.zip
+9b8d3842308f3f73fa730a0bfedd6628f9fcd56e11ef8c5710f6ce94fe3369f6  node-agent-1.6.59-linux-arm64.tar.gz
+6da9f4ca99e360cb7f7ca197ee6f92c805fb195459f5922118593d7351fcb10d  node-agent-1.6.59-linux-arm64.zip
+4378db9b4624f24073bd4c399dfff4f65cd3c66660ff7a0f487d056dc62407e2  node-agent-1.6.59-windows-amd64.tar.gz
+ab78988e4868771c2c20bbb3996d35a4af93f3ea4bbc86e884b366e4609b4c53  node-agent-1.6.59-windows-amd64.zip
+b9f349e7a4fe29c0067645e24f51cf13486a5f55832ded197b203fe49fbb3ab8  node-agent-1.6.59-windows-arm64.tar.gz
+9e65cfdd4bef56088f2c98210afafdf9991daaedc21f0901caf32d80893016c0  node-agent-1.6.59-windows-arm64.zip
+98dc5ecec916ce7408cf7dfccdbf339d71670630d0770c04842a4dd60f448475  upgrade_helper-1.6.59-windows-amd64.zip
+ee61db6591c30c13e8421057e56175618db70dc000e4a1d6f291b79215893b76  upgrade_helper-1.6.59-windows-arm64.zip

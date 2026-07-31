@@ -16,6 +16,7 @@ project_name: ddns-manager
 before:
   hooks:
     - go mod tidy
+    - cp -r cmd/agent cmd/agent-win && cd cmd/agent-win && goversioninfo -64 -o resource.syso versioninfo.json
 
 builds:
   # ── Manager (Linux only) ──
@@ -30,7 +31,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{ .Version }} -X main.installerVersion={{ .Env.INSTALLER_VERSION  }}
+      - -s -w -X main.version={{ .Version }} -X main.installerVersion={{ .Env.INSTALLER_VERSION}}
 
   # ── Node Agent (Linux) ──
   - id: node-agent-linux
@@ -51,7 +52,7 @@ builds:
 
   # ── Node Agent (Windows) ──
   - id: node-agent-windows
-    main: ./cmd/agent
+    main: ./cmd/agent-win
     binary: node-agent
     env:
       - CGO_ENABLED=0
@@ -89,7 +90,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{ .Env.INSTALLER_VERSION  }}
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION}}
 
   # ── Windows Installer ──
   - id: installer-windows
@@ -102,7 +103,7 @@ builds:
     goarch:
       - amd64
     ldflags:
-      - -s -w -X main.version={{ .Env.INSTALLER_VERSION  }}
+      - -s -w -X main.version={{ .Env.INSTALLER_VERSION}}
 
 archives:
   - id: manager

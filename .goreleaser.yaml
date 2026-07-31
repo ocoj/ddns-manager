@@ -49,7 +49,7 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-  # ── Node Agent (Windows, 含版本资源) ──
+  # ── Node Agent (Windows) ──
   - id: node-agent-windows
     main: ./cmd/agent
     binary: node-agent
@@ -62,15 +62,6 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{ .Version }}
-    hooks:
-      pre:
-        # 生成 Windows 版本资源 (.syso) - 需要 goversioninfo
-        - cmd: goversioninfo -64 -o resource.syso versioninfo.json
-          dir: ./cmd/agent
-      post:
-        # 清理临时文件
-        - cmd: rm -f resource.syso
-          dir: ./cmd/agent
 
   # ── Upgrade Helper (Windows) ──
   - id: upgrade-helper

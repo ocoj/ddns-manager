@@ -5,7 +5,6 @@
 #   bash scripts/release.sh --with-github     # Phase A + Phase B: GitHub Release
 #   bash scripts/release.sh --dry-run         # 仅安全检查 + snapshot 构建
 #   bash scripts/release.sh --skip-deploy     # Phase A 跳过部署
-#   bash scripts/release.sh --skip-docker     # 跳过 Docker 镜像
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,7 +21,6 @@ for arg in "$@"; do
         --dry-run) DRY_RUN=true ;;
         --skip-deploy) SKIP_DEPLOY=true ;;
         --with-github) WITH_GITHUB=true ;;
-        --skip-docker) SKIP_DOCKER=true ;;
         *) echo "未知参数: $arg"; exit 1 ;;
     esac
 done

@@ -198,13 +198,5 @@ release:
     - glob: ./build/install.bat
     - glob: ./README.md
 
-dockers:
-  - image_templates:
-      - "ghcr.io/ocoj/ddns-manager:{{ .Version }}"
-      - "ghcr.io/ocoj/ddns-manager:latest"
-    dockerfile: Dockerfile
-    build_flag_templates:
-      - "--platform=linux/amd64,linux/arm64"
-
-# 首次使用需初始化: goreleaser init
-# 然后根据实际需求调整上述配置
+# Docker 镜像由 GitHub Actions 构建（.github/workflows/docker.yml）
+# 本地 goreleaser 不依赖 docker 环境

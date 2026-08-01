@@ -138,16 +138,16 @@ func (u *DNSUpdater) Run() DNSStatus {
 		origWriter := log.Writer()
 		log.SetOutput(io.MultiWriter(origWriter, &detailBuf))
 		// v1.6.28 H8: 闭包内 defer 确保 provider.Init() 内部 panic+recover 后 log 输出也能恢复
+		// v1.6.60: 闭包同时覆盖 AddUpdateDomainRecords(), 捕获 DNS API 调用阶段的日志
 		// 外层 defer 只在 Run() 返回时执行, 闭包内 defer 在 Init 调用后立即执行
+		var domains ddnsconfig.Domains
 		func() {
 			defer log.SetOutput(origWriter)
 			provider.Init(&dc, ipv4cache, ipv6cache)
+			domains = provider.AddUpdateDomainRecords()
 		}()
 
-		// Execute DNS updates — provider handles query + create/update
-		domains := provider.AddUpdateDomainRecords()
-
-		// 解析截获的 log 输出 (Init 时 log 已由闭包恢复)
+		// 解析截获的 log 输出 (Init 和 AddUpdateDomainRecords 的日志均已捕获)
 		// v1.5.34 H1: 精确匹配 ddns-go API 错误 — 优先 JSON 错误码/结构化日志，其次已知错误模式
 		var errLines []string
 		for _, line := range strings.Split(detailBuf.String(), "\n") {

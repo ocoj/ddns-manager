@@ -294,7 +294,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	stepWait(1, 5, "管理端地址")
 	if managerURL == "" {
 		for {
-			fmt.Print("  管理端地址 (如 http://192.168.1.100:9877): ")
+			fmt.Print("  管理端地址 (如 http://192.0.2.1:9877): ")
 			managerURL, _ = readLine(reader)
 			managerURL = strings.TrimSpace(managerURL)
 			if managerURL == "" {

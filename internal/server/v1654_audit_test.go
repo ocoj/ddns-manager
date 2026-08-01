@@ -25,7 +25,7 @@ func TestClassifyLogStatus_ErrorPatterns(t *testing.T) {
 
 		// v1.6.54 新增覆盖 — 都应返回 "error"
 		{name: "timeout", line: "dial tcp: connect: connection timed out", expected: "error"},
-		{name: "refused", line: "connection refused: 192.168.1.1:443", expected: "error"},
+		{name: "refused", line: "connection refused: 192.0.2.1:443", expected: "error"},
 		{name: "denied", line: "permission denied: cannot write file", expected: "error"},
 		{name: "expired", line: "certificate has expired: Jan 01 00:00:00 2025 GMT", expected: "error"},
 		{name: "forbidden", line: "403 forbidden: access denied", expected: "error"},

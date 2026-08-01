@@ -83,8 +83,8 @@ docker logs -f ddns-manager
 # 1. 构建二进制
 bash scripts/build.sh
 
-# 2. 部署到目标服务器
-DEPLOY_HOST=10.0.0.1 DEPLOY_USER=admin bash scripts/release.sh
+# 2. 部署到目标服务器（示例，请替换为实际地址）
+DEPLOY_HOST=192.0.2.1 DEPLOY_USER=your-username bash scripts/release.sh
 
 # 3. 创建 systemd 服务（示例）
 sudo tee /etc/systemd/system/ddns-manager.service << 'EOF'

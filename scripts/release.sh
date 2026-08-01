@@ -42,6 +42,9 @@ fi
 FULL_VERSION="$(cat "$VERSION_FILE")"
 VER_NUM="${FULL_VERSION#v}"
 INSTALLER_VERSION="$(cat "$PROJECT_DIR/INSTALLER_VERSION" 2>/dev/null || echo "1.0.0")"
+# goreleaser 配置 (.goreleaser.yaml) 通过 {{ .Env.INSTALLER_VERSION }} 注入
+# installer 的版本号, 必须 export 否则 goreleaser 模板解析失败
+export INSTALLER_VERSION
 
 # ── 部署配置 ──
 DEPLOY_HOST="${DEPLOY_HOST:-}"
@@ -60,10 +63,12 @@ sanitize_check() {
 
     # 黑名单模式 — 匹配任一则告警
     local BLACKLIST=(
-        "10\.0\.0\."             # 示例 IP（防止真实 IP 泄露）
-        "example\.com"            # 示例域名（防止真实域名泄露）
-        "example\.org"            # 示例域名（防止真实域名泄露）
-        # 密码检测: 匹配8位以上字母+数字组合（疑似密码/Token），但不包含已知公开字符串
+        "10\.0\.0\."             # 私网 IP（防止真实内网 IP 泄露，如 10.0.0.1）
+        "192\.168\."             # 私网 IP（防止真实内网 IP 泄露）
+        "172\.\(1[6-9]\|2[0-9]\|3[01]\)\."  # 私网 IP（防止真实内网 IP 泄露）
+        # 注意: 不设通用域名黑名单。example.com/net/org 是 RFC 2606 保留文档域名，
+        # 测试桩与占位符中使用是正确做法; 仓库还合法引用 github.com / golang.org
+        # / SMTP 服务商预设等公开域名。真实域名泄露依赖人工审查 + 下面的密码检测。
         "[A-Z][a-z]+[0-9]{8,}"  # 疑似密码模式
     )
 
@@ -84,7 +89,7 @@ sanitize_check() {
         "your-server-ip"              # 示例占位符
         "your-username"               # 示例占位符
         "your-manager.example.com"    # 示例域名
-        "10\.0\.0\."                  # 示例 IP
+        "192\.0\.2\."                 # RFC 5737 文档示例 IP（示例/占位符专用）
     )
 
     local hits=0
@@ -100,6 +105,10 @@ sanitize_check() {
             # 跳过白名单路径前缀 (memory/, internal-docs/ — 内部文件不对外发布)
             [[ "$file" == memory/* ]] && continue
             [[ "$file" == internal-docs/* ]] && continue
+
+            # 跳过发布脚本自身 — 其黑名单正则字面量含目标模式（如 10.0.0. ），
+            # 扫描自身必然误报; release.sh 不参与最终发布产物
+            [[ "$file" == scripts/release.sh ]] && continue
 
             while IFS=: read -r line_num content; do
                 # 跳过白名单行

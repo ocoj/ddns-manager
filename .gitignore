@@ -1,5 +1,6 @@
 # 构建产物
 build/
+dist/
 cmd/agent-win/
 
 # 运行数据

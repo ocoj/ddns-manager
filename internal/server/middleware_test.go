@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestClientIPUsesTrustedProxyHeadersForDockerBridgeRange(t *testing.T) {
+func TestClientIPUsesTrustedProxyHeadersForCIDRRange(t *testing.T) {
 	s := &Server{}
-	s.SetTrustedProxy("172.18.0.0/16")
+	s.SetTrustedProxy("192.0.2.0/24")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "172.18.0.5:12345"
+	req.RemoteAddr = "192.0.2.5:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.10")
 
 	req = s.applyTrustedProxy(req)
@@ -22,10 +22,10 @@ func TestClientIPUsesTrustedProxyHeadersForDockerBridgeRange(t *testing.T) {
 
 func TestClientIPSupportsCommaSeparatedTrustedProxyList(t *testing.T) {
 	s := &Server{}
-	s.SetTrustedProxy("127.0.0.1, 172.18.0.0/16")
+	s.SetTrustedProxy("127.0.0.1, 192.0.2.0/24")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "172.18.0.9:54321"
+	req.RemoteAddr = "192.0.2.9:54321"
 	req.Header.Set("X-Real-IP", "198.51.100.42")
 
 	req = s.applyTrustedProxy(req)

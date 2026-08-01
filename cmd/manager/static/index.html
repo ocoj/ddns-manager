@@ -3116,7 +3116,7 @@ function renderSettings(smtp, rl, tz, proxyIP) {
   window._tz = tz;
   // 受信代理
   h += '<div class="card"><div class="card-header"><h3>受信代理</h3></div>';
-  h += '<div class="form-inline"><div class="form-group"><label>反向代理 IP</label><input id="proxy-ip" value="' + he(proxyIP) + '" placeholder="如 10.0.0.1" style="width:200px"></div>';
+  h += '<div class="form-inline"><div class="form-group"><label>反向代理 IP</label><input id="proxy-ip" value="' + he(proxyIP) + '" placeholder="如 192.0.2.1" style="width:200px"></div>';
   h += '<div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="saveTrustedProxy()">保存</button></div></div>';
   h += '<div class="tip" style="margin-top:4px">Manager 信任该 IP 转发的 X-Real-IP 请求头，用于仪表盘展示真实客户端 IP。留空=禁用</div></div>';
   // 修改密码

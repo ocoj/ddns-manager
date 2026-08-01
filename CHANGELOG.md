@@ -1,3 +1,23 @@
+## v1.6.60 — 2026-08-01
+
+### 🐛 配置下发修复
+
+- **心跳配置推送判断优化**: 当 Manager 本地渲染的配置 hash（`cfgHash`）或 Agent 上报的 hash（`reqHash`）与记录不一致时均触发下发
+  - 修复场景: DNS Key 轮换后 Manager 重新渲染出新配置，但 Agent 上报的仍是旧 hash，旧逻辑（仅比对 `reqHash` 与 `recHash`）导致新配置永不推送
+  - 新增 `TestShouldPushConfig_Condition` 覆盖 6 种推送/不推送场景
+
+### 🧹 脱敏清理
+
+- `CHANGELOG.md`/`docs/usage-guide.md` 中的内部部署 IP 统一替换为 RFC 5737 文档示例 IP（`192.0.2.x`）
+- `scripts/release.sh` 脱敏核验修复: 移除与黑名单冲突的私网网段白名单项（导致真实内网 IP 可绕过检查），补充常用私网网段黑名单（RFC 1918），并跳过发布脚本自身扫描
+- 新增 `192.0.2.*` 文档示例 IP 白名单
+
+### 📋 涉及文件
+
+`internal/server/handlers_nodes.go`, `internal/server/handlers_nodes_test.go`, `CHANGELOG.md`, `scripts/release.sh`, `docs/usage-guide.md`, `cmd/manager/static/index.html` — 共 6 文件
+
+---
+
 ## v1.6.59 — 2026-07-31
 
 ### 📦 ddns-go 上游升级 v6.17.0 → v6.17.4
@@ -39,7 +59,7 @@
   - Docker `userland-proxy: false` — 禁用 docker-proxy 保留客户端源 IP
   - Docker `ipv6: true` — 启用 IPv6 端口映射
   - 清理旧 host 模式残留：`fix-npm-ports.sh` 脚本 + `/opt/npm/` docker-compose
-- **Manager 受信代理**: 配置为 `10.0.0.4, 10.0.0.0/16`（CIDR 覆盖 bridge 网段）
+- **Manager 受信代理**: 配置为 `192.0.2.4, 192.0.2.0/24`（示例网段，请按实际网络调整）
 - NPM Web UI 内配置 `*.example.com` 通配符 Let's Encrypt 证书
 
 ### 📝 文档
@@ -659,7 +679,7 @@ location = /bin/install.sh {
 - **L3**: CertHashes 先赋值后可能修改(已由锁保护)
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.6.30 ✅
+- Manager (192.0.2.1): v1.6.30 ✅
 - 二进制上传: 4平台Agent + upgrade_helper + sha256
 - 升级推送: agent_version=1.6.30 已设置
 
@@ -689,7 +709,7 @@ location = /bin/install.sh {
 - **L1**: `upgrade_linux.go` 注释修正（下载→写入）
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.6.29 ✅
+- Manager (192.0.2.1): v1.6.29 ✅
 - 二进制上传: 4平台Agent + upgrade_helper + sha256 全部到位
 - 升级推送: agent_version=1.6.29 已设置, UpgradeState 已清空
 - 客户端待心跳自动升级...
@@ -862,8 +882,8 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
 - `docs/VERSIONING.md` — 发版流程、/bin/管理、历史教训
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.6.0 ✅
-- Win2022 (10.0.0.3): v1.6.8 ✅ IIS扫描1个SSL绑定
+- Manager (192.0.2.1): v1.6.0 ✅
+- Win2022 (192.0.2.3): v1.6.8 ✅ IIS扫描1个SSL绑定
 - sp.example.com: v1.5.41 → 待心跳升级
 
 ---
@@ -891,7 +911,7 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
   历史教训），防止版本推进跑偏。
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.5.37 ✅
+- Manager (192.0.2.1): v1.5.37 ✅
 - All Agent nodes: v1.5.36 → 心跳自动升级到 v1.5.37 (已推送+含SHA256)
 
 ---
@@ -931,9 +951,9 @@ DNS Key在线验证不触发真实API、Agent二进制下载无完整性校验�
   修复：限制 header 长度 ≤ 2048 字节
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.5.36 ✅
-- Client A Linux (10.0.0.2): v1.5.36 ✅ (手动部署)
-- Client B Windows (10.0.0.3): v1.5.35 → 等待心跳自动升级到 v1.5.36
+- Manager (192.0.2.1): v1.5.36 ✅
+- Client A Linux (192.0.2.2): v1.5.36 ✅ (手动部署)
+- Client B Windows (192.0.2.3): v1.5.35 → 等待心跳自动升级到 v1.5.36
 
 ---
 
@@ -980,9 +1000,9 @@ DNS Key在线验证不触发真实API、Agent二进制下载无完整性校验�
 - **M7 testDNSKeyOnline 用虚拟域名 test.example.com** — 修复：不设域名，Init 环节已验证凭证
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.5.35 ✅
-- Client A Linux (10.0.0.2): v1.5.35 ✅ (心跳自动升级)
-- Client B Windows (10.0.0.3): v1.5.34 → 等待心跳自动升级到 v1.5.35
+- Manager (192.0.2.1): v1.5.35 ✅
+- Client A Linux (192.0.2.2): v1.5.35 ✅ (心跳自动升级)
+- Client B Windows (192.0.2.3): v1.5.34 → 等待心跳自动升级到 v1.5.35
 
 ---
 
@@ -1043,9 +1063,9 @@ DNS Key在线验证不触发真实API、Agent二进制下载无完整性校验�
   - `selfUpgrade` 增加 `compareSemVer` 版本比较 — 推送版本 ≤ 当前 → 拒绝降级并记录日志
 
 #### 🧪 部署状态
-- Manager (10.0.0.1): v1.5.33 ✅
-- Client A Linux (10.0.0.2): v1.5.33 ✅
-- Client B Windows (10.0.0.3): v1.5.33 已推送 ✅ (修复 Win10 START_PENDING 卡死)
+- Manager (192.0.2.1): v1.5.33 ✅
+- Client A Linux (192.0.2.2): v1.5.33 ✅
+- Client B Windows (192.0.2.3): v1.5.33 已推送 ✅ (修复 Win10 START_PENDING 卡死)
 
 ---
 
@@ -1083,9 +1103,9 @@ StartAutoRenew 多账号共享超时、Agent agent.log 无轮转、DNS日志缓�
   修复：`log.SetFlags(log.LstdFlags | log.Lshortfile)`
 
 #### 🧪 测试环境部署
-- Manager (10.0.0.1): v1.5.31 ✅
-- Client A Linux (10.0.0.2): v1.5.31 ✅ 心跳正常 DDNS=OK
-- Client B Windows (10.0.0.3): v1.5.30 → 升级推送已下发，等待心跳自动升级
+- Manager (192.0.2.1): v1.5.31 ✅
+- Client A Linux (192.0.2.2): v1.5.31 ✅ 心跳正常 DDNS=OK
+- Client B Windows (192.0.2.3): v1.5.30 → 升级推送已下发，等待心跳自动升级
 
 ---
 
@@ -1127,9 +1147,9 @@ ACME 手动续签 CertBundle 未重新加载、certErrors 不上报、CertBindin
   密码含 `'` 时 PowerShell 命令解析失败。修复：`strings.ReplaceAll(pfxPassword, "'", "''")`
 
 #### 🧪 测试环境部署
-- Manager (10.0.0.1): v1.5.30 ✅
-- Client A Linux (10.0.0.2): v1.5.30 ✅ 心跳正常
-- Client B Windows (10.0.0.3): v1.5.29 → 由心跳自动升级到 v1.5.30
+- Manager (192.0.2.1): v1.5.30 ✅
+- Client A Linux (192.0.2.2): v1.5.30 ✅ 心跳正常
+- Client B Windows (192.0.2.3): v1.5.29 → 由心跳自动升级到 v1.5.30
 
 ---
 
@@ -1196,9 +1216,9 @@ install.sh 版本硬编码/无校验、DNS 失败域名丢失、ACME 空续签�
   生成 10 个 .sha256 校验文件供 install.sh 使用
 
 #### 🧪 测试环境部署
-- Manager (10.0.0.1): v1.5.29 ✅
-- Client A Linux (10.0.0.2): v1.5.29 ✅ 心跳正常
-- Client B Windows (10.0.0.3): v1.5.28 → 由心跳自动升级到 v1.5.29
+- Manager (192.0.2.1): v1.5.29 ✅
+- Client A Linux (192.0.2.2): v1.5.29 ✅ 心跳正常
+- Client B Windows (192.0.2.3): v1.5.28 → 由心跳自动升级到 v1.5.29
 
 ---
 
@@ -1790,9 +1810,9 @@ PowerShell 不同版本/执行上下文对 UUID 输出的尾随字符处理不�
 
 | 服务器 | 版本 | 状态 |
 |--------|------|------|
-| Manager (10.0.0.1) | v1.5.6 | 🟢 |
-| client-a (10.0.0.2) | v1.5.6 | 🟢 DDNS=OK |
-| client-b (10.0.0.3) | v1.5.6 | 🟢 DDNS=OK |
+| Manager (192.0.2.1) | v1.5.6 | 🟢 |
+| client-a (192.0.2.2) | v1.5.6 | 🟢 DDNS=OK |
+| client-b (192.0.2.3) | v1.5.6 | 🟢 DDNS=OK |
 
 ---
 
@@ -1818,9 +1838,9 @@ PowerShell 不同版本/执行上下文对 UUID 输出的尾随字符处理不�
 
 | 服务器 | 版本 | 状态 |
 |--------|------|------|
-| Manager (10.0.0.1) | v1.5.6 | 🟢 在线 |
-| client-a (10.0.0.2) | v1.5.6 | 🟢 DDNS=OK |
-| client-b (10.0.0.3) | → v1.5.6 | 🔄 下次心跳自动升级 |
+| Manager (192.0.2.1) | v1.5.6 | 🟢 在线 |
+| client-a (192.0.2.2) | v1.5.6 | 🟢 DDNS=OK |
+| client-b (192.0.2.3) | → v1.5.6 | 🔄 下次心跳自动升级 |
 
 ---
 

@@ -290,8 +290,9 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				renderErr.Error(), "error")
 			// 回传错误给 Agent，便于诊断
 			resp.ConfigError = renderErr.Error()
-		} else if rendered != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "") {
-			// v1.5.29: ConfigHash 为空时（首次推送）强制下发，避免双方都为空导致永不推送
+		} else if rendered != "" && (cfgHash != rec.ConfigHash || req.ConfigHash != rec.ConfigHash) {
+			// v1.6.59: 当 Manager 本地渲染的配置 hash 或 Agent 上报的 hash 与记录不一致时推送，
+			// 确保 DNS Key 轮换、配置变更、Agent 配置丢失/损坏等场景都能被正确感知并下发。
 			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
 				fmt.Sprintf("%d bytes", len(rendered)), "success")
 			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}

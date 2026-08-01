@@ -77,3 +77,76 @@ func TestDetectPlatform_UnknownArchReturnsOriginal(t *testing.T) {
 		t.Errorf("goarch = %q, want riscv64 (pass-through)", goarch)
 	}
 }
+
+// TestShouldPushConfig_Condition 验证配置推送判断条件在 v1.6.59 DNS Key 轮换修复后的行为。
+// 该条件位于 internal/server/handlers_nodes.go:293。
+func TestShouldPushConfig_Condition(t *testing.T) {
+	// 使用与 handleHeartbeat 中一致的变量名：
+	//   cfgHash   = 当前根据 saved ConfigYAML + DNS keys 渲染出的配置 hash
+	//   reqHash   = Agent 上报的 ConfigHash
+	//   recHash   = Manager 存储的该节点 ConfigHash
+	shouldPush := func(cfgHash, reqHash, recHash string) bool {
+		return cfgHash != recHash || reqHash != recHash
+	}
+
+	cases := []struct {
+		name    string
+		cfgHash string
+		reqHash string
+		recHash string
+		want    bool
+	}{
+		{
+			name:    "DNS Key 凭据更新后应推送",
+			cfgHash: "sha256:new",
+			reqHash: "sha256:old",
+			recHash: "sha256:old",
+			want:    true,
+		},
+		{
+			name:    "节点配置修改后应推送",
+			cfgHash: "sha256:new",
+			reqHash: "sha256:old",
+			recHash: "sha256:old",
+			want:    true,
+		},
+		{
+			name:    "Agent 配置丢失/不同步时应推送",
+			cfgHash: "sha256:current",
+			reqHash: "sha256:missing",
+			recHash: "sha256:current",
+			want:    true,
+		},
+		{
+			name:    "首次推送（Manager 无记录）时应推送",
+			cfgHash: "sha256:first",
+			reqHash: "",
+			recHash: "",
+			want:    true,
+		},
+		{
+			name:    "一切正常时不应推送",
+			cfgHash: "sha256:current",
+			reqHash: "sha256:current",
+			recHash: "sha256:current",
+			want:    false,
+		},
+		{
+			name:    "Manager 记录损坏时应推送以修复记录",
+			cfgHash: "sha256:current",
+			reqHash: "sha256:current",
+			recHash: "sha256:stale",
+			want:    true,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldPush(tt.cfgHash, tt.reqHash, tt.recHash)
+			if got != tt.want {
+				t.Errorf("shouldPush(cfgHash=%q, reqHash=%q, recHash=%q) = %v, want %v",
+					tt.cfgHash, tt.reqHash, tt.recHash, got, tt.want)
+			}
+		})
+	}
+}

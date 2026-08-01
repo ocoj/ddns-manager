@@ -1,6 +1,6 @@
 # ddns-manager
 
-[![Version](https://img.shields.io/badge/version-1.6.59-blue)](https://github.com/ocoj/ddns-manager)
+[![Version](https://img.shields.io/badge/version-1.6.60-blue)](https://github.com/ocoj/ddns-manager)
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
 
@@ -67,8 +67,20 @@ bash -c "$(curl -fsSL https://your-manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.59** | ddns-go v6.17.4 + 发布基础设施 |
+| ddns-manager | **v1.6.60** | ddns-go v6.17.4 + 发布基础设施 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.4 | DNS provider library |
 
 > **注意**: 本项目处于开发测试阶段，从未正式发布。部署更新时需全新部署，不保证与旧版本数据格式兼容。
+
+## 致谢
+
+本项目 DNS 更新引擎采用 [ddns-go](https://github.com/jeessy2/ddns-go) (v6.17.4) 的 DNS provider 库。
+
+引用方式：
+
+- `internal/provider/registry.go` — 28 个 DNS 提供商注册表，直接引用 `github.com/jeessy2/ddns-go/v6/dns`
+- `cmd/agent/dns_updater.go` — 内嵌 ddns-go DNS provider，同进程执行 DNS 记录更新
+- Agent 二进制通过 `go mod` 声明依赖 `github.com/jeessy2/ddns-go/v6`
+
+感谢 [jeessy2](https://github.com/jeessy2) 和所有 ddns-go 贡献者提供的高质量 DNS 引擎。

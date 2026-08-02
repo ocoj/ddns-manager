@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.svg?t=2" alt="DDNS-Manager"/>
+  <img src="docs/hero-v2.svg" alt="DDNS-Manager"/>
 </p>
 
 <p align="center">

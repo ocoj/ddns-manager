@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="docs/logo.png" alt="DDNS-Manager Logo" width="120"/>
+</p>
+
+<p align="center">
   <img src="docs/hero.svg" alt="DDNS-Manager"/>
 </p>
 

@@ -1,10 +1,24 @@
-# ddns-manager
+<p align="center">
+  <img src="docs/logo.png" alt="DDNS-Manager Logo" width="120"/>
+</p>
 
-[![Version](https://img.shields.io/github/v/release/ocoj/ddns-manager?color=blue)](https://github.com/ocoj/ddns-manager/releases)
-[![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
+<h1 align="center">DDNS-Manager</h1>
 
-内嵌 [ddns-go](https://github.com/jeessy2/ddns-go) DNS 引擎的集中管理平台。Manager 统一管控 DNS Key、SSL 证书、Agent 版本，Agent 内嵌 ddns-go DNS provider 直接更新记录。
+<p align="center">
+  内嵌 <a href="https://github.com/jeessy2/ddns-go">ddns-go</a> DNS 引擎的集中管理平台<br/>
+  统一管控 <b>DNS Key</b> · <b>SSL 证书</b> · <b>Agent 版本</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ocoj/ddns-manager/releases"><img src="https://img.shields.io/github/v/release/ocoj/ddns-manager?color=blue" alt="Version"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-green" alt="License"/></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8" alt="Go"/></a>
+  <a href="https://github.com/ocoj/ddns-manager/actions"><img src="https://img.shields.io/github/actions/workflow/status/ocoj/ddns-manager/build.yml?branch=main" alt="CI"/></a>
+</p>
+
+## 📖 简介
+
+Manager 集中管控 DNS Key、SSL 证书与 Agent 版本；Agent 内嵌 ddns-go DNS provider 直接更新 DNS 记录，实现分布式 DDNS 集中管理。
 
 ## 📚 文档索引
 
@@ -12,14 +26,40 @@
 |------|------|
 | **[变更日志](CHANGELOG.md)** | 版本变更日志 |
 
-## 特性
+## ✨ 特性
 
-- **集中管理** — Web 仪表盘统一查看节点状态、IP、版本、健康
-- **配置推送** — DNS 配置 + Key 注入 → Agent 热加载
-- **证书分发** — SSL 证书 AES-256-GCM 加密推送，Agent 自动部署
-- **内嵌 DNS 引擎** — Agent 同进程运行 ddns-go DNS provider
-- **跨平台** — Linux (systemd) + Windows 7+ (Windows Service)
-- **版本管理** — Git tag 驱动 + 符号链接安装 + 一键回滚
+- 🗂️ **集中管理** — Web 仪表盘统一查看节点状态、IP、版本、健康
+- 📡 **配置推送** — DNS 配置 + Key 注入 → Agent 热加载
+- 🔐 **证书分发** — SSL 证书 AES-256-GCM 加密推送，Agent 自动部署
+- ⚙️ **内嵌 DNS 引擎** — Agent 同进程运行 ddns-go DNS provider
+- 🖥️ **跨平台** — Linux (systemd) + Windows 7+ (Windows Service)
+- 🔄 **版本管理** — Git tag 驱动 + 符号链接安装 + 一键回滚
+
+## 🏗️ 架构
+
+```mermaid
+flowchart LR
+    subgraph M["管理端 Manager"]
+        W["Web 仪表盘<br/>DNS Key · 证书 · 版本"]
+    end
+    subgraph A["节点 Agent × N"]
+        A1["Agent 1"]
+        A2["Agent 2"]
+        AN["Agent N"]
+    end
+    W -->|DNS 配置 + Key + 证书| A1
+    W -->|DNS 配置 + Key + 证书| A2
+    W -->|DNS 配置 + Key + 证书| AN
+    A1 -->|心跳 · IP · 版本| W
+    A2 -->|心跳 · IP · 版本| W
+    AN -->|心跳 · IP · 版本| W
+```
+
+## 📸 界面预览
+
+| 登录页 | 仪表盘 |
+| :---: | :---: |
+| ![登录页](docs/screenshots/login.png) | ![仪表盘](docs/screenshots/dashboard.png) |
 
 ## 快速开始
 
@@ -52,16 +92,19 @@ bash scripts/deploy.sh
 bash -c "$(curl -fsSL https://your-manager.example.com:30443/bin/install.sh)"
 ```
 
-## 技术栈
+## 🛠️ 技术栈
 
-- Go 1.25+ / gorilla/mux / ddns-go v6.17.4
-- 单文件 SPA (go:embed) + PWA 支持
-- JSON 文件持久化 / AES-256-GCM 加密 / HKDF-SHA256 密钥派生
-- PKCS#12 PFX 证书生成 (go-pkcs12, 纯 Go)
-- ACME (Let's Encrypt / ZeroSSL / Google Trust) / acme.sh + 纯 Go 双路径
-- SMTP 邮件通知 / YAML 配置解析 (gopkg.in/yaml.v3)
-- 跨平台 systemd/Windows Service 集成 (golang.org/x/sys)
-- Docker 镜像 (ghcr.io\/ocoj\/ddns-manager)
+| 类别 | 说明 |
+|------|------|
+| 语言 | Go 1.25+ |
+| Web | gorilla/mux · 单文件 SPA (go:embed) · PWA 支持 |
+| DNS 引擎 | ddns-go v6.17.4（内嵌 DNS provider） |
+| 持久化 | JSON 文件 · AES-256-GCM 加密 · HKDF-SHA256 密钥派生 |
+| 证书 | go-pkcs12 纯 Go PFX 生成 · ACME (Let's Encrypt / ZeroSSL / Google Trust) 双路径 |
+| 配置 | YAML 解析 (gopkg.in/yaml.v3) |
+| 通知 | SMTP 邮件通知 |
+| 平台 | Linux systemd · Windows 7+ Service (golang.org/x/sys) |
+| 分发 | Docker 镜像 (ghcr.io/ocoj/ddns-manager) |
 
 ## 版本
 

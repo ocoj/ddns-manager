@@ -6,6 +6,7 @@ cmd/agent-win/
 # 运行数据
 data/
 memory/
+win10.log/
 
 # IDE
 .idea/

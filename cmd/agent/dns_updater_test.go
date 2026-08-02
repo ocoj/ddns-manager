@@ -2,13 +2,15 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/ocoj/ddns-manager/internal/provider"
 	"github.com/jeessy2/ddns-go/v6/util"
+	"github.com/ocoj/ddns-manager/internal/provider"
 )
 
 // ── LogBuffer ──
@@ -356,52 +358,88 @@ func TestDNSStatusLastLine(t *testing.T) {
 }
 
 // v1.6.61: IpCache 持久化 — 功能回归测试
+// 注: 测试通过 gettype: cmd + callback(httptest) 构造可控场景, 不依赖真实 DNS API/公网
 
-// TestIpCachePersist_SkipOnSameIP 验证 IP 不变时 Run() 不会重复全量更新
-// 同 IP 二次 Run 后 ipCaches 的 Addr 非空、Times 递减（间接验证跳过机制生效）
+// TestIpCachePersist_SkipOnSameIP 验证 IP 不变时 Run() 跳过全量更新
+// 同 IP 二次 Run: 首次 callback 1 次请求, 二次零请求 + Times 递减（跳过机制生效）
 func TestIpCachePersist_SkipOnSameIP(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
 	u := NewDNSUpdater()
-	u.ApplyConfig([]byte(`notallowwanaccess: true
+	u.ApplyConfig([]byte(fmt.Sprintf(`notallowwanaccess: true
 dnsconf:
-  - dns: {name: alidns, id: test, secret: test}
-    ipv4: {enable: true, gettype: url, url: "http://1.2.3.4", domains: [example.com]}
+  - dns: {name: callback, id: %q}
+    ipv4: {enable: true, gettype: cmd, cmd: "echo 1.2.3.4", domains: [example.com]}
     ipv6: {enable: false}
     ttl: "300"
-`))
+`, srv.URL)))
 
-	// 首轮 Run 后 ipCaches 应有 Addr 和 Times>0
-	s1 := u.Run()
-	_ = s1
+	// 首轮 Run: IP 检测成功 → Check true → 全量 → callback 1 次请求, Addr/Times 建立
+	u.Run()
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("first Run calls = %d, want 1", got)
+	}
 	if len(u.ipCaches) != 1 {
 		t.Fatalf("ipCaches len = %d, want 1", len(u.ipCaches))
 	}
-	// Times 应在 1..6 之间（IP获取可能成功=6或失败=0，取决于URL可访问性）
-	if u.ipCaches[0][0].Times == 0 && u.ipCaches[0][0].Addr == "" {
-		// IP 获取失败是预期的（测试环境无真实 URL）
-		t.Log("IP detection failed in test (expected without real network)")
+	if u.ipCaches[0][0].Addr != "1.2.3.4" {
+		t.Fatalf("after first Run, Addr = %q, want 1.2.3.4", u.ipCaches[0][0].Addr)
+	}
+	if u.ipCaches[0][0].Times <= 1 {
+		t.Fatalf("after first Run, Times = %d, want > 1", u.ipCaches[0][0].Times)
+	}
+
+	// 二次 Run: IP 未变 → Check false → 跳过, 零请求, Times 递减
+	timesBefore := u.ipCaches[0][0].Times
+	u.Run()
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("second Run calls = %d, want still 1 (skipped)", got)
+	}
+	if u.ipCaches[0][0].Addr != "1.2.3.4" {
+		t.Errorf("after second Run, Addr changed to %q", u.ipCaches[0][0].Addr)
+	}
+	if u.ipCaches[0][0].Times != timesBefore-1 {
+		t.Errorf("after second Run, Times = %d, want %d (decremented)", u.ipCaches[0][0].Times, timesBefore-1)
 	}
 }
 
 // TestIpCachePersist_FailureReset 验证 DNS 更新失败后缓存被重置
-// 段失败后对应 ipCaches[i][0/1] 重置为空
+// 预填"上次成功"缓存 Addr 与当前 IP 不一致（IP 变化）→ 本次全量触发 callback → 请求失败 → 缓存清空
+// 注: callback 有自身 lastIpv4 去重, 故预填 Addr 用不同 IP(9.9.9.9) 使其必然触发请求
 func TestIpCachePersist_FailureReset(t *testing.T) {
+	// 构造立即失败的 callback URL（服务器关闭 → connection refused, 无需外部网络）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	deadURL := srv.URL
+	srv.Close()
+
 	u := NewDNSUpdater()
-	u.ApplyConfig([]byte(`notallowwanaccess: true
+	u.ApplyConfig([]byte(fmt.Sprintf(`notallowwanaccess: true
 dnsconf:
-  - dns: {name: alidns, id: test, secret: test}
-    ipv4: {enable: false}
+  - dns: {name: callback, id: %q}
+    ipv4: {enable: true, gettype: cmd, cmd: "echo 1.2.3.4", domains: [example.com]}
     ipv6: {enable: false}
     ttl: "300"
-`))
+`, deadURL)))
 
-	// 预填非空缓存模拟失败场景
-	u.ipCaches = [][2]util.IpCache{{{Addr: "1.2.3.4", Times: 6}}}
+	// 预填上次成功缓存(Addr=9.9.9.9), 与当前 IP(1.2.3.4) 不一致 → Check() 返回 true → 本次全量执行
+	u.ipCaches = [][2]util.IpCache{{{Addr: "9.9.9.9", Times: 6}}}
 
 	u.Run()
 
-	// 无域名的段不会触发更新 → Addr 保持预填值（非 UpdatedFailed）
-	if u.ipCaches[0][0].Addr != "1.2.3.4" {
-		t.Errorf("Addr should remain, got %q", u.ipCaches[0][0].Addr)
+	// callback 不可达 → UpdatedFailed → 失败重置 → 缓存清空 (Addr="", Times=0)
+	if u.ipCaches[0][0].Addr != "" || u.ipCaches[0][0].Times != 0 {
+		t.Errorf("cache should be reset after failure, got Addr=%q Times=%d",
+			u.ipCaches[0][0].Addr, u.ipCaches[0][0].Times)
+	}
+	if u.status.LastOK {
+		t.Errorf("expected LastOK=false after callback failure")
 	}
 }
 

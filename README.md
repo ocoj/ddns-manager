@@ -37,23 +37,7 @@ Manager 集中管控 DNS Key、SSL 证书与 Agent 版本；Agent 内嵌 ddns-go
 
 ## 🏗️ 架构
 
-```mermaid
-flowchart LR
-    subgraph M["管理端 Manager"]
-        W["Web 仪表盘<br/>DNS Key · 证书 · 版本"]
-    end
-    subgraph A["节点 Agent × N"]
-        A1["Agent 1"]
-        A2["Agent 2"]
-        AN["Agent N"]
-    end
-    W -->|DNS 配置 + Key + 证书| A1
-    W -->|DNS 配置 + Key + 证书| A2
-    W -->|DNS 配置 + Key + 证书| AN
-    A1 -->|心跳 · IP · 版本| W
-    A2 -->|心跳 · IP · 版本| W
-    AN -->|心跳 · IP · 版本| W
-```
+<img src="docs/architecture.svg" alt="DDNS-Manager 架构图"/>
 
 ## 📸 界面预览
 

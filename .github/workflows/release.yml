@@ -15,7 +15,6 @@ jobs:
       version: ${{ steps.ver.outputs.VERSION }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with: { go-version: '1.22' }
 
@@ -39,6 +38,14 @@ jobs:
             -ldflags "-s -w -X main.version=${VER}" \
             -o ../../build/node-agent-linux-amd64 .
 
+      - name: Build Agent (linux/arm64)
+        env: { VER: "${{ steps.ver.outputs.VERSION }}" }
+        run: |
+          cd cmd/agent
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags "-s -w -X main.version=${VER}" \
+            -o ../../build/node-agent-linux-arm64 .
+
       - name: Build Agent (windows/amd64)
         env: { VER: "${{ steps.ver.outputs.VERSION }}" }
         run: |
@@ -51,6 +58,7 @@ jobs:
         run: |
           cd build
           sha256sum node-agent-linux-amd64 | awk '{print $1}' > node-agent-linux-amd64.sha256
+          sha256sum node-agent-linux-arm64 | awk '{print $1}' > node-agent-linux-arm64.sha256
           sha256sum node-agent-windows-amd64.exe | awk '{print $1}' > node-agent-windows-amd64.exe.sha256
 
       - uses: actions/upload-artifact@v4
@@ -78,6 +86,8 @@ jobs:
           mv ddns-manager ddns-manager-v${VER}-linux-amd64
           mv node-agent-linux-amd64 node-agent-v${VER}-linux-amd64
           mv node-agent-linux-amd64.sha256 node-agent-v${VER}-linux-amd64.sha256
+          mv node-agent-linux-arm64 node-agent-v${VER}-linux-arm64
+          mv node-agent-linux-arm64.sha256 node-agent-v${VER}-linux-arm64.sha256
           mv node-agent-windows-amd64.exe node-agent-v${VER}-windows-amd64.exe
           mv node-agent-windows-amd64.exe.sha256 node-agent-v${VER}-windows-amd64.exe.sha256
           ls -lh

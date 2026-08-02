@@ -1,3 +1,28 @@
+## v1.6.64 — 2026-08-02
+
+### 🐛 方案B：DNS Key 全局版本号持久化比对 — 修复离线节点配置永不推送死锁
+
+- **根因**: v1.6.63 将配置推送从"状态比对"退化为"事件信号"（`InvalidateConfigHashesForDNSKey`）。事件信号为一次性、时序敏感——关机/断网节点错过信号后，`reqHash==recHash` 且 `recHash!=""` 导致永不推送
+- **修复**: 新增 `dnsKeysVersion` 全局版本计数器（三层防线）：
+  - `InvalidateConfigHashesForDNSKey`：在线节点立即推送（精准加速）
+  - `dnsKeysVersion` 持久化版本比对：离线节点自愈兜底，`rec.ConfigKeysVersion < curKeyVer` 触发渲染
+  - `req.ConfigHash != rec.ConfigHash`：Agent hash 漂移检测
+- **版本基线初始化**: 旧版升级时 `dns_keys.json` 非空但版本为 0 → 自动初始化版本为 1，闭合升级过渡期死锁盲区
+- **推送语义收紧**: 版本落后触发渲染，但 `cfgHash == req.ConfigHash` 时只同步版本不冗余推送
+- **Agent 端零改动**: 存量节点无需升级即自动自愈
+
+### 📋 涉及文件
+
+`internal/model/model.go`, `internal/store/store.go`, `internal/server/handlers_admin.go`, `internal/server/handlers_nodes.go`, `internal/store/store_test.go`, `internal/server/handlers_nodes_test.go`, `.deepcode/skills/deploy-release/SKILL.md` — 共 7 文件
+
+### 🧪 测试
+
+- store: `TestBumpDNSKeysVersion_Persists` / `TestDNSKeysVersion_NoFile` / `TestBaselineInit_*` × 3
+- handlers: `TestShouldPushConfig_Condition` (v1.6.59 回归) + `TestShouldRenderConfig_Condition` (新逻辑)
+- 并发安全: `TestBaselineInit_Concurrent` (含 `-race`)
+
+---
+
 ## v1.6.63 — 2026-08-02
 
 ### ✨ 配置变化感知 — 事件驱动推送

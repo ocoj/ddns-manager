@@ -1,6 +1,6 @@
 # ddns-manager
 
-[![Version](https://img.shields.io/badge/version-1.6.63-blue)](https://github.com/ocoj/ddns-manager)
+[![Version](https://img.shields.io/github/v/release/ocoj/ddns-manager?color=blue)](https://github.com/ocoj/ddns-manager/releases)
 [![License](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev)
 

@@ -193,9 +193,9 @@
   <h1>🚀 DDNS-Manager 部署与使用指南</h1>
   <p class="subtitle">内嵌 ddns-go DNS 引擎的集中管理平台 — 统一管控 DNS Key、SSL 证书、Agent 版本</p>
   <div class="badge-row">
-    <span class="badge"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg> v1.6.58</span>
+    <span class="badge"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg> v1.6.64</span>
     <span class="badge"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg> Go 1.25+</span>
-    <span class="badge"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></svg> ddns-go v6.17.0</span>
+    <span class="badge"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></svg> ddns-go v6.17.4</span>
     <span class="badge"><svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg> GPL v3</span>
   </div>
 </div>
@@ -205,7 +205,7 @@
   <h2>📖 目录</h2>
   <ol>
     <li><a href="#arch">系统架构</a></li>
-    <li><a href="#quickstart">快速开始</a></li>
+    <li><a href="#quickstart">快速开始</a> <span class="sub">(Docker / 手动)</span></li>
     <li><a href="#manager">Manager 部署配置</a></li>
     <li><a href="#agent">Agent 安装与管理</a></li>
     <li><a href="#webui">Web UI 使用指南</a></li>
@@ -311,7 +311,29 @@
   <tr><td>存储</td><td>~50MB (不含运行时数据)</td></tr>
 </table>
 
-<h3>构建</h3>
+<h3>Docker 部署（推荐）</h3>
+<pre>
+<span style="color:#a0aec0"># 拉取镜像</span>
+docker pull ghcr.io/ocoj/ddns-manager:latest
+
+<span style="color:#a0aec0"># 启动 (数据持久化到 /opt/ddns-manager/data)</span>
+docker run -d \
+  --name ddns-manager \
+  --restart unless-stopped \
+  -p 9877:9877 \
+  -v /opt/ddns-manager/data:/data \
+  ghcr.io/ocoj/ddns-manager:latest
+
+<span style="color:#a0aec0"># 查看日志</span>
+docker logs -f ddns-manager
+</pre>
+
+<div class="info-box info-tip">
+  <span class="icon">💡</span>
+  <p>首次启动后访问 <code>https://&lt;主机IP&gt;:9877</code>，使用默认密码 <code>Admin12345</code> 登录并立即修改。</p>
+</div>
+
+<h3>手动构建</h3>
 <pre>
 <span style="color:#a0aec0"># 构建全部组件 (Manager + Agent + 安装器)</span>
 bash scripts/build.sh
@@ -690,8 +712,8 @@ bash -c "$(curl -fsSL https://your-manager.example.com:30443/bin/install.sh)"
 
 <h3>版本升级</h3>
 <pre>
-<span style="color:#a0aec0"># 1. 更新 VERSION 文件</span>
-echo "v1.6.59" > VERSION
+<span style="color:#a0aec0"># 1. 更新 VERSION 文件 (替换为实际新版本号)</span>
+echo "v1.6.65" > VERSION
 
 <span style="color:#a0aec0"># 2. 构建新版本</span>
 bash scripts/build.sh
@@ -792,7 +814,7 @@ curl -sk https://localhost:9877/api/ping
 
 <!-- Footer -->
 <div style="text-align:center;padding:24px 0 8px;font-size:12px;color:var(--c-text2);border-top:1px solid var(--c-border);margin-top:32px">
-  DDNS-Manager v1.6.58 &mdash; <a href="https://github.com/ocoj/ddns-manager" style="color:var(--c-primary)">GitHub</a> &mdash; GPL v3 Licensed
+  DDNS-Manager v1.6.64 &mdash; <a href="https://github.com/ocoj/ddns-manager" style="color:var(--c-primary)">GitHub</a> &mdash; GPL v3 Licensed
 </div>
 
 </div>

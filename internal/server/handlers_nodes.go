@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
 	"github.com/ocoj/ddns-manager/internal/model"
 	"github.com/ocoj/ddns-manager/internal/store"
-	mycrypto "github.com/ocoj/ddns-manager/internal/crypto"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
@@ -283,16 +283,18 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// config push: render ddns-go YAML from saved config + DNS keys, push if changed
-	if rec.ConfigYAML != "" {
+	// v1.6.61: 事件驱动 — 仅当 Agent 上报 hash 或 Manager 记录 hash 为空(首次/变更)时才渲染推送,
+	// 避免 99% 稳定心跳的重渲染。rec.ConfigHash=="" 由"保存配置 / 保存/删除 DNS key"触发
+	// (CHANGELOG:1192 首次推送兜底, 防止新节点双方 hash 均为空时永不推送)。
+	if rec.ConfigYAML != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "") {
 		rendered, cfgHash, renderErr := renderDDNSConfig(rec.ConfigYAML, s.store)
 		if renderErr != nil {
 			s.logMgr.LogWithNode("config", "配置渲染失败", nodeID,
 				renderErr.Error(), "error")
 			// 回传错误给 Agent，便于诊断
 			resp.ConfigError = renderErr.Error()
-		} else if rendered != "" && (cfgHash != rec.ConfigHash || req.ConfigHash != rec.ConfigHash) {
-			// v1.6.59: 当 Manager 本地渲染的配置 hash 或 Agent 上报的 hash 与记录不一致时推送，
-			// 确保 DNS Key 轮换、配置变更、Agent 配置丢失/损坏等场景都能被正确感知并下发。
+		} else if rendered != "" {
+			// v1.6.61: 推送条件已在入口判定 hash 不匹配, 此处仅校验渲染产物非空
 			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
 				fmt.Sprintf("%d bytes", len(rendered)), "success")
 			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}

@@ -569,6 +569,77 @@ func (s *ManagerStore) RemoveNodeFromDNSKeys(nodeID string) error {
 	return atomicWriteFile(s.dnsKeysPath(), data, 0o600)
 }
 
+// InvalidateConfigHashesForDNSKey 清空引用指定 DNS key 的所有节点 ConfigHash,
+// 迫使下个心跳重新渲染并推送含新 key 的配置 (v1.6.61 配置变化感知)。
+// 持写锁遍历所有节点, 用 JSON 解析提取 key 引用 (新格式 dns_confs[].dns_key +
+// 旧格式 dns_key_name / dns_provider), 覆盖新旧两种配置格式。
+// 由 handleSaveDNSKey / handleDeleteDNSKey 在写 key 成功后调用。
+func (s *ManagerStore) InvalidateConfigHashesForDNSKey(keyName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 确保节点缓存已加载
+	if s.nodesCache == nil {
+		if err := s.loadNodesToCache(); err != nil {
+			return err
+		}
+	}
+	// 查 keyName 对应的 Provider — 旧格式 dns_provider 字段引用的是 provider 类型名
+	// (handlers_nodes.go 旧格式渲染: v.Provider == DnsProvider 查找)
+	if s.dnsKeysCache == nil {
+		if err := s.loadDNSKeysToCache(); err != nil {
+			return err
+		}
+	}
+	providerName := ""
+	if k, ok := s.dnsKeysCache[keyName]; ok {
+		providerName = k.Provider
+	}
+
+	changed := false
+	for _, rec := range s.nodesCache {
+		if rec.ConfigYAML == "" {
+			continue
+		}
+		if nodeUsesDNSKey(rec.ConfigYAML, keyName, providerName) {
+			rec.ConfigHash = ""
+			changed = true
+		}
+	}
+	if changed {
+		return s.saveNodesLocked(s.nodesCache)
+	}
+	return nil
+}
+
+// nodeUsesDNSKey 在 ConfigYAML JSON 中搜索指定 key 引用
+// 新格式: dns_confs[].dns_key == keyName
+// 旧格式: dns_key_name == keyName, 或 dns_provider == providerName (provider 类型名)
+func nodeUsesDNSKey(configYAML, keyName, providerName string) bool {
+	var cfg struct {
+		DNSKeyName  string `json:"dns_key_name"`
+		DNSProvider string `json:"dns_provider"`
+		DNSConfs    []struct {
+			DNSKey string `json:"dns_key"`
+		} `json:"dns_confs"`
+	}
+	if json.Unmarshal([]byte(configYAML), &cfg) != nil {
+		return false
+	}
+	if cfg.DNSKeyName == keyName {
+		return true
+	}
+	if providerName != "" && cfg.DNSProvider == providerName {
+		return true
+	}
+	for _, ci := range cfg.DNSConfs {
+		if ci.DNSKey == keyName {
+			return true
+		}
+	}
+	return false
+}
+
 // ── Agent Version ──
 
 func (s *ManagerStore) agentConfigPath() string { return filepath.Join(s.dir, "agent_config.json") }

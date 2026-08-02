@@ -187,6 +187,10 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.store.SaveDNSKeys(keys)
+	// v1.6.61: 配置变化感知 — 清空引用该 key 节点的 ConfigHash, 下个心跳重新渲染推送
+	if err := s.store.InvalidateConfigHashesForDNSKey(keyName); err != nil {
+		s.logMgr.Log("dns-key", "清空引用节点配置hash失败", keyName, "warning")
+	}
 	s.logMgr.Log("dns-key", "已保存", keyName+" ("+req.Provider+")", "success")
 	jsonOK(w, map[string]string{"status": "saved", "name": keyName, "provider": req.Provider})
 }
@@ -196,6 +200,10 @@ func (s *Server) handleDeleteDNSKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteDNSKeyAtomic(p); err != nil {
 		jsonErr(w, http.StatusNotFound, "密钥未找到")
 		return
+	}
+	// v1.6.61: 配置变化感知 — 删除后清空引用节点 hash, 触发重新渲染(引用节点将渲染失败提示改配)
+	if err := s.store.InvalidateConfigHashesForDNSKey(p); err != nil {
+		s.logMgr.Log("dns-key", "清空引用节点配置hash失败", p, "warning")
 	}
 	s.logMgr.Log("dns-key", "已删除", p, "info")
 	jsonOK(w, map[string]string{"deleted": p})

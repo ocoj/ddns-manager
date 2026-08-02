@@ -394,6 +394,71 @@ func TestTrackDNSKeyUsage(t *testing.T) {
 	}
 }
 
+// v1.6.61: 配置变化感知 — DNS key 保存/删除后清空引用节点的 ConfigHash
+func TestInvalidateConfigHashesForDNSKey(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+
+	// DNS key: "阿里云-生产" (provider alidns)
+	keys := map[string]*model.DNSKeyRecord{
+		"阿里云-生产": {Name: "阿里云-生产", Provider: "alidns"},
+		"腾讯云":     {Name: "腾讯云", Provider: "tencentcloud"},
+	}
+	if err := s.SaveDNSKeys(keys); err != nil {
+		t.Fatalf("SaveDNSKeys: %v", err)
+	}
+
+	// 4 个节点: 新格式引用 / 旧格式 dns_key_name / 旧格式 dns_provider / 无关引用
+	nodes := map[string]*model.NodeRecord{
+		"node-new":         {ConfigYAML: `{"dns_confs":[{"dns_key":"阿里云-生产"}]}`, ConfigHash: "sha256:h1"},
+		"node-old-name":    {ConfigYAML: `{"dns_key_name":"阿里云-生产"}`, ConfigHash: "sha256:h2"},
+		"node-old-provider": {ConfigYAML: `{"dns_provider":"alidns"}`, ConfigHash: "sha256:h3"},
+		"node-unrelated":   {ConfigYAML: `{"dns_confs":[{"dns_key":"腾讯云"}]}`, ConfigHash: "sha256:h4"},
+	}
+	for id, rec := range nodes {
+		if err := s.PutNode(id, rec); err != nil {
+			t.Fatalf("PutNode(%s): %v", id, err)
+		}
+	}
+
+	if err := s.InvalidateConfigHashesForDNSKey("阿里云-生产"); err != nil {
+		t.Fatalf("InvalidateConfigHashesForDNSKey: %v", err)
+	}
+
+	loaded, err := s.LoadNodes()
+	if err != nil {
+		t.Fatalf("LoadNodes: %v", err)
+	}
+	// 引用"阿里云-生产"的三种格式节点都应被清空
+	for _, id := range []string{"node-new", "node-old-name", "node-old-provider"} {
+		if loaded[id].ConfigHash != "" {
+			t.Errorf("%s: ConfigHash = %q, want cleared", id, loaded[id].ConfigHash)
+		}
+	}
+	// 无关节点保持原 hash
+	if loaded["node-unrelated"].ConfigHash != "sha256:h4" {
+		t.Errorf("node-unrelated: ConfigHash = %q, want sha256:h4 (untouched)", loaded["node-unrelated"].ConfigHash)
+	}
+}
+
+// 验证: 无关 key 的 Invalidate 不清空任何节点
+func TestInvalidateConfigHashesForUnknownKey(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+
+	s.PutNode("node-new", &model.NodeRecord{
+		ConfigYAML: `{"dns_confs":[{"dns_key":"阿里云-生产"}]}`,
+		ConfigHash: "sha256:h1",
+	})
+
+	// 不存在的 key — 无任何节点引用, 不应改动
+	if err := s.InvalidateConfigHashesForDNSKey("不存在的key"); err != nil {
+		t.Fatalf("Invalidate: %v", err)
+	}
+	loaded, _ := s.LoadNodes()
+	if loaded["node-new"].ConfigHash != "sha256:h1" {
+		t.Errorf("ConfigHash = %q, want untouched", loaded["node-new"].ConfigHash)
+	}
+}
+
 // ── Admin State ──
 
 func TestLoadAdminStateEmpty(t *testing.T) {

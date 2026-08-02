@@ -13,9 +13,23 @@
 
 - 新增 3 个测试: `TestIpCachePersist_SkipOnSameIP` / `_FailureReset` / `_ApplyConfigReset`
 
+### ✨ 配置变化感知 — 事件驱动推送
+
+- **动机**: 原推送条件每心跳调用 `renderDDNSConfig` 重渲染算 hash, 稳定状态下 99% 心跳无谓渲染
+- **变更**:
+  - `handlers_nodes.go` 推送条件简化: `(req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "")`, 渲染移到条件内 (事件驱动; `|| rec.ConfigHash==""` 为首次推送兜底, 防新节点双方空 hash 永不推送)
+  - `handlers_admin.go` `handleSaveDNSKey` / `handleDeleteDNSKey` 成功后调用 `InvalidateConfigHashesForDNSKey`
+  - `store.go` 新增 `InvalidateConfigHashesForDNSKey` + `nodeUsesDNSKey` (JSON 解析覆盖新格式 `dns_confs[].dns_key` + 旧格式 `dns_key_name`/`dns_provider`)
+- **效果**: DNS Key 保存/删除 → 引用节点下个心跳立即重推; 稳定心跳零渲染零推送
+- **限制**: 删除 key 后引用节点每心跳渲染失败并回传 ConfigError, 直至管理员修复配置
+
+### 🧪 测试
+
+- 新增 2 个测试: `TestInvalidateConfigHashesForDNSKey` / `TestInvalidateConfigHashesForUnknownKey`
+
 ### 📋 涉及文件
 
-`cmd/agent/dns_updater.go`, `cmd/agent/dns_updater_test.go`, `CHANGELOG.md` — 共 3 文件
+`cmd/agent/dns_updater.go`, `cmd/agent/dns_updater_test.go`, `internal/store/store.go`, `internal/store/store_test.go`, `internal/server/handlers_nodes.go`, `internal/server/handlers_admin.go`, `CHANGELOG.md`
 
 ---
 

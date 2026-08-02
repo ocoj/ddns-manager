@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" font-family="'Segoe UI','PingFang SC','Microsoft YaHei','Noto Sans SC',sans-serif" aria-labelledby="t d">
+  <title id="t">DDNS-Manager</title>
+  <desc id="d">DDNS 集中管理平台 Hero 横幅</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="55%" stop-color="#4f7cf8"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <clipPath id="logoClip"><rect x="542" y="30" width="116" height="116" rx="24"/></clipPath>
+  </defs>
+  <rect width="1200" height="380" fill="url(#bg)"/>
+  <circle cx="1050" cy="60" r="180" fill="#ffffff" opacity="0.10"/>
+  <circle cx="140" cy="360" r="200" fill="#ffffff" opacity="0.08"/>
+  <circle cx="600" cy="190" r="260" fill="#ffffff" opacity="0.05"/>
+  <image x="542" y="30" width="116" height="116" href="logo.png" clip-path="url(#logoClip)" preserveAspectRatio="xMidYMid meet"/>
+  <text x="600" y="205" font-size="52" font-weight="800" fill="#ffffff" text-anchor="middle">DDNS-Manager</text>
+  <text x="600" y="248" font-size="21" fill="#eef2ff" text-anchor="middle">内嵌 <tspan font-weight="700">ddns-go</tspan> DNS 引擎的集中管理平台</text>
+  <text x="600" y="285" font-size="16" fill="#e0e7ff" text-anchor="middle">统一管控 DNS Key · SSL 证书 · Agent 版本</text>
+  <g font-size="15" font-weight="600">
+    <rect x="348" y="318" width="118" height="38" rx="19" fill="#ffffff" opacity="0.22"/><text x="407" y="343" fill="#ffffff" text-anchor="middle">v1.6.64</text>
+    <rect x="480" y="318" width="112" height="38" rx="19" fill="#ffffff" opacity="0.22"/><text x="536" y="343" fill="#ffffff" text-anchor="middle">GPL v3</text>
+    <rect x="606" y="318" width="100" height="38" rx="19" fill="#ffffff" opacity="0.22"/><text x="656" y="343" fill="#ffffff" text-anchor="middle">Go 1.25+</text>
+    <rect x="720" y="318" width="132" height="38" rx="19" fill="#ffffff" opacity="0.22"/><text x="786" y="343" fill="#ffffff" text-anchor="middle">Docker 部署</text>
+  </g>
+</svg>

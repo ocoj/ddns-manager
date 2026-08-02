@@ -1,75 +1,72 @@
-name: Build
+name: Build & Test
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - run: go test ./...
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+        with: { go-version: '1.22' }
 
       - name: Read version
         id: ver
         run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
 
       - name: Build Manager (linux/amd64)
-        env:
-          VER: ${{ steps.ver.outputs.VERSION }}
+        env: { VER: "${{ steps.ver.outputs.VERSION }}" }
         run: |
           cd cmd/manager
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
             -ldflags "-s -w -X main.version=${VER} -X main.installerVersion=1.0.0" \
-            -o ../../build/ddns-manager-v${VER}-linux-amd64 .
+            -o ../../build/ddns-manager .
 
       - name: Build Agent (linux/amd64)
-        env:
-          VER: ${{ steps.ver.outputs.VERSION }}
+        env: { VER: "${{ steps.ver.outputs.VERSION }}" }
         run: |
           cd cmd/agent
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
             -ldflags "-s -w -X main.version=${VER}" \
-            -o ../../build/node-agent-v${VER}-linux-amd64 .
+            -o ../../build/node-agent-linux-amd64 .
 
       - name: Build Agent (windows/amd64)
-        env:
-          VER: ${{ steps.ver.outputs.VERSION }}
+        env: { VER: "${{ steps.ver.outputs.VERSION }}" }
         run: |
           cd cmd/agent
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
             -ldflags "-s -w -X main.version=${VER}" \
-            -o ../../build/node-agent-v${VER}-windows-amd64.exe .
+            -o ../../build/node-agent-windows-amd64.exe .
 
       - name: Generate SHA256
-        env:
-          VER: ${{ steps.ver.outputs.VERSION }}
+        env: { VER: "${{ steps.ver.outputs.VERSION }}" }
         run: |
           cd build
-          sha256sum node-agent-v${VER}-linux-amd64 | awk '{print $1}' > node-agent-v${VER}-linux-amd64.sha256
-          sha256sum node-agent-v${VER}-windows-amd64.exe | awk '{print $1}' > node-agent-v${VER}-windows-amd64.exe.sha256
+          sha256sum node-agent-linux-amd64 | awk '{print $1}' > node-agent-linux-amd64.sha256
+          sha256sum node-agent-windows-amd64.exe | awk '{print $1}' > node-agent-windows-amd64.exe.sha256
 
-      - name: Verify versions
+      - name: Verify
         run: |
-          echo "=== Manager ==="
-          ./build/ddns-manager-v*-linux-amd64 -version
-          echo "=== Agent (Linux) ==="
-          ./build/node-agent-v*-linux-amd64 -version
-          echo "=== SHA256 ==="
-          ls -lh build/
+          ./build/ddns-manager -version
+          ./build/node-agent-linux-amd64 -version
 
       - uses: actions/upload-artifact@v4
         with:
           name: ddns-manager-v${{ steps.ver.outputs.VERSION }}
-          path: |
-            build/ddns-manager-v*-linux-amd64
-            build/node-agent-v*-linux-amd64
-            build/node-agent-v*-linux-amd64.sha256
-            build/node-agent-v*-windows-amd64.exe
-            build/node-agent-v*-windows-amd64.exe.sha256
+          path: build/*
+          retention-days: 30

@@ -67,11 +67,9 @@ bash -c "$(curl -fsSL https://your-manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.63** | 事件驱动配置推送 + IpCache 持久化 |
+| ddns-manager | **v1.6.64** | DNS Key 全局版本号持久化比对（方案B） |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.4 | DNS provider library |
-
-> **注意**: 本项目处于开发测试阶段，从未正式发布。部署更新时需全新部署，不保证与旧版本数据格式兼容。
 
 ## 致谢
 

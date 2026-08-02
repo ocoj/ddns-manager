@@ -459,6 +459,97 @@ func TestInvalidateConfigHashesForUnknownKey(t *testing.T) {
 	}
 }
 
+// ── DNS Key 全局版本 (v1.6.64 方案B) ──
+
+// 版本递增后持久化, 重建 store 后保留
+func TestBumpDNSKeysVersion_Persists(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(dir)
+	if v := s.DNSKeysVersion(); v != 0 {
+		t.Fatalf("initial version = %d, want 0", v)
+	}
+	if err := s.BumpDNSKeysVersion(); err != nil {
+		t.Fatalf("Bump #1: %v", err)
+	}
+	if err := s.BumpDNSKeysVersion(); err != nil {
+		t.Fatalf("Bump #2: %v", err)
+	}
+	if v := s.DNSKeysVersion(); v != 2 {
+		t.Fatalf("version = %d, want 2", v)
+	}
+	// 重建 store — 版本应从磁盘恢复
+	s2, _ := NewStore(dir)
+	if v := s2.DNSKeysVersion(); v != 2 {
+		t.Fatalf("reloaded version = %d, want 2", v)
+	}
+}
+
+// 无版本文件 → 0; 损坏文件(无 key) → 容错 0
+func TestDNSKeysVersion_NoFile(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(dir)
+	if v := s.DNSKeysVersion(); v != 0 {
+		t.Fatalf("no file: version = %d, want 0", v)
+	}
+	// 损坏文件 + 无 key → 容错 0
+	if err := os.WriteFile(filepath.Join(dir, "dns_keys_version.json"), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := NewStore(dir)
+	if v := s2.DNSKeysVersion(); v != 0 {
+		t.Fatalf("corrupt file: version = %d, want 0", v)
+	}
+}
+
+// 基线初始化: 旧版升级(有 key 无版本文件) → 版本抬到 1 (§7.3)
+func TestBaselineInit_UpgradeFromOldVersion(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(dir)
+	// 模拟旧版数据: 有 DNS key, 但无 dns_keys_version.json
+	if err := s.SaveDNSKeys(map[string]*model.DNSKeyRecord{
+		"阿里云": {Name: "阿里云", Provider: "alidns"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if v := s.DNSKeysVersion(); v != 1 {
+		t.Fatalf("baseline init: version = %d, want 1", v)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dns_keys_version.json")); err != nil {
+		t.Fatalf("version file not persisted: %v", err)
+	}
+}
+
+// 基线初始化: 无 key → 版本保持 0, 不初始化 (§7.3)
+func TestBaselineInit_NoKey_StaysZero(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	if v := s.DNSKeysVersion(); v != 0 {
+		t.Fatalf("no key: version = %d, want 0", v)
+	}
+}
+
+// 基线初始化: 并发首次访问无竞态 (§7.3, 配合 -race 验证)
+func TestBaselineInit_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(dir)
+	if err := s.SaveDNSKeys(map[string]*model.DNSKeyRecord{
+		"阿里云": {Name: "阿里云", Provider: "alidns"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = s.DNSKeysVersion()
+		}()
+	}
+	wg.Wait()
+	if v := s.DNSKeysVersion(); v != 1 {
+		t.Fatalf("after concurrent access: version = %d, want 1", v)
+	}
+}
+
 // ── Admin State ──
 
 func TestLoadAdminStateEmpty(t *testing.T) {

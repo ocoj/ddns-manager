@@ -187,6 +187,10 @@ func (s *Server) handleSaveDNSKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.store.SaveDNSKeys(keys)
+	// v1.6.64 方案B: 递增 DNS key 全局版本 — 离线节点自愈兜底 (C2: 失败记录日志, 不阻断)
+	if err := s.store.BumpDNSKeysVersion(); err != nil {
+		s.logMgr.Log("dns-key", "版本递增失败(离线节点自愈兜底可能失效)", keyName, "error")
+	}
 	// v1.6.61: 配置变化感知 — 清空引用该 key 节点的 ConfigHash, 下个心跳重新渲染推送
 	if err := s.store.InvalidateConfigHashesForDNSKey(keyName); err != nil {
 		s.logMgr.Log("dns-key", "清空引用节点配置hash失败", keyName, "warning")
@@ -200,6 +204,10 @@ func (s *Server) handleDeleteDNSKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteDNSKeyAtomic(p); err != nil {
 		jsonErr(w, http.StatusNotFound, "密钥未找到")
 		return
+	}
+	// v1.6.64 方案B: 递增 DNS key 全局版本 — 离线节点自愈兜底 (C2)
+	if err := s.store.BumpDNSKeysVersion(); err != nil {
+		s.logMgr.Log("dns-key", "版本递增失败(离线节点自愈兜底可能失效)", p, "error")
 	}
 	// v1.6.61: 配置变化感知 — 删除后清空引用节点 hash, 触发重新渲染(引用节点将渲染失败提示改配)
 	if err := s.store.InvalidateConfigHashesForDNSKey(p); err != nil {
@@ -1174,6 +1182,7 @@ func truncate(s string, n int) string {
 var backupFiles = []string{
 	"nodes.json",
 	"dns_keys.json",
+	"dns_keys_version.json", // v1.6.64 C3: DNS key 全局版本 — 备份恢复后保持版本一致性
 	"admin.json",
 	"acme_config.json",
 	".storage_key",

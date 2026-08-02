@@ -286,7 +286,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// v1.6.61: 事件驱动 — 仅当 Agent 上报 hash 或 Manager 记录 hash 为空(首次/变更)时才渲染推送,
 	// 避免 99% 稳定心跳的重渲染。rec.ConfigHash=="" 由"保存配置 / 保存/删除 DNS key"触发
 	// (CHANGELOG:1192 首次推送兜底, 防止新节点双方 hash 均为空时永不推送)。
-	if rec.ConfigYAML != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "") {
+	// v1.6.64 方案B: 新增 rec.ConfigKeysVersion < curKeyVer — 持久化 DNS key 版本比对,
+	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁 (Win2022 案例)。
+	curKeyVer := s.store.DNSKeysVersion()
+	if rec.ConfigYAML != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "" ||
+		rec.ConfigKeysVersion < curKeyVer) {
 		rendered, cfgHash, renderErr := renderDDNSConfig(rec.ConfigYAML, s.store)
 		if renderErr != nil {
 			s.logMgr.LogWithNode("config", "配置渲染失败", nodeID,
@@ -294,12 +298,18 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			// 回传错误给 Agent，便于诊断
 			resp.ConfigError = renderErr.Error()
 		} else if rendered != "" {
-			// v1.6.61: 推送条件已在入口判定 hash 不匹配, 此处仅校验渲染产物非空
-			s.logMgr.LogWithNode("config", "配置已下发", nodeID,
-				fmt.Sprintf("%d bytes", len(rendered)), "success")
-			resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}
-			rec.ConfigHash = cfgHash
-			rec.ConfigSentAt = s.nowInTZ()
+			// v1.6.64 方案B: 渲染成功即同步 key 版本 (无论是否推送),
+			// 避免版本永远落后导致每心跳重渲染
+			rec.ConfigKeysVersion = curKeyVer
+			// v1.6.64 方案B: 推送收紧为 cfgHash != req.ConfigHash —
+			// 版本落后但 Agent 已是最新内容时只同步版本, 不冗余推送
+			if cfgHash != req.ConfigHash {
+				s.logMgr.LogWithNode("config", "配置已下发", nodeID,
+					fmt.Sprintf("%d bytes", len(rendered)), "success")
+				resp.Config = &model.ConfigPush{YAML: rendered, Hash: cfgHash}
+				rec.ConfigHash = cfgHash
+				rec.ConfigSentAt = s.nowInTZ()
+			}
 		}
 	}
 	key := mycrypto.DeriveKey(password, rec.Fingerprint, "cert-transport")

@@ -84,6 +84,9 @@ type NodeRecord struct {
 	ConfigYAML   string        `json:"config_yaml,omitempty"`
 	ConfigHash   string        `json:"config_hash,omitempty"`
 	ConfigSentAt time.Time     `json:"config_sent_at,omitempty"`
+	// v1.6.64 方案B: 配置所引用 DNS key 的全局版本 — 持久化版本比对,
+	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁
+	ConfigKeysVersion uint64        `json:"config_keys_version,omitempty"`
 	Tags         []string      `json:"tags,omitempty"`
 	Notes        string        `json:"notes,omitempty"`
 	Status       NodeStatus    `json:"status,omitempty"`

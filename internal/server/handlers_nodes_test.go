@@ -78,8 +78,8 @@ func TestDetectPlatform_UnknownArchReturnsOriginal(t *testing.T) {
 	}
 }
 
-// TestShouldPushConfig_Condition 验证配置推送判断条件在 v1.6.59 DNS Key 轮换修复后的行为。
-// 该条件位于 internal/server/handlers_nodes.go:293。
+// TestShouldPushConfig_Condition 验证 v1.6.59 的 hash-only 推送条件, 作为回归基准保留 (C4)。
+// v1.6.64 方案B 的完整推送条件 (含 key 版本比对) 见 TestShouldRenderConfig_Condition。
 func TestShouldPushConfig_Condition(t *testing.T) {
 	// 使用与 handleHeartbeat 中一致的变量名：
 	//   cfgHash   = 当前根据 saved ConfigYAML + DNS keys 渲染出的配置 hash
@@ -146,6 +146,76 @@ func TestShouldPushConfig_Condition(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("shouldPush(cfgHash=%q, reqHash=%q, recHash=%q) = %v, want %v",
 					tt.cfgHash, tt.reqHash, tt.recHash, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestShouldRenderConfig_Condition 验证 v1.6.64 方案B 配置推送的完整判断条件:
+//   shouldRender (入口): reqHash != recHash || recHash == "" || recKeysVer < curKeyVer
+//   shouldPush (渲染后): rendered != "" && cfgHash != reqHash
+func TestShouldRenderConfig_Condition(t *testing.T) {
+	shouldRender := func(reqHash, recHash string, recKeysVer, curKeyVer uint64) bool {
+		return reqHash != recHash || recHash == "" || recKeysVer < curKeyVer
+	}
+	shouldPush := func(cfgHash, reqHash string) bool {
+		return cfgHash != reqHash
+	}
+
+	cases := []struct {
+		name       string
+		reqHash    string
+		recHash    string
+		recKeysVer uint64
+		curKeyVer  uint64
+		wantRender bool
+	}{
+		{
+			name:    "Win2022关机死锁: hash一致但key版本落后 → 应渲染",
+			reqHash: "sha256:old", recHash: "sha256:old",
+			recKeysVer: 0, curKeyVer: 1, wantRender: true,
+		},
+		{
+			name:    "一切正常: hash一致且版本一致 → 不渲染",
+			reqHash: "sha256:c", recHash: "sha256:c",
+			recKeysVer: 1, curKeyVer: 1, wantRender: false,
+		},
+		{
+			name:    "首次推送: recHash为空 → 渲染",
+			reqHash: "", recHash: "",
+			recKeysVer: 0, curKeyVer: 1, wantRender: true,
+		},
+		{
+			name:    "Agent hash漂移 → 渲染",
+			reqHash: "sha256:x", recHash: "sha256:c",
+			recKeysVer: 1, curKeyVer: 1, wantRender: true,
+		},
+		{
+			name:    "版本落后但Agent hash已最新 → 渲染(仅同步版本)",
+			reqHash: "sha256:c", recHash: "sha256:c",
+			recKeysVer: 0, curKeyVer: 1, wantRender: true,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRender(tt.reqHash, tt.recHash, tt.recKeysVer, tt.curKeyVer); got != tt.wantRender {
+				t.Errorf("shouldRender(%q,%q,%d,%d) = %v, want %v",
+					tt.reqHash, tt.recHash, tt.recKeysVer, tt.curKeyVer, got, tt.wantRender)
+			}
+		})
+	}
+
+	pushCases := []struct {
+		name, cfgHash, reqHash string
+		want                   bool
+	}{
+		{name: "渲染hash与Agent一致 → 不推送(仅同步版本)", cfgHash: "sha256:c", reqHash: "sha256:c", want: false},
+		{name: "渲染hash不同(Secret已变) → 推送", cfgHash: "sha256:new", reqHash: "sha256:old", want: true},
+	}
+	for _, tt := range pushCases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldPush(tt.cfgHash, tt.reqHash); got != tt.want {
+				t.Errorf("shouldPush(%q,%q) = %v, want %v", tt.cfgHash, tt.reqHash, got, tt.want)
 			}
 		})
 	}

@@ -37,6 +37,11 @@ type ManagerStore struct {
 	dnsKeysCache       map[string]*model.DNSKeyRecord
 	nodesCacheLoaded   bool
 	dnsKeysCacheLoaded bool
+
+	// v1.6.64 方案B: DNS key 全局版本 — 持久化版本比对,
+	// 修复关机节点错过 Invalidate 瞬时信号导致配置永不推送的死锁
+	dnsKeysVersion       uint64
+	dnsKeysVersionLoaded bool
 }
 
 // NewStore opens or initialises the data directory.
@@ -208,6 +213,7 @@ func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del boo
 			existing.Hardware = rec.Hardware
 			existing.ConfigHash = rec.ConfigHash
 			existing.ConfigSentAt = rec.ConfigSentAt
+			existing.ConfigKeysVersion = rec.ConfigKeysVersion // v1.6.64 C1: 显式 merge, 避免依赖指针别名
 			existing.DNSConsecutiveFailures = rec.DNSConsecutiveFailures
 		} else {
 			nodes[id] = rec
@@ -391,6 +397,87 @@ func (s *ManagerStore) SaveAdminState(st *AdminState) error {
 // ── DNS Keys ──
 
 func (s *ManagerStore) dnsKeysPath() string { return filepath.Join(s.dir, "dns_keys.json") }
+
+// ── DNS Key 全局版本 (v1.6.64 方案B) ──
+
+func (s *ManagerStore) dnsKeysVersionPath() string { return filepath.Join(s.dir, "dns_keys_version.json") }
+
+// DNSKeysVersion 返回当前 DNS key 全局版本 (内存读, 心跳零 IO)。
+// v1.6.64 方案B: 两阶段锁 — fast path RLock, slow path Lock + double-check,
+// 对齐 LoadNodes/LoadDNSKeys 模式 (loadDNSKeysVersion 需写锁, 内部调用 loadDNSKeysToCache)。
+func (s *ManagerStore) DNSKeysVersion() uint64 {
+	s.mu.RLock()
+	if s.dnsKeysVersionLoaded {
+		v := s.dnsKeysVersion
+		s.mu.RUnlock()
+		return v
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dnsKeysVersionLoaded {
+		if err := s.loadDNSKeysVersion(); err != nil {
+			log.Printf("[store] DNS key 版本加载失败: %v", err)
+		}
+	}
+	return s.dnsKeysVersion
+}
+
+// loadDNSKeysVersion lazy 加载版本并做基线初始化 (调用方需持有写锁)。
+// 基线初始化: 存在 DNS key 但版本为 0 → 初始化 1 — 解决旧版升级过渡期死锁
+// (旧版期间 key 变更无版本记录, 节点 ConfigKeysVersion=0, 基线 0 则 0<0 不触发)。
+func (s *ManagerStore) loadDNSKeysVersion() error {
+	if data, err := os.ReadFile(s.dnsKeysVersionPath()); err == nil {
+		if err := json.Unmarshal(data, &s.dnsKeysVersion); err != nil {
+			log.Printf("[store] dns_keys_version.json 损坏, 重置为 0: %v", err)
+			s.dnsKeysVersion = 0
+		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[store] 读取 dns_keys_version.json 失败: %v", err)
+	}
+	// 基线初始化: 有 key 但版本为 0 → 抬到 1
+	if s.dnsKeysVersion == 0 {
+		if s.dnsKeysCache == nil {
+			if err := s.loadDNSKeysToCache(); err != nil {
+				// §7.2: dns_keys.json 损坏不静默 — 记录日志; 此时缓存为 nil, 跳过初始化
+				log.Printf("[store] 基线初始化前加载 DNS keys 失败 (dns_keys.json 损坏?): %v", err)
+			}
+		}
+		if len(s.dnsKeysCache) > 0 {
+			s.dnsKeysVersion = 1
+			data, err := json.Marshal(s.dnsKeysVersion)
+			if err != nil {
+				s.dnsKeysVersionLoaded = true
+				return err
+			}
+			if err := atomicWriteFile(s.dnsKeysVersionPath(), data, 0o600); err != nil {
+				// N1: 基线初始化持久化失败 — 记录日志; 内存值已生效, Manager 重启后重试
+				log.Printf("[store] DNS key 版本基线初始化持久化失败: %v", err)
+			}
+		}
+	}
+	s.dnsKeysVersionLoaded = true
+	return nil
+}
+
+// BumpDNSKeysVersion 递增 DNS key 全局版本并原子持久化 (v1.6.64 方案B)。
+// 由 handleSaveDNSKey / handleDeleteDNSKey 在写 key 成功后调用。
+func (s *ManagerStore) BumpDNSKeysVersion() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dnsKeysVersionLoaded {
+		if err := s.loadDNSKeysVersion(); err != nil {
+			return err
+		}
+	}
+	s.dnsKeysVersion++
+	data, err := json.Marshal(s.dnsKeysVersion)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(s.dnsKeysVersionPath(), data, 0o600)
+}
 
 // loadDNSKeysToCache reads dns_keys.json into memory cache (called under write lock).
 func (s *ManagerStore) loadDNSKeysToCache() error {

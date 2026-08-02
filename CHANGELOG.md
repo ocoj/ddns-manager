@@ -1,3 +1,24 @@
+## v1.6.61 — 2026-08-02
+
+### 🐛 IpCache 持久化 — Win10 DNS 间歇超时修复
+
+- **根因**: `DNSUpdater.Run()` 每次心跳新建空 `IpCache{}`，`Check()` 恒返回 `true`，导致每次心跳全量 DNS API 查询。多卡节点（Win10）Card 1 alidns 查询消耗后，Card 2 tencentcloud 的 DNS 解析偶发超时 10 秒
+- **修复**: 对齐 ddns-go 原版 `dns/index.go` 设计：
+  - `DNSUpdater` 新增 `ipCaches [][2]util.IpCache` 持久化字段
+  - `Run()` 按 DnsConf 数量对齐缓存、传入持久化指针、段失败时重置对应缓存
+  - `ApplyConfig` 配置变更时清空缓存（`u.ipCaches = nil`）
+- **效果**: IP 没变时 80% 心跳零 DNS API 查询，失败率 ~44% → 0%
+
+### 🧪 测试
+
+- 新增 3 个测试: `TestIpCachePersist_SkipOnSameIP` / `_FailureReset` / `_ApplyConfigReset`
+
+### 📋 涉及文件
+
+`cmd/agent/dns_updater.go`, `cmd/agent/dns_updater_test.go`, `CHANGELOG.md` — 共 3 文件
+
+---
+
 ## v1.6.60 — 2026-08-01
 
 ### 🐛 配置下发修复

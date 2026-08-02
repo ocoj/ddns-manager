@@ -223,30 +223,9 @@
 
 <p>DDNS-Manager 采用 <strong>中心化管理 + 边缘执行</strong> 架构。Manager 作为控制面统一管理 DNS Key、SSL 证书、Agent 版本和部署状态；Agent 部署于各节点，内嵌 ddns-go DNS provider，在本地执行 DNS 记录更新和证书部署。</p>
 
-<div class="arch">
-  <div class="arch-box mgr">
-    <h4>🖥️ Manager</h4>
-    <p>控制面 · Web UI<br>端口 :9877</p>
-  </div>
-  <div class="arch-conn">
-    <div class="line">⬆ ⬇</div>
-    <div>HTTPS</div>
-    <div class="line">⬆ ⬇</div>
-  </div>
-  <div class="arch-box agt" style="min-width:220px">
-    <h4>🔄 Agent (×N 节点)</h4>
-    <p>心跳 + DNS 更新 + 证书部署<br>Linux (systemd) / Windows</p>
-  </div>
-  <div class="arch-conn">
-    <div class="line">⬆ ⬇</div>
-    <div>DNS API</div>
-    <div class="line">⬆ ⬇</div>
-  </div>
-  <div class="arch-box dns">
-    <h4>🌐 DNS Provider</h4>
-    <p>Aliyun / AWS / Cloudflare<br>Godaddy / DNSPod / ...</p>
-  </div>
-</div>
+<img src="architecture.svg" alt="DDNS-Manager 架构图" style="width:100%;max-width:920px;display:block;margin:16px auto;border:1px solid var(--c-border);border-radius:var(--radius);"/>
+
+<p style="text-align:center;color:var(--c-text2);font-size:13px;">Manager 集中管控 DNS Key · SSL 证书 · Agent 版本；节点 Agent 内嵌 ddns-go DNS 引擎，直连 DNS 提供商（共 28 家）更新 DNS 记录。</p>
 
 <h3>核心流程</h3>
 <div class="flow">

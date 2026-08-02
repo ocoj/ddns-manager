@@ -1,35 +1,44 @@
-## v1.6.61 — 2026-08-02
+## v1.6.63 — 2026-08-02
+
+### ✨ 配置变化感知 — 事件驱动推送
+
+- **根因**: `cfgHash != rec.ConfigHash` 每次心跳重渲染 YAML → YAML 序列化波动 → 配置推送循环 → `ApplyConfig → ipCaches=nil` → DNS 全量查询不断
+- **修复**:
+  - `handlers_nodes.go` 推送条件简化为 `(req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "")`，渲染移到条件内，99% 心跳不渲染
+  - `handlers_admin.go` `handleSaveDNSKey` / `handleDeleteDNSKey` 成功后调用 `InvalidateConfigHashesForDNSKey`
+  - `store.go` 新增 `InvalidateConfigHashesForDNSKey` + `nodeUsesDNSKey`（JSON 解析覆盖新格式 `dns_confs[].dns_key` + 旧格式 `dns_key_name`/`dns_provider`）
+- **效果**: DNS Key 保存/删除 → 引用节点下个心跳立即重推；稳定心跳零渲染零推送
+
+### 🏗 CI/CD
+
+- 新增 `build.yml`：push/PR 自动测试 + 编译全平台二进制（Artifacts）
+- 新增 `release.yml`：tag `v*` 自动创建 GitHub Release（含 CHANGELOG + SHA256） + Docker 镜像（ghcr.io, amd64/arm64）
+- 版本号统一从 `VERSION` 文件读取
+
+### 📋 涉及文件
+
+`internal/server/handlers_nodes.go`, `internal/server/handlers_admin.go`, `internal/store/store.go`, `internal/store/store_test.go`, `.github/workflows/build.yml`, `.github/workflows/release.yml` — 共 6 文件
+
+---
+
+## v1.6.62 — 2026-08-02
 
 ### 🐛 IpCache 持久化 — Win10 DNS 间歇超时修复
 
-- **根因**: `DNSUpdater.Run()` 每次心跳新建空 `IpCache{}`，`Check()` 恒返回 `true`，导致每次心跳全量 DNS API 查询。多卡节点（Win10）Card 1 alidns 查询消耗后，Card 2 tencentcloud 的 DNS 解析偶发超时 10 秒
-- **修复**: 对齐 ddns-go 原版 `dns/index.go` 设计：
+- **根因**: `DNSUpdater.Run()` 每次心跳新建空 `IpCache{}`，`Check()` 恒返回 `true`，每次心跳全量 DNS API 查询
+- **修复**: 对齐 ddns-go 原版 `dns/index.go`：
   - `DNSUpdater` 新增 `ipCaches [][2]util.IpCache` 持久化字段
   - `Run()` 按 DnsConf 数量对齐缓存、传入持久化指针、段失败时重置对应缓存
   - `ApplyConfig` 配置变更时清空缓存（`u.ipCaches = nil`）
-- **效果**: IP 没变时约 83% (5/6) 心跳零 DNS API 查询，失败率 ~44% → 大幅降低（多卡节点每 6 心跳复检仍有背靠背窗口，残留 ~7% 低优先级风险）
+- **效果**: IP 没变时约 83% 心跳零 DNS API 查询
 
 ### 🧪 测试
 
 - 新增 3 个测试: `TestIpCachePersist_SkipOnSameIP` / `_FailureReset` / `_ApplyConfigReset`
 
-### ✨ 配置变化感知 — 事件驱动推送
-
-- **动机**: 原推送条件每心跳调用 `renderDDNSConfig` 重渲染算 hash, 稳定状态下 99% 心跳无谓渲染
-- **变更**:
-  - `handlers_nodes.go` 推送条件简化: `(req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "")`, 渲染移到条件内 (事件驱动; `|| rec.ConfigHash==""` 为首次推送兜底, 防新节点双方空 hash 永不推送)
-  - `handlers_admin.go` `handleSaveDNSKey` / `handleDeleteDNSKey` 成功后调用 `InvalidateConfigHashesForDNSKey`
-  - `store.go` 新增 `InvalidateConfigHashesForDNSKey` + `nodeUsesDNSKey` (JSON 解析覆盖新格式 `dns_confs[].dns_key` + 旧格式 `dns_key_name`/`dns_provider`)
-- **效果**: DNS Key 保存/删除 → 引用节点下个心跳立即重推; 稳定心跳零渲染零推送
-- **限制**: 删除 key 后引用节点每心跳渲染失败并回传 ConfigError, 直至管理员修复配置
-
-### 🧪 测试
-
-- 新增 2 个测试: `TestInvalidateConfigHashesForDNSKey` / `TestInvalidateConfigHashesForUnknownKey`
-
 ### 📋 涉及文件
 
-`cmd/agent/dns_updater.go`, `cmd/agent/dns_updater_test.go`, `internal/store/store.go`, `internal/store/store_test.go`, `internal/server/handlers_nodes.go`, `internal/server/handlers_admin.go`, `CHANGELOG.md`
+`cmd/agent/dns_updater.go`, `cmd/agent/dns_updater_test.go` — 共 2 文件
 
 ---
 

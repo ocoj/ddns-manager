@@ -57,9 +57,13 @@ flowchart LR
 
 ## 📸 界面预览
 
-| 登录页 | 仪表盘 |
-| :---: | :---: |
-| ![登录页](docs/screenshots/login.png) | ![仪表盘](docs/screenshots/dashboard.png) |
+<p align="center">
+  <img src="docs/screenshots/login.png" alt="登录页" width="85%"/>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="仪表盘" width="85%"/>
+</p>
 
 ## 快速开始
 

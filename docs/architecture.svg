@@ -80,14 +80,14 @@
   <text x="884" y="196" font-size="11" fill="#475569" text-anchor="middle">持久化</text>
 
   <!-- 下发箭头 Manager→Agent -->
-  <line x1="520" y1="290" x2="520" y2="358" stroke="#4f46e5" stroke-width="2.5" marker-end="url(#a-indigo)"/>
-  <text x="536" y="318" font-size="12.5" font-weight="600" fill="#4338ca">DNS 配置 + Key + 证书</text>
-  <text x="536" y="336" font-size="11" fill="#818cf8">AES-256 加密推送 · 热加载</text>
+  <line x1="470" y1="290" x2="470" y2="358" stroke="#4f46e5" stroke-width="2.5" marker-end="url(#a-indigo)"/>
+  <text x="486" y="316" font-size="12.5" font-weight="600" fill="#4338ca">DNS 配置 + Key + 证书</text>
+  <text x="486" y="334" font-size="11" fill="#818cf8">AES-256 加密推送 · 热加载</text>
 
   <!-- 心跳箭头 Agent→Manager -->
-  <line x1="650" y1="358" x2="650" y2="290" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#a-violet)"/>
-  <text x="666" y="318" font-size="12.5" font-weight="600" fill="#6d28d9">心跳 · IP · 版本</text>
-  <text x="666" y="336" font-size="11" fill="#a78bfa">状态上报</text>
+  <line x1="700" y1="358" x2="700" y2="290" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#a-violet)"/>
+  <text x="716" y="316" font-size="12.5" font-weight="600" fill="#6d28d9">心跳 · IP · 版本</text>
+  <text x="716" y="334" font-size="11" fill="#a78bfa">状态上报</text>
 
   <!-- Agent 集群外框 -->
   <rect x="60" y="362" width="1080" height="206" rx="20" fill="#ffffff" opacity="0.55" stroke="#bae6fd" stroke-width="1.5" filter="url(#shadow)"/>

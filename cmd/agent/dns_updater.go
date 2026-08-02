@@ -51,10 +51,11 @@ func (s DNSStatus) LastLine() string {
 
 // DNSUpdater wraps ddns-go DNS providers for DNS record management.
 type DNSUpdater struct {
-	mu     sync.Mutex
-	cfg    *ddnsconfig.Config // current ddns-go config from Manager
-	status DNSStatus
-	logBuf *LogBuffer // memory ring buffer (50 entries)
+	mu       sync.Mutex
+	cfg      *ddnsconfig.Config // current ddns-go config from Manager
+	status   DNSStatus
+	logBuf   *LogBuffer          // memory ring buffer (50 entries)
+	ipCaches [][2]util.IpCache   // v1.6.61: 持久化 IpCache, 对齐 ddns-go 原版跳过机制
 }
 
 // NewDNSUpdater creates a DNSUpdater with default (empty) config.
@@ -105,6 +106,11 @@ func (u *DNSUpdater) Run() DNSStatus {
 	if !u.status.IPv4Enabled { u.status.IPv4 = "" }
 	if !u.status.IPv6Enabled { u.status.IPv6 = "" }
 
+	// v1.6.61: 对齐 IpCache 与 DnsConf 数量 (对应 ddns-go dns/index.go)
+	if len(u.ipCaches) != len(u.cfg.DnsConf) {
+		u.ipCaches = make([][2]util.IpCache, len(u.cfg.DnsConf))
+	}
+
 	// v1.5.30 H4 + v1.6.10 C1: allOK + allFailedDomains 在循环内累积, 循环外统一赋值 status。
 	// segErrors 记录每段DnsConf的独立错误 (供 LastErrorDetail 使用)
 	allOK := true
@@ -116,7 +122,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 	}
 	var segErrors []segErr
 
-	for _, dc := range u.cfg.DnsConf {
+	for i, dc := range u.cfg.DnsConf {
 		var lastAPIErr string // v1.6.56 M3: 每段独立，防止跨段泄漏
 		// Create the appropriate DNS provider (v1.6.28 M1: 统一注册表)
 		provider := provider.NewProvider(dc.DNS.Name)
@@ -130,8 +136,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 		}
 
 		// Init provider — this detects IPs and prepares domains
-		ipv4cache := &util.IpCache{}
-		ipv6cache := &util.IpCache{}
+		// v1.6.61: 使用持久化 IpCache, 对齐 ddns-go 原版跳过机制
 
 		// v1.5.33: 临时截获 log 输出, 捕获 ddns-go API 详细错误
 		var detailBuf bytes.Buffer
@@ -143,7 +148,7 @@ func (u *DNSUpdater) Run() DNSStatus {
 		var domains ddnsconfig.Domains
 		func() {
 			defer log.SetOutput(origWriter)
-			provider.Init(&dc, ipv4cache, ipv6cache)
+			provider.Init(&dc, &u.ipCaches[i][0], &u.ipCaches[i][1])
 			domains = provider.AddUpdateDomainRecords()
 		}()
 
@@ -233,6 +238,18 @@ func (u *DNSUpdater) Run() DNSStatus {
 				detail: strings.Join(segFailedDetail, "; ")})
 			log.Printf("[dns] DNS更新失败 (提供商 %s): %s", dc.DNS.Name, strings.Join(segFailedDetail, ", "))
 		}
+
+		// v1.6.61: 失败重置 — IPv4/IPv6 任一项失败则清空对应缓存, 下次心跳立即重试
+		// (对齐 ddns-go dns/index.go 的失败重置语义)
+		segV4Failed, segV6Failed := false, false
+		for _, d := range domains.Ipv4Domains {
+			if d.UpdateStatus == ddnsconfig.UpdatedFailed { segV4Failed = true; break }
+		}
+		for _, d := range domains.Ipv6Domains {
+			if d.UpdateStatus == ddnsconfig.UpdatedFailed { segV6Failed = true; break }
+		}
+		if segV4Failed { u.ipCaches[i][0] = util.IpCache{} }
+		if segV6Failed { u.ipCaches[i][1] = util.IpCache{} }
 	}
 
 	// v1.6.10 C1+H1: 循环外统一赋值 status, 防止多段配置时中间状态覆盖
@@ -328,6 +345,7 @@ func (u *DNSUpdater) ApplyConfig(yamlData []byte) error {
 		return fmt.Errorf("config parse: %w", err)
 	}
 	u.cfg = &cfg
+	u.ipCaches = nil // v1.6.61: 清空缓存, 下次 Run() 重建并对齐; 配置中域名/DNSKey变更立即生效
 	u.logBuf.Write("DNS配置已更新")
 	log.Printf("[config] 配置已热加载 (%d 条DNS配置)", len(cfg.DnsConf))
 	return nil

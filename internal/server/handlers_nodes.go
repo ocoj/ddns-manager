@@ -287,7 +287,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// 避免 99% 稳定心跳的重渲染。rec.ConfigHash=="" 由"保存配置 / 保存/删除 DNS key"触发
 	// (CHANGELOG:1192 首次推送兜底, 防止新节点双方 hash 均为空时永不推送)。
 	// v1.6.64 方案B: 新增 rec.ConfigKeysVersion < curKeyVer — 持久化 DNS key 版本比对,
-	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁 (Win2022 案例)。
+	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁 (win-test 案例)。
 	curKeyVer := s.store.DNSKeysVersion()
 	if rec.ConfigYAML != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "" ||
 		rec.ConfigKeysVersion < curKeyVer) {

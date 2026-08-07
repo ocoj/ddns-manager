@@ -1684,7 +1684,7 @@ func bindExplicit(thumb, bundleName, certCN string, bindings []model.CertToIISBi
 // bindIISWebAdmin v1.6.67: WebAdministration API 扫描+更新 IIS 站点绑定。
 // 解决根因⑤: netsh http show sslcert 在中文 Windows 输出中文标签(IP:端口/
 // 应用程序 ID), 英文标签解析失败 → bindings=0 → 静默跳过 → IIS 绑定永不更新
-// (sp/Win2022 事故: Agent 认为部署成功但 IIS 仍指向旧证书)。
+// (sp.example.com/win-test 事故: Agent 认为部署成功但 IIS 仍指向旧证书)。
 // WebAdministration 返回结构化数据(跨 locale), AddSslCertificate 同时更新
 // applicationHost.config 与 HTTP.sys 层, 与 IIS 管理器/Get-WebBinding 一致。
 // 返回 (updated, handled): handled=false 表示 WebAdministration 不可用(非 IIS
@@ -1764,7 +1764,7 @@ func bindIISWebAdmin(thumb, certCN string) (updated int, handled bool) {
 			matchScore, matchReason = fitsBinding(strings.ToLower(b.host), certCN)
 		} else {
 			// IP 绑定 (无 SNI host):
-			// ① 绑定当前证书 CN 匹配新证书 CN (sp 场景: 旧证书也是 sp.lanxun.pro)
+			// ① 绑定当前证书 CN 匹配新证书 CN (sp 场景: 旧证书也是 sp.example.com)
 			//    → 识别唯一绑定该证书域的绑定, 即使多 IP 也精确更新
 			// ② 站点名匹配 (站点名含证书域名)
 			// ③ 无 SNI + 单 IP 默认匹配; 多 IP 跳过防误覆盖
@@ -1983,7 +1983,7 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 }
 
 // siteMatchesCert v1.6.69: 判断 IIS 站点名是否对应证书域名。
-// 多站点 IIS 中站点名可能直接是域名 (sp.lanxun.pro), 或站点主机名含该域名。
+// 多站点 IIS 中站点名可能直接是域名 (sp.example.com), 或站点主机名含该域名。
 // 用于 IP 绑定 (无 SNI host) 场景: 站点名匹配 certCN 时精确更新该站点,
 // 避免多 IP 绑定保护 (ipCount>1) 误跳过唯一绑定证书的站点。
 func siteMatchesCert(site, certCN string) bool {
@@ -1998,7 +1998,7 @@ func siteMatchesCert(site, certCN string) bool {
 	return strings.Contains(sl, cl) || strings.Contains(cl, sl)
 }
 
-// extractSubjectCN v1.6.69: 从证书 Subject (如 "CN=sp.lanxun.pro, O=Lanxun")
+// extractSubjectCN v1.6.69: 从证书 Subject (如 "CN=sp.example.com, O=Example")
 // 提取 CN 字段。兼容 "CN=xxx" 前缀及无前缀格式。
 func extractSubjectCN(subject string) string {
 	s := strings.TrimSpace(subject)
@@ -2162,7 +2162,7 @@ func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
 // v1.5.20 L1: 原 extractThumbprintCertutil + extractCNFromPFX 各执行一次 certutil,
 // 现合并为一次调用减少进程开销。
 // v1.5.38: 增加 pfxPassword 参数 — certutil -dump 密码保护的 PFX 文件需要 -p 密码。
-// Win2022 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
+// win-test 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
 // certutilErrRe v1.6.42 C5: 包级编译一次 + 匹配任意长度 hex (覆盖 0x2/0x5/0x80070056)
 var certutilErrRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
 // v1.6.50 L2: 二次匹配 Windows 符号错误名 (如 ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED)
@@ -2201,7 +2201,7 @@ func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
 	}
 	// v1.6.67 修复: 中文 Windows 的 certutil 输出 GBK 编码(非 UTF-8)。
 	// 直接按 UTF-8 解析中文标签会因字节序列不匹配而失败
-	// (sp/Win2022 实测: certutil -importpfx 成功但指纹提取失败)。
+	// (sp.example.com/win-test 实测: certutil -importpfx 成功但指纹提取失败)。
 	// 先自动检测编码(GBK/GB18030/UTF-8)转为 UTF-8 再解析。
 	return parsePFXInfoDump(decodeCertutilOutput(out))
 }
@@ -2227,7 +2227,7 @@ func decodeCertutilOutput(out []byte) string {
 //  1) 中文 Windows 输出中文标签 (证书哈希(sha1):/使用者:)，同时匹配中英文
 //  2) certutil -dump 按"证书 N"分块，根证书在前(无私钥)。必须提取含
 //     Provider/提供程序 行的叶子证书块，否则 delstore/IIS 绑定会用根证书
-//     指纹导致绑定失败 (生产 sp.lanxun.pro / Win2022 实测)
+//     指纹导致绑定失败 (生产 sp.example.com / win-test 实测)
 func parsePFXInfoDump(output string) (thumb string, cn string) {
 	lines := strings.Split(output, "\n")
 	isBlockStart := func(l string) bool {

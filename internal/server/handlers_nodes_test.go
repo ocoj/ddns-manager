@@ -171,7 +171,7 @@ func TestShouldRenderConfig_Condition(t *testing.T) {
 		wantRender bool
 	}{
 		{
-			name:    "Win2022关机死锁: hash一致但key版本落后 → 应渲染",
+			name:    "win-test关机死锁: hash一致但key版本落后 → 应渲染",
 			reqHash: "sha256:old", recHash: "sha256:old",
 			recKeysVer: 0, curKeyVer: 1, wantRender: true,
 		},

@@ -2,11 +2,11 @@
 
 ### ✨ 多站点 IIS 证书自动绑定支持（sp 场景）
 
-- **背景**: sp.lanxun.pro 是多站点 IIS（SharePoint），站点通过**主机名（SNI）**区分，只有绑定 `sp.lanxun.pro` 主机名的站点使用该证书。v1.6.68 的多 IP 保护（ipCount>1 跳过）对多站点场景过于保守 → sp 绑定未自动更新
+- **背景**: sp.example.com 是多站点 IIS（SharePoint），站点通过**主机名（SNI）**区分，只有绑定 `sp.example.com` 主机名的站点使用该证书。v1.6.68 的多 IP 保护（ipCount>1 跳过）对多站点场景过于保守 → sp 绑定未自动更新
 - **修复 A (scanIISBindings)**: 改用 `Get-WebBinding`（bindingInformation = `IP:Port:Host`）上报**真实 SNI 主机名**。旧实现用 `IIS:\SSLBindings` 的 IPAddress（无 Host 字段）→ 多站点 SNI 绑定上报 hostname=0.0.0.0 丢失主机名，无法识别站点。同时从 `ItemXPath` 提取站点名
 - **修复 B (bindIISWebAdmin)**: 扫描时提取站点名；匹配优先级:
   1. **SNI 主机名**匹配（fitsBinding 精确/泛域名）
-  2. **站点名**匹配（siteMatchesCert: 站点名含证书域名, 如 "sp.lanxun.pro" 站点）— IP 绑定多站点场景也能精确更新唯一绑定证书的站点
+  2. **站点名**匹配（siteMatchesCert: 站点名含证书域名, 如 "sp.example.com" 站点）— IP 绑定多站点场景也能精确更新唯一绑定证书的站点
   3. IP 绑定 + 无 SNI + 单站点（默认匹配）
   4. IP 绑定 + 无 SNI + 多站点 + 站点名不匹配 → 跳过（防误覆盖保护）
 - **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `cmd/agent/pfx_dump_test.go`, `VERSION`, `CHANGELOG.md`
@@ -23,14 +23,14 @@
 ### 🐛 修复 5：IIS 自动绑定静默失败 — netsh 中文输出解析失败 → IIS 绑定永不更新（Agent 端）
 
 - **根因**: `autoBindExisting` 用 `netsh http show sslcert` **英文标签**（`IP:port` / `Application ID`）解析绑定，但中文 Windows 输出**中文标签**（`IP:端口` / `应用程序 ID`）→ 解析失败 → bindings=0 → 打印"未找到现有 SSL 绑定 — 无需更新"→ **静默跳过** → IIS 绑定永不更新
-- **事故闭环**: v1.6.67 修好指纹提取后，Agent 导入证书成功、写 `.cert_hash` 真实 hash（Manager 判定"已部署"停止推送），但 **IIS 站点仍绑定旧证书**（Win2022 实测：Get-WebBinding 显示旧 2F0823AB，新证书 EFBA8A81 已导入但未绑定）→ 用户浏览器仍拿旧证书。Agent 认为"成功"（importPFXToIIS 返回 true），实际 IIS 绑定从未执行
-- **修复**: 新增 `bindIISWebAdmin` —— 用 **WebAdministration API**（跨 locale，对齐 scanIISBindings v1.6.15 C7）扫描 `Get-WebBinding -Protocol https` 结构化 JSON → `fitsBinding` 三级匹配（SNI/泛域名/单 IP）→ `$b.AddSslCertificate(thumb,'My')` 更新。`AddSslCertificate` **同时更新 applicationHost.config 与 HTTP.sys**（Win2022 实测两层均更新）。`autoBindExisting` 优先 WebAdministration，模块缺失时降级 netsh（add/delete 仅增删不解析输出）
+- **事故闭环**: v1.6.67 修好指纹提取后，Agent 导入证书成功、写 `.cert_hash` 真实 hash（Manager 判定"已部署"停止推送），但 **IIS 站点仍绑定旧证书**（win-test 实测：Get-WebBinding 显示旧 2F0823AB，新证书 EFBA8A81 已导入但未绑定）→ 用户浏览器仍拿旧证书。Agent 认为"成功"（importPFXToIIS 返回 true），实际 IIS 绑定从未执行
+- **修复**: 新增 `bindIISWebAdmin` —— 用 **WebAdministration API**（跨 locale，对齐 scanIISBindings v1.6.15 C7）扫描 `Get-WebBinding -Protocol https` 结构化 JSON → `fitsBinding` 三级匹配（SNI/泛域名/单 IP）→ `$b.AddSslCertificate(thumb,'My')` 更新。`AddSslCertificate` **同时更新 applicationHost.config 与 HTTP.sys**（win-test 实测两层均更新）。`autoBindExisting` 优先 WebAdministration，模块缺失时降级 netsh（add/delete 仅增删不解析输出）
 - **效果**: IIS 站点绑定真正自动更新（此前 4 个修复 + 本修复 = Windows IIS 证书自动部署全链路打通）
 - **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `VERSION`, `CHANGELOG.md`
 
 ### 🧪 验证
 
-- Win2022 实测: `AddSslCertificate` 后 `Get-WebBinding` 与 `netsh http show sslcert` 均更新为新证书 EFBA8A81
+- win-test 实测: `AddSslCertificate` 后 `Get-WebBinding` 与 `netsh http show sslcert` 均更新为新证书 EFBA8A81
 - 全量 `go test ./... -count=1` 通过
 
 ---
@@ -65,8 +65,8 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 
 ### 🐛 修复 3：强制推送失效 + IIS 绑定失败永不重试死锁
 
-- **根因 A (Manager)**: `handleForcePushCert` 只清空 `rec.Status.CertHashes`，但推送判定用的是 **Agent 实时上报的 hash**（磁盘文件未变则上报仍匹配 meta）→ 强制推送形同虚设 → sp.lanxun.pro 升级 v1.6.65 后 force push 未触发重推
-- **根因 B (Agent)**: IIS 绑定失败时不写 `.cert_hash`，`collectCertHashes` 走 Phase 3 磁盘扫描上报磁盘 hash — 文件已写入则磁盘 hash == meta hash → Manager 判定"已部署"停止推送 → **IIS 绑定永不重试**（sp/Win2022 事故：文件已写入但 IIS 绑定失败后 Manager 不再推送）
+- **根因 A (Manager)**: `handleForcePushCert` 只清空 `rec.Status.CertHashes`，但推送判定用的是 **Agent 实时上报的 hash**（磁盘文件未变则上报仍匹配 meta）→ 强制推送形同虚设 → sp.example.com 升级 v1.6.65 后 force push 未触发重推
+- **根因 B (Agent)**: IIS 绑定失败时不写 `.cert_hash`，`collectCertHashes` 走 Phase 3 磁盘扫描上报磁盘 hash — 文件已写入则磁盘 hash == meta hash → Manager 判定"已部署"停止推送 → **IIS 绑定永不重试**（sp.example.com/win-test 事故：文件已写入但 IIS 绑定失败后 Manager 不再推送）
 - **修复 A (Manager)**: `NodeRecord` 新增 `ForcePushBundles` 标记；`handleForcePushCert` 设置标记；`handleHeartbeat` 对该 bundle 跳过 matched 判定**无条件推送**，推送成功后清除标记
 - **修复 B (Agent)**: IIS 绑定失败时写**哨兵 `.cert_hash`**（值 `pending`，非 sha256 格式），上报非匹配 hash → Manager 持续重推直到 IIS 绑定成功；成功后覆盖为真实 hash
 - **效果**: ① force push 真正生效（运维可手动触发重推）② 未来 IIS 绑定失败自动重试直至成功（防死锁闭环）
@@ -86,7 +86,7 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 ### 🐛 修复 1：证书推送判定改用磁盘实时 hash — 修复新证书永不推送（管理端）
 
 - **根因**: Manager 证书推送判定依赖 `meta.json` 中缓存的 hash。acme.sh 自动续签（cron）直接覆盖 `certs/acme-*/` 下的 PEM 文件，**绕过 `SaveCertBundle`**，导致 meta.json hash 与实际磁盘内容脱钩（meta 仍为旧值）。心跳比对时 `Agent上报hash == Manager meta hash`（均为旧值）→ 误判"客户端已部署" → **新证书永不推送**
-- **生产事故复现**（192.168.110.30）: `acme-*.noxen.pro` / `acme-sp.lanxun.pro` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.lanxun.pro` / `acme-oof.noxen.pro`）推送正常——与理论完全吻合
+- **生产事故复现**（192.0.2.30）: `acme-*.example.net` / `acme-sp.example.com` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.example.com` / `acme-oof.example.net`）推送正常——与理论完全吻合
 - **修复**: `LoadCertBundle` 从磁盘实时重算 hash（排序文件名+全部内容，与 `SaveCertBundle` 同一算法），不再信任 meta.json 缓存值；检测到漂移时自愈回写 meta.json（保留 acme/ca/email 等扩展字段）
 - **效果**: acme.sh 续签后 Manager 下个心跳即感知新 hash → 自动推送；存量受影响节点无需操作，重启 Manager 后自动推送
 
@@ -94,7 +94,7 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 
 - **根因**: `extractPFXInfo` 解析 `certutil -dump` 输出提取指纹，**只匹配英文标签**（`Cert Hash(sha1):`/`Subject:`）。中文 Windows 输出 `证书哈希(sha1):`/`使用者:` → 指纹提取失败 → "PFX 证书指纹提取失败" → IIS 导入失败。与 netsh 中文 locale 问题（v1.6.1~1.6.7 已解决）**同源但遗漏于 certutil -dump**
 - **双重 bug**: ① 中文标签不匹配；② 取第一个证书块（**根证书**，无私钥）的指纹而非**带私钥的叶子证书**（certutil -dump 根在前、叶子在后）→ 即使匹配成功也会用错指纹
-- **生产实测**（中文 Windows Server 2022 测试机）: `certutil -importpfx` 每次都成功，但随后的 `-dump` 解析失败；go-pkcs12 PFX 与密码均正确（openssl/手动 certutil 均验证通过）
+- **生产实测**（中文 Windows Server 测试机）: `certutil -importpfx` 每次都成功，但随后的 `-dump` 解析失败；go-pkcs12 PFX 与密码均正确（openssl/手动 certutil 均验证通过）
 - **修复**: `extractPFXInfo` 重构为 `parsePFXInfoDump`（可测试纯函数）：① `cutAnyPrefix` 同时匹配中英文标签（参考 v1.6.6 已验证方案）；② 按"证书 N"分块，提取含 `Provider=`/`提供程序 =` 行的**叶子证书**块指纹与 CN；③ 指纹去除空格（英文版字节分隔）
 - **效果**: 中文 Windows 节点升级 Agent 后 IIS 证书自动导入并绑定成功
 
@@ -1021,7 +1021,7 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
 - **bug**: PowerShell `ConvertTo-Json` 将 `$_.IPAddress` 序列化为嵌套对象
   `{"Address":0,"AddressFamily":2,...}` 而非字符串 "0.0.0.0"
 - **fix**: `[string]$_.IPAddress` 强制转换为字符串
-- **结果**: Win2022 IIS 扫描成功 → 1个SSL绑定 0.0.0.0:443 thumb=2f0823ab...
+- **结果**: win-test IIS 扫描成功 → 1个SSL绑定 0.0.0.0:443 thumb=2f0823ab...
 
 #### v1.6.7 — WebAdministration API 替代 netsh
 - **突破**: 用 `Get-ChildItem IIS:\SSLBindings` 替代 netsh 文本解析
@@ -1064,7 +1064,7 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
 
 #### 🧪 部署状态
 - Manager (192.0.2.1): v1.6.0 ✅
-- Win2022 (192.0.2.3): v1.6.8 ✅ IIS扫描1个SSL绑定
+- win-test (192.0.2.3): v1.6.8 ✅ IIS扫描1个SSL绑定
 - sp.example.com: v1.5.41 → 待心跳升级
 
 ---

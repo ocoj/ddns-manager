@@ -1696,9 +1696,13 @@ func bindIISWebAdmin(thumb, certCN string) (updated int, handled bool) {
 	type wb struct {
 		BI         string `json:"BI"` // bindingInformation "IP:Port:Host"
 		Thumbprint string `json:"Thumbprint"`
+		Site       string `json:"Site"`     // 站点名 (ItemXPath 提取, 多站点区分)
+		CertCN     string `json:"CertCN"`   // 绑定当前证书 CN (sp 多站点 IP 绑定场景的关键匹配依据)
 	}
 	// 扫描: Get-WebBinding 返回结构化对象, 不受 locale 影响 (对齐 scanIISBindings v1.6.15 C7)
-	psScan := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-WebBinding -Protocol https | ForEach-Object { [PSCustomObject]@{ BI=$_.bindingInformation; Thumbprint=$_.certificateHash } } | ConvertTo-Json -Compress } else { Write-Host 'NO_MODULE' }"
+	// v1.6.69: 同时提取站点名 + 绑定当前证书 CN。sp 多站点场景: https 是 IP 绑定
+	// (无 SNI host) 且站点名不含域名, 但绑定证书的 CN 与新证书一致 → 按 CN 匹配
+	psScan := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-WebBinding -Protocol https | ForEach-Object { $site = ''; if ($_.ItemXPath -match \"site\\[@name='([^']*)'\") { $site = $Matches[1] }; $certCN = ''; if ($_.certificateHash) { $c = Get-ChildItem Cert:\\LocalMachine\\My -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -ieq $_.certificateHash } | Select-Object -First 1; if ($c) { $certCN = $c.Subject } }; [PSCustomObject]@{ BI=$_.bindingInformation; Thumbprint=$_.certificateHash; Site=$site; CertCN=$certCN } } | ConvertTo-Json -Compress } else { Write-Host 'NO_MODULE' }"
 	out, err := exec.Command("powershell", "-Command", psScan).CombinedOutput()
 	if err != nil || len(out) == 0 {
 		agentLog("证书部署: IIS绑定 WebAdministration 扫描失败, 降级 netsh")
@@ -1756,21 +1760,38 @@ func bindIISWebAdmin(thumb, certCN string) (updated int, handled bool) {
 		matchScore := 0
 		matchReason := ""
 		if b.host != "" {
+			// v1.6.69: SNI 绑定 — 主机名精确/泛域名匹配 (多站点通过主机名区分)
 			matchScore, matchReason = fitsBinding(strings.ToLower(b.host), certCN)
-		} else if !hasSNI {
-			// v1.6.9: IP绑定只在单站(仅1个IP绑定)时自动更新, 多IP绑定时跳过防误覆盖
-			ipCount := 0
-			for _, bb := range parsedB {
-				if bb.host == "" {
-					ipCount++
+		} else {
+			// IP 绑定 (无 SNI host):
+			// ① 绑定当前证书 CN 匹配新证书 CN (sp 场景: 旧证书也是 sp.lanxun.pro)
+			//    → 识别唯一绑定该证书域的绑定, 即使多 IP 也精确更新
+			// ② 站点名匹配 (站点名含证书域名)
+			// ③ 无 SNI + 单 IP 默认匹配; 多 IP 跳过防误覆盖
+			curCN := extractSubjectCN(bindings[i].CertCN)
+			site := bindings[i].Site
+			switch {
+			case curCN != "" && certCNMatches(curCN, certCN):
+				matchScore = 100
+				matchReason = fmt.Sprintf("绑定证书CN匹配(%s)", curCN)
+			case site != "" && siteMatchesCert(site, certCN):
+				matchScore = 100
+				matchReason = "站点名匹配"
+			case !hasSNI:
+				// v1.6.9: IP绑定只在单站(仅1个IP绑定)时自动更新, 多IP绑定时跳过防误覆盖
+				ipCount := 0
+				for _, bb := range parsedB {
+					if bb.host == "" {
+						ipCount++
+					}
 				}
+				if ipCount > 1 {
+					agentLog("证书部署: 跳过IP绑定 %s:%s (%d个IP绑定, 防止多站点误覆盖, 请手动绑定)", b.ip, b.port, ipCount)
+					continue
+				}
+				matchScore = 10
+				matchReason = "默认IP绑定(单站点)"
 			}
-			if ipCount > 1 {
-				agentLog("证书部署: 跳过IP绑定 %s:%s (%d个IP绑定, 防止多站点误覆盖, 请手动绑定)", b.ip, b.port, ipCount)
-				continue
-			}
-			matchScore = 10
-			matchReason = "默认IP绑定(单站点)"
 		}
 		if matchScore == 0 {
 			continue
@@ -1961,6 +1982,63 @@ func fitsBinding(iisHost, certCN string) (int, string) {
 	return 0, ""
 }
 
+// siteMatchesCert v1.6.69: 判断 IIS 站点名是否对应证书域名。
+// 多站点 IIS 中站点名可能直接是域名 (sp.lanxun.pro), 或站点主机名含该域名。
+// 用于 IP 绑定 (无 SNI host) 场景: 站点名匹配 certCN 时精确更新该站点,
+// 避免多 IP 绑定保护 (ipCount>1) 误跳过唯一绑定证书的站点。
+func siteMatchesCert(site, certCN string) bool {
+	sl := strings.ToLower(strings.TrimSpace(site))
+	cl := strings.ToLower(strings.TrimSpace(certCN))
+	if sl == "" || cl == "" {
+		return false
+	}
+	if sl == cl {
+		return true
+	}
+	return strings.Contains(sl, cl) || strings.Contains(cl, sl)
+}
+
+// extractSubjectCN v1.6.69: 从证书 Subject (如 "CN=sp.lanxun.pro, O=Lanxun")
+// 提取 CN 字段。兼容 "CN=xxx" 前缀及无前缀格式。
+func extractSubjectCN(subject string) string {
+	s := strings.TrimSpace(subject)
+	if s == "" {
+		return ""
+	}
+	if idx := strings.Index(s, "CN="); idx != -1 {
+		cn := s[idx+3:]
+		if comma := strings.IndexAny(cn, ",;"); comma != -1 {
+			cn = cn[:comma]
+		}
+		return strings.TrimSpace(cn)
+	}
+	if comma := strings.IndexAny(s, ",;"); comma != -1 {
+		s = s[:comma]
+	}
+	return strings.TrimSpace(s)
+}
+
+// certCNMatches v1.6.69: 判断绑定当前证书 CN 与新证书 CN 是否对应同一证书域。
+// 用于 IP 绑定多站点场景识别唯一绑定该证书域的绑定 (旧证书 CN == 新证书 CN)。
+func certCNMatches(curCN, certCN string) bool {
+	cur := strings.ToLower(strings.TrimSpace(curCN))
+	cl := strings.ToLower(strings.TrimSpace(certCN))
+	if cur == "" || cl == "" {
+		return false
+	}
+	if cur == cl {
+		return true
+	}
+	// 泛域名 vs 具体域名同后缀
+	if strings.HasPrefix(cl, "*.") && !strings.HasPrefix(cur, "*.") {
+		return strings.HasSuffix(cur, strings.TrimPrefix(cl, "*"))
+	}
+	if strings.HasPrefix(cur, "*.") && !strings.HasPrefix(cl, "*.") {
+		return strings.HasSuffix(cl, strings.TrimPrefix(cur, "*"))
+	}
+	return false
+}
+
 // scanIISBindingsIfNeeded v1.6.16: 仅在证书已部署时扫描
 // 判断逻辑: 证书目录有内容 → Manager已推送证书 → 需要IIS扫描
 func scanIISBindingsIfNeeded(cfg *model.AgentConfig) []model.IISBoundSite {
@@ -1987,7 +2065,10 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	//   英文正则解析彻底失效, chcp 437 前缀也无法可靠工作。
 	//   WebAdministration API 返回结构化JSON, 不受locale/PS版本影响。
 	// 非IIS服务器: 模块不存在 → Write-Host 'NO_MODULE' → 优雅降级, 不报错。
-	psCmd := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-ChildItem IIS:\\SSLBindings | Where-Object { $_.Sites } | ForEach-Object { [PSCustomObject]@{ Site = if ($_.Sites.Value) { $_.Sites.Value -join ',' } else { '' }; IP = [string]$_.IPAddress; Port = $_.Port; Thumbprint = $_.Thumbprint } } | ConvertTo-Json } else { Write-Host 'NO_MODULE' }"
+	// v1.6.69: 改用 Get-WebBinding (bindingInformation = "IP:Port:Host") 上报
+	// 真实 SNI 主机名。旧实现用 IIS:\\SSLBindings 的 IPAddress (无 Host 字段),
+	// 多站点 SNI 绑定 (sp 场景) 上报 hostname=0.0.0.0 丢失主机名, 无法识别站点。
+	psCmd := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-WebBinding -Protocol https | ForEach-Object { $site = ''; if ($_.ItemXPath -match \"site\\[@name='([^']*)'\") { $site = $Matches[1] }; $bi = $_.bindingInformation -split ':'; [PSCustomObject]@{ Site = $site; IP = $bi[0]; Port = if ($bi.Count -ge 2) { $bi[1] } else { '' }; Host = if ($bi.Count -ge 3) { $bi[2] } else { '' }; Thumbprint = $_.certificateHash } } | ConvertTo-Json -Compress } else { Write-Host 'NO_MODULE' }"
 	out, err := exec.Command("powershell", "-Command", psCmd).CombinedOutput()
 	if err != nil || len(out) == 0 {
 		agentLog("IIS扫描: 不可用 (非IIS服务器或PowerShell受限)")
@@ -2000,7 +2081,8 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	type psSSLBinding struct {
 		Site       string `json:"Site"`
 		IP         string `json:"IP"`
-		Port       int    `json:"Port"`
+		Port       string `json:"Port"`
+		Host       string `json:"Host"`
 		Thumbprint string `json:"Thumbprint"`
 	}
 	var psBindings []psSSLBinding
@@ -2020,9 +2102,15 @@ func scanIISBindings(cfg *model.AgentConfig) []model.IISBoundSite {
 	}
 	var sites []model.IISBoundSite
 	for _, pb := range psBindings {
+		port, _ := strconv.Atoi(pb.Port)
+		// v1.6.69: Hostname 优先取 SNI 主机名 (多站点区分), 无则回退 IP
+		hostname := pb.Host
+		if hostname == "" {
+			hostname = pb.IP
+		}
 		cur := model.IISBoundSite{
-			Hostname:   pb.IP,
-			Port:       pb.Port,
+			Hostname:   hostname,
+			Port:       port,
 			Thumbprint: strings.ToLower(pb.Thumbprint),
 		}
 		if info, ok := siteMap[pb.Site]; ok {

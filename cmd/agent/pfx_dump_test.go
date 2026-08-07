@@ -163,3 +163,66 @@ func TestParsePFXInfoDump_GBKDirectFails(t *testing.T) {
 		t.Error("GBK 输出未转码竟然解析成功 — 说明测试样例有问题")
 	}
 }
+
+// TestSiteMatchesCert v1.6.69 回归测试: 多站点 IIS 站点名匹配证书域名
+func TestSiteMatchesCert(t *testing.T) {
+	cases := []struct {
+		site, certCN string
+		want         bool
+	}{
+		{"sp.lanxun.pro", "sp.lanxun.pro", true},
+		{"SP.LANXUN.PRO", "sp.lanxun.pro", true},
+		{"sp.lanxun.pro 站点", "sp.lanxun.pro", true},
+		{"SharePoint - 80", "sp.lanxun.pro", false},
+		{"SharePoint Web Services", "sp.lanxun.pro", false},
+		{"", "sp.lanxun.pro", false},
+		{"sp.lanxun.pro", "", false},
+		{"Default Web Site", "sp.lanxun.pro", false},
+	}
+	for _, c := range cases {
+		got := siteMatchesCert(c.site, c.certCN)
+		if got != c.want {
+			t.Errorf("siteMatchesCert(%q, %q) = %v, want %v", c.site, c.certCN, got, c.want)
+		}
+	}
+}
+
+// TestExtractSubjectCN v1.6.69 回归测试: 证书 Subject CN 提取
+func TestExtractSubjectCN(t *testing.T) {
+	cases := []struct {
+		subject, want string
+	}{
+		{"CN=sp.lanxun.pro, O=Lanxun CO.,Ltd.", "sp.lanxun.pro"},
+		{"CN=*.lanxun.pro", "*.lanxun.pro"},
+		{"sp.lanxun.pro", "sp.lanxun.pro"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := extractSubjectCN(c.subject)
+		if got != c.want {
+			t.Errorf("extractSubjectCN(%q) = %q, want %q", c.subject, got, c.want)
+		}
+	}
+}
+
+// TestCertCNMatches v1.6.69 回归测试: 绑定当前证书 CN 与新证书 CN 匹配
+func TestCertCNMatches(t *testing.T) {
+	cases := []struct {
+		curCN, certCN string
+		want          bool
+	}{
+		{"sp.lanxun.pro", "sp.lanxun.pro", true},
+		{"SP.LANXUN.PRO", "sp.lanxun.pro", true},
+		{"*.lanxun.pro", "sp.lanxun.pro", true},
+		{"sp.lanxun.pro", "*.lanxun.pro", true},
+		{"other.example.com", "sp.lanxun.pro", false},
+		{"", "sp.lanxun.pro", false},
+		{"sp.lanxun.pro", "", false},
+	}
+	for _, c := range cases {
+		got := certCNMatches(c.curCN, c.certCN)
+		if got != c.want {
+			t.Errorf("certCNMatches(%q, %q) = %v, want %v", c.curCN, c.certCN, got, c.want)
+		}
+	}
+}

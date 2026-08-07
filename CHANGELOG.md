@@ -1,3 +1,23 @@
+## v1.6.69 — 2026-08-07
+
+### ✨ 多站点 IIS 证书自动绑定支持（sp 场景）
+
+- **背景**: sp.lanxun.pro 是多站点 IIS（SharePoint），站点通过**主机名（SNI）**区分，只有绑定 `sp.lanxun.pro` 主机名的站点使用该证书。v1.6.68 的多 IP 保护（ipCount>1 跳过）对多站点场景过于保守 → sp 绑定未自动更新
+- **修复 A (scanIISBindings)**: 改用 `Get-WebBinding`（bindingInformation = `IP:Port:Host`）上报**真实 SNI 主机名**。旧实现用 `IIS:\SSLBindings` 的 IPAddress（无 Host 字段）→ 多站点 SNI 绑定上报 hostname=0.0.0.0 丢失主机名，无法识别站点。同时从 `ItemXPath` 提取站点名
+- **修复 B (bindIISWebAdmin)**: 扫描时提取站点名；匹配优先级:
+  1. **SNI 主机名**匹配（fitsBinding 精确/泛域名）
+  2. **站点名**匹配（siteMatchesCert: 站点名含证书域名, 如 "sp.lanxun.pro" 站点）— IP 绑定多站点场景也能精确更新唯一绑定证书的站点
+  3. IP 绑定 + 无 SNI + 单站点（默认匹配）
+  4. IP 绑定 + 无 SNI + 多站点 + 站点名不匹配 → 跳过（防误覆盖保护）
+- **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `cmd/agent/pfx_dump_test.go`, `VERSION`, `CHANGELOG.md`
+
+### 🧪 测试
+
+- 新增 `TestSiteMatchesCert`（站点名匹配回归测试）
+- 全量 `go test ./... -count=1` 通过
+
+---
+
 ## v1.6.68 — 2026-08-07
 
 ### 🐛 修复 5：IIS 自动绑定静默失败 — netsh 中文输出解析失败 → IIS 绑定永不更新（Agent 端）

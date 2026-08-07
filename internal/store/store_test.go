@@ -2,6 +2,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -323,6 +324,63 @@ func TestDeleteCertBundle(t *testing.T) {
 	_, err := s.LoadCertBundle("delete-me")
 	if err == nil {
 		t.Error("LoadCertBundle after delete should fail")
+	}
+}
+
+// TestLoadCertBundleRecomputesHashOnDiskDrift v1.6.65 回归测试:
+// 模拟 acme.sh 自动续签绕过 SaveCertBundle 直接覆盖磁盘 PEM 文件，
+// 导致 meta.json hash 过期 — LoadCertBundle 必须返回磁盘实时 hash
+// 并自愈回写 meta.json，否则推送判定误判"已部署"导致新证书永不推送。
+func TestLoadCertBundleRecomputesHashOnDiskDrift(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	const name = "acme-external-renew.test"
+
+	// 1. 正常保存证书 → hash1
+	b := &CertBundle{Name: name, Files: map[string][]byte{
+		"fullchain.pem": []byte("old-cert"),
+		"privkey.pem":   []byte("old-key"),
+	}}
+	if err := s.SaveCertBundle(b); err != nil {
+		t.Fatalf("SaveCertBundle: %v", err)
+	}
+	hash1 := b.Hash
+
+	// 2. 外部工具（acme.sh cron）直接覆盖磁盘 PEM，绕过 SaveCertBundle
+	dir := filepath.Join(s.dir, "certs", name)
+	if err := os.WriteFile(filepath.Join(dir, "fullchain.pem"), []byte("new-cert"), 0o600); err != nil {
+		t.Fatalf("模拟外部覆盖: %v", err)
+	}
+
+	// 3. LoadCertBundle 应返回磁盘实时 hash（≠ hash1），并自愈 meta.json
+	loaded, err := s.LoadCertBundle(name)
+	if err != nil {
+		t.Fatalf("LoadCertBundle: %v", err)
+	}
+	if loaded.Hash == hash1 {
+		t.Fatalf("LoadCertBundle 仍返回过期 hash %q — 推送判定将误判已部署", hash1)
+	}
+	if got := string(loaded.Files["fullchain.pem"]); got != "new-cert" {
+		t.Errorf("Files[fullchain.pem] = %q, want new-cert", got)
+	}
+
+	// 4. 自愈后再次 Load：hash 稳定（不再检测到漂移），且 meta.json 已同步
+	loaded2, err := s.LoadCertBundle(name)
+	if err != nil {
+		t.Fatalf("LoadCertBundle#2: %v", err)
+	}
+	if loaded2.Hash != loaded.Hash {
+		t.Errorf("自愈后 hash 仍不稳定: %q → %q", loaded.Hash, loaded2.Hash)
+	}
+	metaData, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		t.Fatalf("读取 meta.json: %v", err)
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("解析 meta.json: %v", err)
+	}
+	if meta["hash"] != loaded.Hash {
+		t.Errorf("meta.json hash 未自愈: %q, want %q", meta["hash"], loaded.Hash)
 	}
 }
 

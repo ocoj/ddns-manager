@@ -268,6 +268,17 @@ func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
 		}
 		b.Files[e.Name()] = content
 	}
+	// v1.6.65 修复: 实时重算 hash — meta.json 中的 hash 可能因外部 acme.sh
+	// 自动续签直接更新 PEM 文件而过期（绕过 SaveCertBundle），导致推送判定
+	// 用旧 hash 与 Agent 上报 hash 比对误判"已部署"，新证书永不推送。
+	// 基于磁盘真实内容重算并自愈回写 meta.json。
+	computed := computeBundleHash(b.Files)
+	if computed != b.Hash {
+		b.Hash = computed
+		if err := s.updateBundleMetaHash(name, computed); err != nil {
+			log.Printf("[store] 证书 %s meta hash 回写失败: %v", name, err)
+		}
+	}
 	return &b, nil
 }
 
@@ -279,21 +290,18 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	// write files in stable order, compute deterministic hash
-	h := sha256.New()
+	// write files in stable order, then compute deterministic hash
 	names := make([]string, 0, len(b.Files))
 	for name := range b.Files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		content := b.Files[name]
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), b.Files[name], 0o600); err != nil {
 			return err
 		}
-		h.Write(content)
 	}
-	b.Hash = fmt.Sprintf("sha256:%x", h.Sum(nil))
+	b.Hash = computeBundleHash(b.Files)
 	// preserve existing extra fields not in CertBundle struct (e.g. ACME metadata: acme/email/ca/key_type)
 	extra := map[string]interface{}{}
 	if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
@@ -323,6 +331,46 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 		return fmt.Errorf("marshal cert meta: %w", err)
 	}
 	return os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600)
+}
+
+// computeBundleHash 计算证书 bundle 的确定性 hash：
+// 按文件名排序后拼接全部内容做 SHA256，前缀 sha256:。
+// SaveCertBundle 与 LoadCertBundle 共用 — 保证推送判定基于磁盘真实内容，
+// 修复 meta.json hash 与磁盘文件脱钩导致新证书永不推送的问题 (v1.6.65)。
+func computeBundleHash(files map[string][]byte) string {
+	h := sha256.New()
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		h.Write(files[name])
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+// updateBundleMetaHash 仅更新 meta.json 中的 hash 字段，保留其余字段
+// （acme/ca/email/key_type 等 ACME 元数据），用于 LoadCertBundle 的自愈回写。
+func (s *ManagerStore) updateBundleMetaHash(name, newHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir := filepath.Join(s.dir, "certs", name)
+	metaPath := filepath.Join(dir, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	m["hash"] = newHash
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metaPath, out, 0o600)
 }
 
 // sanitizeBundleName validates cert bundle name, preventing path traversal.

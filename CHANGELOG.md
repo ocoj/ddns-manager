@@ -1,3 +1,23 @@
+## v1.6.65 — 2026-08-07
+
+### 🐛 证书推送判定改用磁盘实时 hash — 修复新证书永不推送
+
+- **根因**: Manager 证书推送判定依赖 `meta.json` 中缓存的 hash。acme.sh 自动续签（cron）直接覆盖 `certs/acme-*/` 下的 PEM 文件，**绕过 `SaveCertBundle`**，导致 meta.json hash 与实际磁盘内容脱钩（meta 仍为旧值）。心跳比对时 `Agent上报hash == Manager meta hash`（均为旧值）→ 误判"客户端已部署" → **新证书永不推送**
+- **生产事故复现**（192.168.110.30）: `acme-*.noxen.pro` / `acme-sp.lanxun.pro` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.lanxun.pro` / `acme-oof.noxen.pro`）推送正常——与理论完全吻合
+- **修复**: `LoadCertBundle` 从磁盘实时重算 hash（排序文件名+全部内容，与 `SaveCertBundle` 同一算法），不再信任 meta.json 缓存值；检测到漂移时自愈回写 meta.json（保留 acme/ca/email 等扩展字段）
+- **效果**: acme.sh 续签后 Manager 下个心跳即感知新 hash → 自动推送；存量受影响节点无需操作，重启 Manager 后自动推送
+
+### 📋 涉及文件
+
+`internal/store/store.go`, `internal/store/store_test.go`, `VERSION`, `CHANGELOG.md` — 共 4 文件
+
+### 🧪 测试
+
+- `TestLoadCertBundleRecomputesHashOnDiskDrift`: 模拟外部覆盖磁盘 PEM → LoadCertBundle 返回实时 hash + meta.json 自愈
+- 全量 `go test ./... -count=1` + store `-race` 均通过
+
+---
+
 ## v1.6.64 — 2026-08-02
 
 ### 🐛 方案B：DNS Key 全局版本号持久化比对 — 修复离线节点配置永不推送死锁

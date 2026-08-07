@@ -1,20 +1,29 @@
 ## v1.6.65 — 2026-08-07
 
-### 🐛 证书推送判定改用磁盘实时 hash — 修复新证书永不推送
+### 🐛 修复 1：证书推送判定改用磁盘实时 hash — 修复新证书永不推送（管理端）
 
 - **根因**: Manager 证书推送判定依赖 `meta.json` 中缓存的 hash。acme.sh 自动续签（cron）直接覆盖 `certs/acme-*/` 下的 PEM 文件，**绕过 `SaveCertBundle`**，导致 meta.json hash 与实际磁盘内容脱钩（meta 仍为旧值）。心跳比对时 `Agent上报hash == Manager meta hash`（均为旧值）→ 误判"客户端已部署" → **新证书永不推送**
 - **生产事故复现**（192.168.110.30）: `acme-*.noxen.pro` / `acme-sp.lanxun.pro` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.lanxun.pro` / `acme-oof.noxen.pro`）推送正常——与理论完全吻合
 - **修复**: `LoadCertBundle` 从磁盘实时重算 hash（排序文件名+全部内容，与 `SaveCertBundle` 同一算法），不再信任 meta.json 缓存值；检测到漂移时自愈回写 meta.json（保留 acme/ca/email 等扩展字段）
 - **效果**: acme.sh 续签后 Manager 下个心跳即感知新 hash → 自动推送；存量受影响节点无需操作，重启 Manager 后自动推送
 
+### 🐛 修复 2：Windows IIS 证书导入 — 中文 locale 指纹提取失败（Agent 端）
+
+- **根因**: `extractPFXInfo` 解析 `certutil -dump` 输出提取指纹，**只匹配英文标签**（`Cert Hash(sha1):`/`Subject:`）。中文 Windows 输出 `证书哈希(sha1):`/`使用者:` → 指纹提取失败 → "PFX 证书指纹提取失败" → IIS 导入失败。与 netsh 中文 locale 问题（v1.6.1~1.6.7 已解决）**同源但遗漏于 certutil -dump**
+- **双重 bug**: ① 中文标签不匹配；② 取第一个证书块（**根证书**，无私钥）的指纹而非**带私钥的叶子证书**（certutil -dump 根在前、叶子在后）→ 即使匹配成功也会用错指纹
+- **生产实测**（中文 Windows Server 2022 测试机）: `certutil -importpfx` 每次都成功，但随后的 `-dump` 解析失败；go-pkcs12 PFX 与密码均正确（openssl/手动 certutil 均验证通过）
+- **修复**: `extractPFXInfo` 重构为 `parsePFXInfoDump`（可测试纯函数）：① `cutAnyPrefix` 同时匹配中英文标签（参考 v1.6.6 已验证方案）；② 按"证书 N"分块，提取含 `Provider=`/`提供程序 =` 行的**叶子证书**块指纹与 CN；③ 指纹去除空格（英文版字节分隔）
+- **效果**: 中文 Windows 节点升级 Agent 后 IIS 证书自动导入并绑定成功
+
 ### 📋 涉及文件
 
-`internal/store/store.go`, `internal/store/store_test.go`, `VERSION`, `CHANGELOG.md` — 共 4 文件
+`internal/store/store.go`, `internal/store/store_test.go`, `cmd/agent/main.go`, `cmd/agent-win/main.go`, `cmd/agent/pfx_dump_test.go`, `VERSION`, `CHANGELOG.md` — 共 7 文件
 
 ### 🧪 测试
 
-- `TestLoadCertBundleRecomputesHashOnDiskDrift`: 模拟外部覆盖磁盘 PEM → LoadCertBundle 返回实时 hash + meta.json 自愈
-- 全量 `go test ./... -count=1` + store `-race` 均通过
+- store: `TestLoadCertBundleRecomputesHashOnDiskDrift` — 模拟外部覆盖磁盘 PEM → LoadCertBundle 返回实时 hash + meta.json 自愈
+- agent: `TestParsePFXInfoDump_*` × 5 — 中/英文 certutil -dump 输出解析（含真实中文样例）、叶子证书提取、回退逻辑、空输出
+- 全量 `go test ./... -count=1` + store/agent `-race` 均通过
 
 ---
 

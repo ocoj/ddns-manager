@@ -1968,24 +1968,64 @@ func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
 		log.Printf("[cert] certutil -dump 失败: %v", err)
 		return "", ""
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Cert Hash(sha1):") {
-			thumb = strings.TrimSpace(strings.TrimPrefix(line, "Cert Hash(sha1):"))
+	return parsePFXInfoDump(string(out))
+}
+
+// parsePFXInfoDump 解析 certutil -dump 输出，提取叶子证书(带私钥)的指纹和 CN。
+// v1.6.65 修复 — 与 netsh 中文 locale 问题同源(参考 v1.6.6 cutAnyPrefix 方案):
+//  1) 中文 Windows 输出中文标签 (证书哈希(sha1):/使用者:)，同时匹配中英文
+//  2) certutil -dump 按"证书 N"分块，根证书在前(无私钥)。必须提取含
+//     Provider/提供程序 行的叶子证书块，否则 delstore/IIS 绑定会用根证书
+//     指纹导致绑定失败 (生产 sp.lanxun.pro / Win2022 实测)
+func parsePFXInfoDump(output string) (thumb string, cn string) {
+	lines := strings.Split(output, "\n")
+	isBlockStart := func(l string) bool {
+		return strings.HasPrefix(l, "================ 证书") ||
+			strings.HasPrefix(l, "================ Cert")
+	}
+	var curThumb, curCN string
+	hasKey := false
+	flush := func() {
+		// 仅取第一个带私钥(叶子)证书块
+		if hasKey && curThumb != "" && thumb == "" {
+			thumb = curThumb
+			cn = curCN
 		}
-		if strings.HasPrefix(line, "Subject:") {
-			subject := strings.TrimPrefix(line, "Subject:")
-			subject = strings.TrimSpace(subject)
+	}
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if isBlockStart(line) {
+			flush()
+			curThumb, curCN, hasKey = "", "", false
+			continue
+		}
+		if after, ok := cutAnyPrefix(line, "Cert Hash(sha1):", "证书哈希(sha1):"); ok {
+			// 去除空格: 英文版可能按字节空格分隔 (3c 34 e3), 中文版为连续 hex
+			curThumb = strings.ReplaceAll(strings.TrimSpace(after), " ", "")
+		} else if after, ok := cutAnyPrefix(line, "Subject:", "使用者:"); ok {
+			subject := strings.TrimSpace(after)
 			if idx := strings.Index(subject, "CN="); idx != -1 {
-				cn = subject[idx+3:]
-				if comma := strings.IndexByte(cn, ','); comma != -1 {
-					cn = cn[:comma]
+				c := subject[idx+3:]
+				if comma := strings.IndexByte(c, ','); comma != -1 {
+					c = c[:comma]
 				}
-				cn = strings.ToLower(strings.TrimSpace(cn))
+				curCN = strings.ToLower(strings.TrimSpace(c))
 			}
+		} else if strings.Contains(line, "提供程序 =") || strings.Contains(line, "Provider =") ||
+			strings.Contains(line, "密钥容器 =") || strings.Contains(line, "Key Container =") {
+			// 叶子证书(带私钥)标志
+			hasKey = true
 		}
-		if thumb != "" && cn != "" {
-			break
+	}
+	flush()
+	// 兜底: 输出异常(无 Provider 标志)时回退第一个指纹，兼容旧行为
+	if thumb == "" {
+		for _, raw := range lines {
+			line := strings.TrimSpace(raw)
+			if after, ok := cutAnyPrefix(line, "Cert Hash(sha1):", "证书哈希(sha1):"); ok {
+				thumb = strings.ReplaceAll(strings.TrimSpace(after), " ", "")
+				break
+			}
 		}
 	}
 	return

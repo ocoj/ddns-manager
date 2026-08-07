@@ -1637,27 +1637,39 @@ func bindExplicit(thumb, bundleName, certCN string, bindings []model.CertToIISBi
 		if port == 0 {
 			port = 443
 		}
+		// v1.6.68: 用 WebAdministration AddSslCertificate 更新 IIS 站点绑定。
+		// 替代 netsh add/delete sslcert — netsh 只更新 HTTP.sys 层, IIS 站点
+		// 绑定(applicationHost.config)不同步 (与 autoBindExisting 同根因⑤)。
+		// AddSslCertificate 同时更新 applicationHost.config 与 HTTP.sys。
 		appID := "{4dc3e181-e14b-4a21-b022-59fc669b0914}"
-		if b.Hostname != "" {
-			key := fmt.Sprintf("%s:%d", b.Hostname, port)
-			exec.Command("netsh", "http", "delete", "sslcert", "hostnameport="+key).Run()
-			out, err := exec.Command("netsh", "http", "add", "sslcert",
-				"hostnameport="+key, "certhash="+thumb, "appid="+appID, "certstorename=MY").CombinedOutput()
-			if err != nil {
-				log.Printf("IIS SNI 绑定 %s 失败: %v: %s", key, err, string(out))
+		psUpdate := fmt.Sprintf("Import-Module WebAdministration -ErrorAction SilentlyContinue; $b = Get-WebBinding -Protocol https -Port %d | Where-Object { $_.bindingInformation -like '*:%d:*' }; if ($b) { $b.AddSslCertificate('%s','My') }", port, port, thumb)
+		out, err := exec.Command("powershell", "-Command", psUpdate).CombinedOutput()
+		if err != nil || strings.Contains(string(out), "NO_MODULE") {
+			// 降级: netsh (仅 WebAdministration 不可用; add/delete 不解析输出)
+			log.Printf("IIS 显式绑定 WebAdmin 不可用, 降级 netsh: %s:%d", ip, port)
+			if b.Hostname != "" {
+				key := fmt.Sprintf("%s:%d", b.Hostname, port)
+				exec.Command("netsh", "http", "delete", "sslcert", "hostnameport="+key).Run()
+				nout, nerr := exec.Command("netsh", "http", "add", "sslcert",
+					"hostnameport="+key, "certhash="+thumb, "appid="+appID, "certstorename=MY").CombinedOutput()
+				if nerr != nil {
+					log.Printf("IIS SNI 绑定 %s 失败: %v: %s", key, nerr, string(nout))
+				} else {
+					log.Printf("IIS SNI 已绑定: %s -> %s", key, bundleName)
+				}
 			} else {
-				log.Printf("IIS SNI 已绑定: %s -> %s", key, bundleName)
+				key := fmt.Sprintf("%s:%d", ip, port)
+				exec.Command("netsh", "http", "delete", "sslcert", "ipport="+key).Run()
+				nout, nerr := exec.Command("netsh", "http", "add", "sslcert",
+					"ipport="+key, "certhash="+thumb, "appid="+appID).CombinedOutput()
+				if nerr != nil {
+					log.Printf("IIS IP 绑定 %s 失败: %v: %s", key, nerr, string(nout))
+				} else {
+					log.Printf("IIS IP 已绑定: %s -> %s", key, bundleName)
+				}
 			}
 		} else {
-			key := fmt.Sprintf("%s:%d", ip, port)
-			exec.Command("netsh", "http", "delete", "sslcert", "ipport="+key).Run()
-			out, err := exec.Command("netsh", "http", "add", "sslcert",
-				"ipport="+key, "certhash="+thumb, "appid="+appID).CombinedOutput()
-			if err != nil {
-				log.Printf("IIS IP 绑定 %s 失败: %v: %s", key, err, string(out))
-			} else {
-				log.Printf("IIS IP 已绑定: %s -> %s", key, bundleName)
-			}
+			log.Printf("IIS 显式绑定: %s:%d -> %s", ip, port, bundleName)
 		}
 		matched++
 	}
@@ -1669,7 +1681,125 @@ func bindExplicit(thumb, bundleName, certCN string, bindings []model.CertToIISBi
 
 // autoBindExisting scans existing IIS SSL bindings via netsh and updates them
 // to use the new cert. Matches by cert CN → binding hostname for multi-site.
+// bindIISWebAdmin v1.6.67: WebAdministration API 扫描+更新 IIS 站点绑定。
+// 解决根因⑤: netsh http show sslcert 在中文 Windows 输出中文标签(IP:端口/
+// 应用程序 ID), 英文标签解析失败 → bindings=0 → 静默跳过 → IIS 绑定永不更新
+// (sp/Win2022 事故: Agent 认为部署成功但 IIS 仍指向旧证书)。
+// WebAdministration 返回结构化数据(跨 locale), AddSslCertificate 同时更新
+// applicationHost.config 与 HTTP.sys 层, 与 IIS 管理器/Get-WebBinding 一致。
+// 返回 (updated, handled): handled=false 表示 WebAdministration 不可用(非 IIS
+// 服务器/模块缺失), 由调用方降级到 netsh。
+func bindIISWebAdmin(thumb, certCN string) (updated int, handled bool) {
+	if runtime.GOOS != "windows" {
+		return 0, false
+	}
+	type wb struct {
+		BI         string `json:"BI"` // bindingInformation "IP:Port:Host"
+		Thumbprint string `json:"Thumbprint"`
+	}
+	// 扫描: Get-WebBinding 返回结构化对象, 不受 locale 影响 (对齐 scanIISBindings v1.6.15 C7)
+	psScan := "Import-Module WebAdministration -ErrorAction SilentlyContinue; if (Get-Module WebAdministration) { Get-WebBinding -Protocol https | ForEach-Object { [PSCustomObject]@{ BI=$_.bindingInformation; Thumbprint=$_.certificateHash } } | ConvertTo-Json -Compress } else { Write-Host 'NO_MODULE' }"
+	out, err := exec.Command("powershell", "-Command", psScan).CombinedOutput()
+	if err != nil || len(out) == 0 {
+		agentLog("证书部署: IIS绑定 WebAdministration 扫描失败, 降级 netsh")
+		return 0, false
+	}
+	if strings.Contains(string(out), "NO_MODULE") {
+		agentLog("证书部署: IIS绑定 WebAdministration 模块缺失, 降级 netsh")
+		return 0, false
+	}
+	var bindings []wb
+	jsonText := strings.TrimSpace(string(out))
+	if strings.HasPrefix(jsonText, "[") {
+		if err := json.Unmarshal(out, &bindings); err != nil {
+			agentLog("证书部署: IIS绑定 WebAdministration JSON解析失败: %v", err)
+			return 0, false
+		}
+	} else {
+		var single wb
+		if err := json.Unmarshal(out, &single); err != nil {
+			agentLog("证书部署: IIS绑定 WebAdministration JSON解析失败: %v", err)
+			return 0, false
+		}
+		bindings = append(bindings, single)
+	}
+	if len(bindings) == 0 {
+		log.Printf("IIS 自动绑定: 未找到现有 SSL 绑定 — 无需更新")
+		return 0, true
+	}
+
+	// 解析 BI "IP:Port:Host"
+	type parsed struct {
+		ip, port, host string
+	}
+	var parsedB []parsed
+	hasSNI := false
+	for _, b := range bindings {
+		parts := strings.Split(b.BI, ":")
+		p := parsed{}
+		if len(parts) > 0 {
+			p.ip = strings.TrimSpace(parts[0])
+		}
+		if len(parts) > 1 {
+			p.port = strings.TrimSpace(parts[1])
+		}
+		if len(parts) > 2 {
+			p.host = strings.TrimSpace(strings.Join(parts[2:], ":"))
+		}
+		if p.host != "" {
+			hasSNI = true
+		}
+		parsedB = append(parsedB, p)
+	}
+
+	for i, b := range parsedB {
+		matchScore := 0
+		matchReason := ""
+		if b.host != "" {
+			matchScore, matchReason = fitsBinding(strings.ToLower(b.host), certCN)
+		} else if !hasSNI {
+			// v1.6.9: IP绑定只在单站(仅1个IP绑定)时自动更新, 多IP绑定时跳过防误覆盖
+			ipCount := 0
+			for _, bb := range parsedB {
+				if bb.host == "" {
+					ipCount++
+				}
+			}
+			if ipCount > 1 {
+				agentLog("证书部署: 跳过IP绑定 %s:%s (%d个IP绑定, 防止多站点误覆盖, 请手动绑定)", b.ip, b.port, ipCount)
+				continue
+			}
+			matchScore = 10
+			matchReason = "默认IP绑定(单站点)"
+		}
+		if matchScore == 0 {
+			continue
+		}
+		agentLog("证书部署: IIS绑定 %s CN=%s 匹配度=%d(%s)", bindings[i].BI, certCN, matchScore, matchReason)
+
+		// AddSslCertificate 同时更新 applicationHost.config 与 HTTP.sys
+		psUpdate := fmt.Sprintf("Import-Module WebAdministration -ErrorAction SilentlyContinue; $b = Get-WebBinding -Protocol https | Where-Object { $_.bindingInformation -eq '%s' }; if ($b) { $b.AddSslCertificate('%s','My') }", bindings[i].BI, thumb)
+		uout, uerr := exec.Command("powershell", "-Command", psUpdate).CombinedOutput()
+		if uerr != nil {
+			log.Printf("IIS 自动绑定 WebAdmin %s 失败: %v: %s", bindings[i].BI, uerr, string(uout))
+		} else {
+			log.Printf("IIS 自动绑定 WebAdmin: %s 已更新 -> %s", bindings[i].BI, thumb)
+			updated++
+		}
+	}
+	log.Printf("IIS 自动绑定: %d/%d 绑定已更新 (CN=%s)", updated, len(bindings), certCN)
+	if updated == 0 && len(bindings) > 0 {
+		agentLog("证书部署: IIS未匹配 CN=%s 已有%d个SSL绑定但无一匹配 → 请手动绑定", certCN, len(bindings))
+	}
+	return updated, true
+}
+
 func autoBindExisting(thumb, certCN string) {
+	// v1.6.67: 优先 WebAdministration (跨 locale, 同时更新 applicationHost.config + HTTP.sys)
+	if _, handled := bindIISWebAdmin(thumb, certCN); handled {
+		return
+	}
+	// 降级: netsh (WebAdministration 不可用, 如非 IIS 服务器 — netsh add/delete 仅增删不解析输出)
 	out, err := exec.Command("netsh", "http", "show", "sslcert").Output()
 	if err != nil {
 		log.Printf("IIS 自动绑定: netsh 查询失败: %v", err)

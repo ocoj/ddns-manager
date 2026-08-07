@@ -1,3 +1,20 @@
+## v1.6.68 — 2026-08-07
+
+### 🐛 修复 5：IIS 自动绑定静默失败 — netsh 中文输出解析失败 → IIS 绑定永不更新（Agent 端）
+
+- **根因**: `autoBindExisting` 用 `netsh http show sslcert` **英文标签**（`IP:port` / `Application ID`）解析绑定，但中文 Windows 输出**中文标签**（`IP:端口` / `应用程序 ID`）→ 解析失败 → bindings=0 → 打印"未找到现有 SSL 绑定 — 无需更新"→ **静默跳过** → IIS 绑定永不更新
+- **事故闭环**: v1.6.67 修好指纹提取后，Agent 导入证书成功、写 `.cert_hash` 真实 hash（Manager 判定"已部署"停止推送），但 **IIS 站点仍绑定旧证书**（Win2022 实测：Get-WebBinding 显示旧 2F0823AB，新证书 EFBA8A81 已导入但未绑定）→ 用户浏览器仍拿旧证书。Agent 认为"成功"（importPFXToIIS 返回 true），实际 IIS 绑定从未执行
+- **修复**: 新增 `bindIISWebAdmin` —— 用 **WebAdministration API**（跨 locale，对齐 scanIISBindings v1.6.15 C7）扫描 `Get-WebBinding -Protocol https` 结构化 JSON → `fitsBinding` 三级匹配（SNI/泛域名/单 IP）→ `$b.AddSslCertificate(thumb,'My')` 更新。`AddSslCertificate` **同时更新 applicationHost.config 与 HTTP.sys**（Win2022 实测两层均更新）。`autoBindExisting` 优先 WebAdministration，模块缺失时降级 netsh（add/delete 仅增删不解析输出）
+- **效果**: IIS 站点绑定真正自动更新（此前 4 个修复 + 本修复 = Windows IIS 证书自动部署全链路打通）
+- **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `VERSION`, `CHANGELOG.md`
+
+### 🧪 验证
+
+- Win2022 实测: `AddSslCertificate` 后 `Get-WebBinding` 与 `netsh http show sslcert` 均更新为新证书 EFBA8A81
+- 全量 `go test ./... -count=1` 通过
+
+---
+
 ## v1.6.67 — 2026-08-07
 
 ### 🐛 修复 4：certutil -dump 输出 GBK 编码 → 中文标签匹配失败（Agent 端最终根因）

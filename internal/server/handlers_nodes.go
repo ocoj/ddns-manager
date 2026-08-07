@@ -345,7 +345,14 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if matched {
+		// v1.6.65: 强制推送标记 — 跳过 matched 判定。解决"文件已写入但 IIS 绑定
+		// 失败, 磁盘 hash 与 meta 匹配导致 Manager 永不重推"的死锁 (sp 事故:
+		// 推送判定用 Agent 实时上报 hash, 旧版 force push 清空 cert_hashes 无效)。
+		forcePush := false
+		if rec.ForcePushBundles != nil && rec.ForcePushBundles[binding.BundleName] {
+			forcePush = true
+		}
+		if matched && !forcePush {
 			continue
 		}
 		// 存量上传证书从未存过 PFXPassword（上传 Bug 历史遗留）。
@@ -389,6 +396,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
 			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], targetPath), "success")
+		// v1.6.65: 推送成功后清除强制推送标记, 下个心跳恢复正常 hash 比对
+		if forcePush {
+			delete(rec.ForcePushBundles, binding.BundleName)
+		}
 	}
 	// persist all changes in a single write (LastSeen, Status, Hardware, ConfigHash)
 	s.store.PutNode(nodeID, rec)

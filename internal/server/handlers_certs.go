@@ -827,12 +827,18 @@ func (s *Server) handleForcePushCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 清空节点 cert_hashes, 下次心跳强制推送
-	node.Status.CertHashes = nil
+	// v1.6.65 修复: 仅清空 cert_hashes 无效 — 推送判定用的是 Agent 实时上报的
+	// hash (磁盘文件未变则上报仍匹配 meta), 导致 force push 形同虚设。
+	// 改用 ForcePushBundles 标记: 下个心跳无条件推送该 bundle (跳过 matched 判定),
+	// 推送成功后由 handleHeartbeat 清除标记。
+	if node.ForcePushBundles == nil {
+		node.ForcePushBundles = map[string]bool{}
+	}
+	node.ForcePushBundles[name] = true
 	s.store.PutNode(nodeID, node)
 
 	s.logMgr.Log("cert", "强制推送",
-		fmt.Sprintf("bundle=%s node=%s ip=%s (已清除cert_hashes, 下次心跳强制推送)", name, nodeID, clientIP(r)), "info")
+		fmt.Sprintf("bundle=%s node=%s ip=%s (ForcePushBundles 已标记, 下次心跳强制推送)", name, nodeID, clientIP(r)), "info")
 
 	jsonOK(w, map[string]interface{}{
 		"status": "force_pushed",

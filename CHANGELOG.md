@@ -1,3 +1,23 @@
+## v1.6.66 — 2026-08-07
+
+### 🐛 修复 3：强制推送失效 + IIS 绑定失败永不重试死锁
+
+- **根因 A (Manager)**: `handleForcePushCert` 只清空 `rec.Status.CertHashes`，但推送判定用的是 **Agent 实时上报的 hash**（磁盘文件未变则上报仍匹配 meta）→ 强制推送形同虚设 → sp.lanxun.pro 升级 v1.6.65 后 force push 未触发重推
+- **根因 B (Agent)**: IIS 绑定失败时不写 `.cert_hash`，`collectCertHashes` 走 Phase 3 磁盘扫描上报磁盘 hash — 文件已写入则磁盘 hash == meta hash → Manager 判定"已部署"停止推送 → **IIS 绑定永不重试**（sp/Win2022 事故：文件已写入但 IIS 绑定失败后 Manager 不再推送）
+- **修复 A (Manager)**: `NodeRecord` 新增 `ForcePushBundles` 标记；`handleForcePushCert` 设置标记；`handleHeartbeat` 对该 bundle 跳过 matched 判定**无条件推送**，推送成功后清除标记
+- **修复 B (Agent)**: IIS 绑定失败时写**哨兵 `.cert_hash`**（值 `pending`，非 sha256 格式），上报非匹配 hash → Manager 持续重推直到 IIS 绑定成功；成功后覆盖为真实 hash
+- **效果**: ① force push 真正生效（运维可手动触发重推）② 未来 IIS 绑定失败自动重试直至成功（防死锁闭环）
+
+### 📋 涉及文件
+
+`internal/model/model.go`, `internal/server/handlers_certs.go`, `internal/server/handlers_nodes.go`, `cmd/agent/main.go`, `cmd/agent-win/main.go`, `VERSION`, `CHANGELOG.md` — 共 7 文件
+
+### 🧪 测试
+
+- 全量 `go test ./... -count=1` 通过
+
+---
+
 ## v1.6.65 — 2026-08-07
 
 ### 🐛 修复 1：证书推送判定改用磁盘实时 hash — 修复新证书永不推送（管理端）

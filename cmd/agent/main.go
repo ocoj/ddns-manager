@@ -907,6 +907,17 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 			certErrors = append(certErrors, fmt.Sprintf("%s: IIS绑定失败, 下次心跳重试", cu.BundleName))
 			agentLog("证书部署: 文件已写入但IIS绑定失败 %s, 下次心跳重试", cu.BundleName)
 			log.Printf("[cert] 证书文件已写入但 IIS 绑定失败: %s, 下次心跳重试", cu.BundleName)
+			// v1.6.65 修复: 写哨兵 .cert_hash — 否则 collectCertHashes 走
+			// Phase 3 磁盘扫描, 上报的磁盘 hash 与 Manager meta hash 一致后
+			// Manager 判定"已部署"停止推送 → IIS 绑定永不重试 (死锁, sp 事故)。
+			// 哨兵值非 sha256: 格式, 上报后与 meta hash 不匹配 → 强制下个心跳重推。
+			sentinelPath := filepath.Join(path, ".cert_hash")
+			tmpSentinel := sentinelPath + ".tmp"
+			if werr := os.WriteFile(tmpSentinel, []byte("pending"), 0o644); werr != nil {
+				log.Printf("[cert] 哨兵 .cert_hash 写入失败 %s: %v", sentinelPath, werr)
+			} else if rerr := os.Rename(tmpSentinel, sentinelPath); rerr != nil {
+				log.Printf("[cert] 哨兵 .cert_hash 重命名失败 %s: %v", sentinelPath, rerr)
+			}
 		}
 	}
 	// H6: Clean stale certHashMap entries (bundles no longer pushed by Manager)

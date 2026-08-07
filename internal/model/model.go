@@ -95,6 +95,12 @@ type NodeRecord struct {
 	// 心跳中 LastOK=false 时 +1, LastOK=true 时清零
 	// 连续 ≥2 次失败才标记 ERR, 单次失败标记 WARN
 	DNSConsecutiveFailures int `json:"dns_consecutive_failures,omitempty"`
+	// v1.6.65: 强制推送标记 — handleForcePushCert 设置后, 下个心跳无条件推送
+	// 该 bundle 证书 (即使 Agent 上报 hash 与 meta 匹配)。用于解决
+	// "文件已写入但 IIS 绑定失败, 磁盘 hash 匹配导致 Manager 永不重推" 的死锁
+	// (sp.lanxun.pro 事故: 推送判定用 Agent 实时上报 hash, 清空 cert_hashes 无效)。
+	// 推送成功后清除标记。
+	ForcePushBundles map[string]bool `json:"force_push_bundles,omitempty"`
 }
 
 type DNSKeyRecord struct {

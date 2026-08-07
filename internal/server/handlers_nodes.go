@@ -287,7 +287,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// 避免 99% 稳定心跳的重渲染。rec.ConfigHash=="" 由"保存配置 / 保存/删除 DNS key"触发
 	// (CHANGELOG:1192 首次推送兜底, 防止新节点双方 hash 均为空时永不推送)。
 	// v1.6.64 方案B: 新增 rec.ConfigKeysVersion < curKeyVer — 持久化 DNS key 版本比对,
-	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁 (Win2022 案例)。
+	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁 (win-test 案例)。
 	curKeyVer := s.store.DNSKeysVersion()
 	if rec.ConfigYAML != "" && (req.ConfigHash != rec.ConfigHash || rec.ConfigHash == "" ||
 		rec.ConfigKeysVersion < curKeyVer) {
@@ -324,6 +324,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("bundle=%s err=%v", binding.BundleName, err), "warning")
 			continue
 		}
+		// v1.6.70 S9/I12: 推送前确保 bundle 内 PEM 与 PFX 是同一张证书。
+		// 必须在 matched 判定与 CertUpdate 构建之前执行，否则下发的 CertHash
+		// 与实际加密内容不符（I16）。返回的 bundle 可能来自锁内重载或重建，
+		// 必须以其继续后续流程（I22）。
+		bundle = s.ensureBundlePFXFresh(binding.BundleName, bundle)
 		// C2: hash key 对齐 Agent 侧 collectCertHashes 的键名
 		// v1.5.41: Agent 部署到 CertPath/{BundleName}/ 子目录, key 使用 BundleName
 		hashKey := binding.DeployPath

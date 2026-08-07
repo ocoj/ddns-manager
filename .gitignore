@@ -47,5 +47,8 @@ admin_token.txt
 # 内部开发文档（审计报告等，不公开）
 internal-docs/
 
+# 沙箱/测试残留（ACME 沙箱若在仓库根误执行会生成 home/，其内含自签私钥）
+/home/
+
 # 备份
 docs_backup_*

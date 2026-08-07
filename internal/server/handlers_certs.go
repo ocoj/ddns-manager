@@ -113,7 +113,8 @@ func (s *Server) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	var certPEM []byte
 	for fn, content := range b.Files {
 		if strings.HasSuffix(strings.ToLower(fn), ".pem") || strings.HasSuffix(strings.ToLower(fn), ".crt") {
-			certPEM = content; break
+			certPEM = content
+			break
 		}
 	}
 	if certPEM != nil {
@@ -123,14 +124,14 @@ func (s *Server) handleGetCert(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				detail["subject"] = c.Subject.CommonName
 				// Issuer: Organization优先 (如"Let's Encrypt")，备选CommonName (如"E7")
-					issuer := c.Issuer.CommonName
-					if len(c.Issuer.Organization) > 0 {
-						issuer = strings.Join(c.Issuer.Organization, ", ")
-						if c.Issuer.CommonName != "" && c.Issuer.CommonName != issuer {
-							issuer += " (" + c.Issuer.CommonName + ")"
-						}
+				issuer := c.Issuer.CommonName
+				if len(c.Issuer.Organization) > 0 {
+					issuer = strings.Join(c.Issuer.Organization, ", ")
+					if c.Issuer.CommonName != "" && c.Issuer.CommonName != issuer {
+						issuer += " (" + c.Issuer.CommonName + ")"
 					}
-					detail["issuer"] = issuer
+				}
+				detail["issuer"] = issuer
 				detail["not_before"] = c.NotBefore.Format("2006-01-02")
 				detail["not_after"] = c.NotAfter.Format("2006-01-02")
 				detail["dns_names"] = c.DNSNames
@@ -142,10 +143,18 @@ func (s *Server) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	if meta, err := os.ReadFile(metaPath); err == nil {
 		var mi map[string]interface{}
 		if json.Unmarshal(meta, &mi) == nil {
-			if mi["acme"] == true { detail["acme"] = true }
-			if v, ok := mi["ca"]; ok { detail["ca"] = v }
-			if v, ok := mi["email"]; ok { detail["email"] = v }
-			if v, ok := mi["provider"]; ok { detail["dns_provider"] = v }
+			if mi["acme"] == true {
+				detail["acme"] = true
+			}
+			if v, ok := mi["ca"]; ok {
+				detail["ca"] = v
+			}
+			if v, ok := mi["email"]; ok {
+				detail["email"] = v
+			}
+			if v, ok := mi["provider"]; ok {
+				detail["dns_provider"] = v
+			}
 		}
 	}
 	jsonOK(w, detail)
@@ -181,7 +190,11 @@ func (s *Server) handleUploadCert(w http.ResponseWriter, r *http.Request) {
 	}
 	// 自动生成 PFX — 检测上传文件中是否有 PEM 证书+私钥对
 	// 私钥可能以 .pem/.key 扩展名上传，需同时检查文件内容
-	certPEM, hasCert := findPEMFile(files, ".pem", ".crt", ".cer")
+	// v1.6.70 I24: 统一证书源（确定性偏好 fullchain，且排除私钥文件）。
+	// findPEMFile 的兜底分支按 map 顺序取第一个 .pem —— privkey.pem 也以
+	// .pem 结尾，存在取到私钥作为"证书源"的可能。
+	certPEM := mycrypto.PickCertPEM(files)
+	hasCert := certPEM != nil
 	keyPEM, hasKey := findPrivateKeyFile(files)
 	if hasCert && hasKey {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
@@ -227,6 +240,8 @@ func (s *Server) handleDeleteCert(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, "证书集未找到")
 		return
 	}
+	// v1.6.70 I25: 清理该 bundle 的一致性审计去重签名
+	s.clearPFXAuditSig(name)
 	s.logMgr.Log("cert", "已删除", name, "info")
 	jsonOK(w, map[string]string{"deleted": name})
 }
@@ -316,7 +331,6 @@ func (s *Server) handleRenewCert(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonErr(w, http.StatusNotFound, "证书未找到或未到续期时间")
 }
-
 
 func (s *Server) getACMEMgr(index int) *acme.Manager {
 	s.acmeMu.RLock()
@@ -522,6 +536,10 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	mgr.SetKeyType(acme.ParseKeyType(keyType))
+	// v1.6.71 N1（I29）: 签发用的 per-request Manager 也必须接线同一 acme.sh 路径与
+	// home —— 否则会出现"签发写 home A、续期读 home B"（本次事故的同族问题）。
+	s.attachAcmeShPath(mgr)
+	s.flushAcmeWireIssues()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
@@ -540,6 +558,7 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		certName, err = mgr.IssueDNS01(ctx, req.Domains, acme.DNSProvider{
 			Name: dk.Provider, KeyID: dk.AccessKeyID, KeySecret: dk.AccessKeySecret,
+			KeyName: req.DNSProvider, // v1.6.70 S5: 把 Key 名登记进 meta.dns_key
 		})
 	} else {
 		certName, err = mgr.IssueHTTP01(ctx, req.Domains)
@@ -560,29 +579,28 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 生成 PFX — 查找证书和私钥（不硬编码文件名，适配多种 ACME 输出格式）
-	var certPEM, keyPEM []byte
+	// v1.6.70 I24: 证书源由唯一 helper 决定（确定性偏好 fullchain）。
+	// 旧实现遍历 map，certPEM 取"先被访问到"的那一项，导致同一份输入
+	// 两次签发可能产出不同链长的 PFX（U4）。
+	certPEM := mycrypto.PickCertPEM(bundle.Files)
+	var keyPEM []byte
 	for fname, content := range bundle.Files {
-		lower := strings.ToLower(fname)
-		s := string(content)
-		isKey := strings.HasSuffix(lower, ".key") || strings.Contains(s, "PRIVATE KEY")
-		isCert := strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt")
-		if isKey && keyPEM == nil {
+		if mycrypto.IsKeyPEM(fname, content) {
 			keyPEM = content
-		} else if isCert && !isKey && certPEM == nil {
-			certPEM = content
+			break
 		}
 	}
 	if certPEM != nil && keyPEM != nil {
 		// 双PFX方案: Legacy(3DES,全版本兼容) + Modern(AES-256,Win10+)
 		pfxPassword := r.FormValue("pfx_password")
-	if pfxPassword == "" {
-		if rp := mycrypto.GenerateRandomPFXPassword(); rp != "" {
-			pfxPassword = rp
-		} else {
-			pfxPassword = mycrypto.DefaultPFXPassword
+		if pfxPassword == "" {
+			if rp := mycrypto.GenerateRandomPFXPassword(); rp != "" {
+				pfxPassword = rp
+			} else {
+				pfxPassword = mycrypto.DefaultPFXPassword
+			}
 		}
-	}
-	if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
+		if pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword); pfxErr == nil {
 			bundle.Files["cert.pfx"] = pfxData
 		}
 		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
@@ -610,6 +628,18 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "保存证书失败: "+err.Error())
 		return
 	}
+	// v1.6.70 S7/I9: 把 acme.sh 的安装路径重指向 bundle 目录。
+	// issueViaAcmeSh 首次安装到 certs/<域名>/，本函数随后会 os.RemoveAll 该目录；
+	// 若不重指向，此后每次续期的结果都不会落进 bundle（存量 4 张因历史外部
+	// 操作幸免，新签发证书必然中招）。失败不阻断签发，但必须记 error。
+	if !strings.HasPrefix(certName, "acme-") {
+		bundleDir := filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName)
+		if instErr := mgr.InstallCert(r.Context(), req.Domains[0], bundleDir); instErr != nil {
+			log.Printf("[acme] --install-cert 失败 %s: %v", bundleDir, instErr)
+			s.logMgr.Log("acme", "install-cert 失败",
+				fmt.Sprintf("%s: %v (此后续期可能不落入 bundle)", bundleDir, instErr), "error")
+		}
+	}
 	// clean up the original cert dir (issueViaAcmeSh creates certs/domain/, we save to certs/acme-domain/)
 	if !strings.HasPrefix(certName, "acme-") {
 		os.RemoveAll(certDir)
@@ -629,7 +659,9 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 	// v1.6.57 L3: prefer POST body over URL query (reduces log/browser history leakage)
 	password := r.URL.Query().Get("password")
 	if r.Method == "POST" {
-		var req struct{ Password string `json:"password"` }
+		var req struct {
+			Password string `json:"password"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Password != "" {
 			password = req.Password
 		}
@@ -649,16 +681,14 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var certPEM, keyPEM []byte
+	// v1.6.70 I24: 与下发/续期路径统一证书源，避免"下载的 PFX"与
+	// "实际下发的 PFX"链形态不一致（U4）。
+	certPEM := mycrypto.PickCertPEM(b.Files)
+	var keyPEM []byte
 	for fname, content := range b.Files {
-		lower := strings.ToLower(fname)
-		s := string(content)
-		isKey := strings.HasSuffix(lower, ".key") || strings.Contains(s, "PRIVATE KEY")
-		isCert := strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt") || strings.HasSuffix(lower, ".cer")
-		if isKey && keyPEM == nil {
+		if mycrypto.IsKeyPEM(fname, content) {
 			keyPEM = content
-		} else if isCert && !isKey && certPEM == nil {
-			certPEM = content
+			break
 		}
 	}
 	if certPEM == nil || keyPEM == nil {
@@ -732,26 +762,6 @@ func (s *Server) handleDownloadPFX(w http.ResponseWriter, r *http.Request) {
 	s.logMgr.Log("cert", "已下载 PFX", name, "success")
 }
 
-
-// findPEMFile searches the uploaded file map for a file matching any of the given extensions.
-// Returns the file content and true if found. Used for PFX auto-generation from uploaded PEM files.
-func findPEMFile(files map[string][]byte, exts ...string) ([]byte, bool) {
-	for name, data := range files {
-		if strings.Contains(strings.ToLower(name), "fullchain") {
-			for _, ext := range exts {
-				if strings.HasSuffix(strings.ToLower(name), ext) { return data, true }
-			}
-		}
-	}
-	for name, data := range files {
-		lower := strings.ToLower(name)
-		for _, ext := range exts {
-			if strings.HasSuffix(lower, ext) { return data, true }
-		}
-	}
-	return nil, false
-}
-
 // findPrivateKeyFile searches uploaded files for a private key.
 // Checks by extension (.key) AND by content ("PRIVATE KEY") since PEM keys may use .pem extension.
 func findPrivateKeyFile(files map[string][]byte) ([]byte, bool) {
@@ -768,12 +778,16 @@ func findPrivateKeyFile(files map[string][]byte) ([]byte, bool) {
 
 func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
-	var req struct{ PFXPassword string `json:"pfx_password"` }
+	var req struct {
+		PFXPassword string `json:"pfx_password"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "格式错误")
 		return
 	}
-	if req.PFXPassword == "" { req.PFXPassword = mycrypto.DefaultPFXPassword }
+	if req.PFXPassword == "" {
+		req.PFXPassword = mycrypto.DefaultPFXPassword
+	}
 
 	bundle, err := s.store.LoadCertBundle(name)
 	if err != nil {
@@ -788,16 +802,14 @@ func (s *Server) handleSetCertPFXPassword(w http.ResponseWriter, r *http.Request
 	}
 
 	// 重新生成 PFX
-	var certPEM, keyPEM []byte
+	// v1.6.70 I24: 本路径原本就偏好 fullchain，现统一走 PickCertPEM，
+	// 使 5 个 PFX 生成点的证书源完全一致（U4 的根因治理）。
+	certPEM := mycrypto.PickCertPEM(bundle.Files)
+	var keyPEM []byte
 	for fname, content := range bundle.Files {
-		lower := strings.ToLower(fname)
-		if strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".crt") {
-			if certPEM == nil || strings.Contains(lower, "fullchain") {
-				certPEM = content
-			}
-		}
-		if strings.HasSuffix(lower, ".key") || strings.Contains(string(content), "PRIVATE KEY") {
-			if keyPEM == nil { keyPEM = content }
+		if mycrypto.IsKeyPEM(fname, content) {
+			keyPEM = content
+			break
 		}
 	}
 	if certPEM != nil && keyPEM != nil {

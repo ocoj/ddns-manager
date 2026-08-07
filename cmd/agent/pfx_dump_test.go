@@ -7,10 +7,10 @@ import (
 )
 
 // v1.6.65 回归测试: parsePFXInfoDump 中英文 certutil -dump 输出解析。
-// 生产事故 (sp.lanxun.pro / Win2022): 中文 Windows 输出中文标签
+// 生产事故 (sp.example.com / win-test): 中文 Windows 输出中文标签
 // (证书哈希(sha1):/使用者:)，旧代码只匹配英文 → 指纹提取失败 → IIS 绑定失败；
 // 且旧代码取第一个证书块(根证书, 无私钥) → 指纹错误。
-// 样例输出取自中文 Windows Server 2022 实测 (go-pkcs12 LegacyDES PFX)。
+// 样例输出取自中文 Windows Server 实测 (go-pkcs12 LegacyDES PFX)。
 
 // 中文输出: 4 个证书块，叶子(证书 3)带 "提供程序 ="。
 const zhDump = `================ 证书 0 ================
@@ -45,7 +45,7 @@ const zhDump = `================ 证书 0 ================
 元素 3:
 序列号: 0000
 颁发者: CN=YE1, O=Let's Encrypt, C=US
-使用者: CN=*.lanxun.pro
+使用者: CN=*.example.com
 证书哈希(sha1): efba8a811b958121514c9700400e06451aff3517
 提供程序 = Microsoft Software Key Storage Provider
 无法以纯文本方式导出私钥
@@ -76,7 +76,7 @@ No key provider information
 
 ================ Certificate 3 ================
 Element 3:
-Subject: CN=*.lanxun.pro
+Subject: CN=*.example.com
 Cert Hash(sha1): ef ba 8a 81 1b 95 81 21 51 4c 97 00 40 0e 06 45 1a ff 35 17
 Provider = Microsoft Software Key Storage Provider
 Private key is not exportable.
@@ -93,8 +93,8 @@ func TestParsePFXInfoDump_ChineseOutput(t *testing.T) {
 	if thumb != "efba8a811b958121514c9700400e06451aff3517" {
 		t.Errorf("中文输出指纹 = %q, want 叶子证书 efba8a81...", thumb)
 	}
-	if cn != "*.lanxun.pro" {
-		t.Errorf("中文输出 CN = %q, want *.lanxun.pro", cn)
+	if cn != "*.example.com" {
+		t.Errorf("中文输出 CN = %q, want *.example.com", cn)
 	}
 }
 
@@ -103,8 +103,8 @@ func TestParsePFXInfoDump_EnglishOutput(t *testing.T) {
 	if thumb != "efba8a811b958121514c9700400e06451aff3517" {
 		t.Errorf("英文输出指纹 = %q, want 叶子证书 efba8a81... (含空格去空格)", thumb)
 	}
-	if cn != "*.lanxun.pro" {
-		t.Errorf("英文输出 CN = %q, want *.lanxun.pro", cn)
+	if cn != "*.example.com" {
+		t.Errorf("英文输出 CN = %q, want *.example.com", cn)
 	}
 }
 
@@ -140,8 +140,8 @@ func toGBK(s string) []byte {
 
 // TestParsePFXInfoDump_GBKEncodedChinese v1.6.67 回归测试:
 // 中文 Windows 的 certutil 输出是 GBK 编码(非 UTF-8)。直接按 UTF-8 解析
-// 中文标签会因字节序列不匹配而失败 (sp/Win2022 实测: certutil -importpfx
-// 成功但 "PFX 证书指纹提取失败")。decodeCertutilOutput 需先转 UTF-8。
+// 中文标签会因字节序列不匹配而失败 (sp.example.com/win-test 实测: certutil
+// -importpfx 成功但 "PFX 证书指纹提取失败")。decodeCertutilOutput 需先转 UTF-8。
 func TestParsePFXInfoDump_GBKEncodedChinese(t *testing.T) {
 	gbkOut := toGBK(zhDump) // 模拟真实 GBK 编码的 certutil -dump 输出
 	text := decodeCertutilOutput(gbkOut)
@@ -149,8 +149,8 @@ func TestParsePFXInfoDump_GBKEncodedChinese(t *testing.T) {
 	if thumb != "efba8a811b958121514c9700400e06451aff3517" {
 		t.Errorf("GBK 输出指纹 = %q, want 叶子证书 efba8a81...", thumb)
 	}
-	if cn != "*.lanxun.pro" {
-		t.Errorf("GBK 输出 CN = %q, want *.lanxun.pro", cn)
+	if cn != "*.example.com" {
+		t.Errorf("GBK 输出 CN = %q, want *.example.com", cn)
 	}
 }
 
@@ -170,14 +170,14 @@ func TestSiteMatchesCert(t *testing.T) {
 		site, certCN string
 		want         bool
 	}{
-		{"sp.lanxun.pro", "sp.lanxun.pro", true},
-		{"SP.LANXUN.PRO", "sp.lanxun.pro", true},
-		{"sp.lanxun.pro 站点", "sp.lanxun.pro", true},
-		{"SharePoint - 80", "sp.lanxun.pro", false},
-		{"SharePoint Web Services", "sp.lanxun.pro", false},
-		{"", "sp.lanxun.pro", false},
-		{"sp.lanxun.pro", "", false},
-		{"Default Web Site", "sp.lanxun.pro", false},
+		{"sp.example.com", "sp.example.com", true},
+		{"SP.EXAMPLE.COM", "sp.example.com", true},
+		{"sp.example.com 站点", "sp.example.com", true},
+		{"SharePoint - 80", "sp.example.com", false},
+		{"SharePoint Web Services", "sp.example.com", false},
+		{"", "sp.example.com", false},
+		{"sp.example.com", "", false},
+		{"Default Web Site", "sp.example.com", false},
 	}
 	for _, c := range cases {
 		got := siteMatchesCert(c.site, c.certCN)
@@ -192,9 +192,9 @@ func TestExtractSubjectCN(t *testing.T) {
 	cases := []struct {
 		subject, want string
 	}{
-		{"CN=sp.lanxun.pro, O=Lanxun CO.,Ltd.", "sp.lanxun.pro"},
-		{"CN=*.lanxun.pro", "*.lanxun.pro"},
-		{"sp.lanxun.pro", "sp.lanxun.pro"},
+		{"CN=sp.example.com, O=Example, Inc.", "sp.example.com"},
+		{"CN=*.example.com", "*.example.com"},
+		{"sp.example.com", "sp.example.com"},
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -211,13 +211,13 @@ func TestCertCNMatches(t *testing.T) {
 		curCN, certCN string
 		want          bool
 	}{
-		{"sp.lanxun.pro", "sp.lanxun.pro", true},
-		{"SP.LANXUN.PRO", "sp.lanxun.pro", true},
-		{"*.lanxun.pro", "sp.lanxun.pro", true},
-		{"sp.lanxun.pro", "*.lanxun.pro", true},
-		{"other.example.com", "sp.lanxun.pro", false},
-		{"", "sp.lanxun.pro", false},
-		{"sp.lanxun.pro", "", false},
+		{"sp.example.com", "sp.example.com", true},
+		{"SP.EXAMPLE.COM", "sp.example.com", true},
+		{"*.example.com", "sp.example.com", true},
+		{"sp.example.com", "*.example.com", true},
+		{"other.example.com", "sp.example.com", false},
+		{"", "sp.example.com", false},
+		{"sp.example.com", "", false},
 	}
 	for _, c := range cases {
 		got := certCNMatches(c.curCN, c.certCN)

@@ -1,12 +1,164 @@
+## v1.6.71 — 2026-09-16
+
+### 🔴 修复（N1：acme.sh 的 HOME/ACME_HOME 依赖 —— 上线期发现的复发型缺陷）
+
+- **问题**：`acmeShEnvFor` 以 `os.Environ()` 为基底并假设"父环境会提供 `HOME`"，而
+  **systemd 默认不设置 `HOME`** ⇒ acme.sh 的 home 落到 `/.acme.sh`：既读不到既有域名配置
+  （续期时"安装到 bundle 之外"失败），又会在该目录创建 `account.conf` 并写入**明文凭据**。
+  该缺陷**具备复发条件**（重建 unit、或按旧文档部署即复现），故单列修复。
+- **修复**：
+  - 新增 `internal/acme/acmehome.go`：acme.sh home 的**显式解析与判定表**
+    —— 候选集封闭（显式 `LE_WORKING_DIR` → 解析符号链接后的脚本目录 → `$HOME/.acme.sh`）、
+    home 形态自检（`account.conf` | `ca/`）、**绝对路径校验**、目录体检（属主/组写/符号链接/`.git`）、
+    **不可判定即 fail-fast 拒绝执行**（绝不在任意路径创建带明文凭据的 home）。
+  - 子进程环境**始终显式构造**（S14）：始终固定 `LE_WORKING_DIR`；`HOME` 缺失时补**父目录**；
+    凭据仅在 provider 映射命中时注入；同名键显式去重。
+  - `InstallCert` 由"继承环境"改为"显式设置环境（不含凭据）"（S15）—— 正是它让 S7 安装路径失效的根因。
+  - **接线既有 `cert.provider`**（此前为死配置，非测试引用 0 命中）：绝对路径优先 + 回退 `PATH` + 告警；
+    并注入**全部 4 个 Manager 构造点**（`main.go`、账号加载循环、保存账号、签发用 per-request Manager），
+    `TestT49c` 以源码级断言锁住覆盖率（I29）。
+  - 启动自检新增：acme.sh 路径/home 接线检查（error）、home 解析失败**恰一条** error 审计 + 一次性通知（去重）。
+- **不变量**：新增 I26（home 必须显式固定）、I27（环境继承类不变量必须以"移除该状态"的方式测试）、
+  I28（不得在任意路径创建携带明文凭据的 home）、I29（acme.sh 路径与 home 全局唯一）。
+
+### 🛠 实现轮审计整改（G1 / G4 / G5）
+
+- **G1**（🟠 实质缺口）：判定表中「路径**不存在**」与「**空目录**」两个分支此前**直接采用**，
+  绕过了 §1.3.4 体检 ⇒ **全新安装实例**可能把 home 建到 `/tmp` 类公共可写目录，或采纳**他人预置的空目录**，
+  随后 acme.sh 在那里创建 home 并写入明文 `account.conf`（I28/C4 承诺范围内）。
+  修复：新增 `acmeHomePositionCheck()` 并**提前到存在性判断之前**（对不存在的路径也检查**现有祖先链**的
+  公共可写前缀与他人符号链接）；空目录分支复用完整 `acmeHomeHealth()`。补测 `T48c/T48d/T48e`。
+- **G4**：`detectLocalACMECerts()` 在证书集合 / meta 读取**失败**时返回 `false`（等价“全新安装”，
+  会解锁上述分支）⇒ 改为**保守返回 `true`**（按“已有证书”处理）并留下审计。
+- **G5**：接线问题审计此前按 Manager 各记一条（多账号时重复）⇒ 按 `(action, detail)` **去重**，
+  与通知口径一致。补测 `T49d/T49e`。
+- **注入式反证**：E1（位置体检恒通过）/ E2（移除空目录体检）/ F（不保守）/ G（不去重）
+  四项均使对应用例 FAIL，还原后全绿。
+
+### 📚 文档
+
+- `docs/usage-guide.md`：systemd 模板补 `Environment=HOME=` 与 `Environment=LE_WORKING_DIR=`；
+  **新增 §2.4「acme.sh 安装与 home 约定」**（含 `cert.provider` 的真实语义与排错指引）。
+
+### 🧪 测试（T34–T49）
+
+- 判定表与环境构造：`TestT34/T35/T35b/T36/T37/T38/T38b`；home 解析：
+  `TestT40/T41/T41b/T41c/T41d/T45/T46/T47/T48/T48b/T35b`；服务端接线：`TestT44/T49/T49b/T49c`。
+- 集成：`TestT34_Renew_PinnedHomeInChildEnv`（断言 fake acme.sh **shell 内实际解析**出的
+  `HOME`/`LE_WORKING_DIR`）、`TestT39_InstallCert_EnvHasHomeAndNoCredentials`、
+  `TestT41d_Renew_NoHome_FailFastAndAcmeShNeverCalled`。
+- **判别力反证（注入式）**：4 项注入（不补 HOME / 恢复 `acme.sh` 判据 / 移除 fail-fast / 少接线一个构造点）
+  均使对应用例 FAIL，还原后全绿。
+- 门禁：`go build ./... && go vet ./... && go test ./... -race -count=1` **全绿**。
+
+---
+
+## v1.6.70 — 2026-09-16
+
+### 🔴 修复: 自动续期不再依赖 acme.sh 全局凭据（DNS Key 注入续期路径）
+
+- **根因**: 首次签发通过 `cmd.Env` 注入 DNS 凭据，但 `Renew` / `RenewByName` **未注入** → 续期永久依赖 acme.sh 内全局单份 `SAVED_*`。UI 轮换 DNS Key 后自动续期仍用旧 Key → `Error adding TXT record to domain: _acme-challenge.<域名>`（`InvalidAccessKeyId.Inactive`），证书**静默不更新**
+- **修复 A**: 新增 `acmeShEnvFor`（签发/续期**共用**；空值不注入；`dp==nil` 时不设 `cmd.Env`，逐字节保持原行为）+ `resolveDNSKey`（按 `meta.provider` + `meta.dns_key` 精确解析；provider 不一致/凭据不完整/多候选歧义一律拒绝注入）
+- **修复 B**: `meta.json` 新增 `dns_key` 字段登记 DNS Key 名；签发时写入
+- **修复 C（防静默失效）**: `attachDNSKeyLookup` 覆盖**全部 4 个** manager 注册点；启动自检对"凭据解析器未挂载 / ACME 证书缺 `meta.dns_key`"输出 **error/warning** 审计
+
+### 🔴 修复: 推送前保证 bundle 内 PEM/PFX 是同一张证书（IIS 装回旧证书）
+
+- **根因**: `LoadCertBundle` 自愈只重算 `meta.hash`，**心跳推送路径没有任何 PFX 生成点**。外部写入者（残留的 acme.sh cron，或手工执行 `acme.sh --renew`）覆盖 PEM 后，Manager 会把"**新 PEM + 旧 PFX**"下发给 Agent；Windows Agent 从 **PFX** 提取指纹导入 IIS → IIS 装回**旧证书**。生产实测存在 PFX 已过期约 2 个月的实例
+- **修复**: 新增 `ensureBundlePFXFresh`（心跳路径，`matched` 判定与 `CertUpdate` 构建**之前**执行）
+  - **三态内容级判据**（一致 / 需重建 / 不可判定），硬判据为 **四路 leaf DER 相等**（`fullchain.pem`、`cert.pem`、`cert.pfx`、`cert-modern.pfx`）
+  - **链长差异仅信息性**（不触发重建）—— 否则每次续期后 `UpdateCertMeta` 产出 leaf-only PFX 会引发**震荡重建**
+  - `cert.pfx` / `cert-modern.pfx` **缺失 → 重建**；**存在但解码失败 → 不重建 + error**（避免用推断密码引入新的不一致）
+  - 仅作用于 ACME bundle（用户上传证书不受影响）
+  - 按 bundle **串行化** + **锁内重载**（防陈旧内存副本重复重建）
+- **可观测性**: 一致性审计按**状态变更去重**，避免每心跳刷屏淹没真实失败
+
+### 🔴 修复: 新签发证书的续期结果无法落入 bundle
+
+- `issueViaAcmeSh` 首次安装到 `certs/<域名>/`，随后被 `handleACMEIssue` 的 `os.RemoveAll` 删除 → 新增 `Manager.InstallCert`（`acme.sh --install-cert`）把安装路径重指向 bundle 目录；失败记 error 但不阻断签发
+
+### 🔧 其它改进
+
+- **5 处** PFX 生成点（续期 / 签发 / 下载 / 设置 PFX 密码 / 上传）统一走 `crypto.PickCertPEM`（确定性偏好 `fullchain.pem`），消除链长非确定性（原实现遍历 `map`，顺序随机）
+- 新增 `crypto.ParsePFXLeafChain`（用 `pkcs12.DecodeChain`，可取完整 CA 链）、`crypto.ClassifyPFXError`（区分"密码不符"与"容器损坏"）、`store.LoadCertMeta`
+- 同一证书续期**串行化** + 等锁后**二次到期校验**；`Renew` 改为按次返回 `RenewOutcome`（消除并发下共享错误字段互相覆盖），并按 `RenewKind` 分级落审计
+- `meta.json` 写入改 `json.MarshalIndent`，防止 Key 名/域名含引号时生成非法 JSON
+- 新增 `scripts/migrate-acme-dns-key.py`（默认 dry-run；为存量 ACME 证书补写 `dns_key`；`--verify` 同时校验 `Le_Real*Path` 是否等于 bundle 目录）
+
+### 🛠 评审整改（实施结果评审 B1–B7）
+
+对照独立实施评审报告逐项整改：
+
+- **B1（阻断级）** `KindNotReplaced` 分支未写入 `lastRenewErr` ⇒ 手工续期遇到"S4：退出码 0 但证书未变化"时，UI 回落成**误导性的 404「证书未找到或未到续期时间」**。已在分支内补 `setLastRenewErr`，并在 `renewOne` 的强制续期入口清空历史错误，使界面显示可操作的真实原因。
+- **B2（阻断级）** `AppendLog` 无锁、`GetLog` 持 `m.mu`，二者并不互斥；续期路径新增的 `AppendLog` 调用扩大了并发写面。新增独立 `logMu`，`AppendLog`/`GetLog` 统一使用。
+- **B4** `Unverifiable` 按原因分级：**解码失败/重载失败/重建失败 = error**，"缺少可判定的源文件" = **warning**（与 I15 措辞一致；两者均按状态变更去重）。
+- **B5** 启动自检新增 ③ **一致性只读预检**（只审计不重建），既在启动即暴露 PEM/PFX 不一致，又**预热去重签名**，消除重启后首轮心跳每个 bundle 各报一条 info。
+- **B6** provider 查表口径统一：新增 `dnsAPILookup`（大小写不敏感），**签发与续期共 4 处**（`IssueDNS01` / `issueViaAcmeSh` / `acmeShEnvFor` / `resolveDNSKey`）全部改经该入口 —— 原实现一侧 `EqualFold`、一侧精确查表，存在"续期能解析凭据、签发却报不支持（或反之，注入被静默拒绝）"的口径分裂。
+- **B7** 迁移脚本的"凭据完整"判定改为与 Go 侧 `dnsAPIMapping` 对齐的 `REQUIRES_SECRET` 集合（原实现只覆盖 3 个 provider，`alidns` 等会被误判为完整候选）。
+- 可读性：歧义拒绝消息列出候选 Key 名；启动自检输出问题证书数量。
+
+### 🔬 真机实测（RT1–RT3，本机沙箱 acme.sh v3.1.4，零生产风险）
+
+| # | 实测项 | 结果 |
+|:--:|------|------|
+| RT1 | 未到期时 `--renew` 的行为与退出码 | **返回非零退出码（2）** 并打印 `Skipping. Next renewal time is: …` / `Add '--force' to force renewal.`，证书文件不改动 |
+| RT2 | `--install-cert` 传多个 `-d` | 语法被接受（exit 0），但**只使用第一个 `-d`**（落盘证书 CN 与 conf 改写均验证）⇒ 本实现"只传主域名"正确且充分 |
+| RT3 | `--install-cert` 后 `Le_Real*Path` 是否变更 | **是**：conf 被写入 `Le_RealCertPath/Le_RealKeyPath/Le_RealFullChainPath`，且落盘文件与 acme.sh 源**sha256 一致** ⇒ I9 机制确认 |
+
+**RT1 引出的真实修复**：原实现把 acme.sh 的"未到期跳过"（非零退出码）当作**续期失败**并记 error —— 每 24h ticker 会输出误导性失败。已新增 `isAcmeShSkip`：识别 `Skipping. Next renewal time is` / `to force renewal` 并归类为 `KindSkipped`（不记错误、不刷屏）；非强制路径生效，`--force` 路径不受影响。回归用例 `TestRenewByName_AcmeShSkip_IsSkippedNotFailed`。
+
+### ✅ 验收整改（第三方验收报告 B7 补全 + B8）
+
+| 项 | 问题 | 整改 |
+|:--:|------|------|
+| **B7** 🟠 | 迁移脚本的凭据完整性判定**未被强制执行**：`dns_keys.json` 中唯一 Key 缺 `access_key_secret` 时，`--key-name` 显式指定仍会被 dry-run 规划并 `--apply` 写入，`--verify` 也通过 | 新增 `_credential_problem()`（与 Go 侧 `resolveDNSKey` 口径一致）：`cmd_migrate` 入口**拒绝**（exit 1，提示"写入不完整 Key 比留空更糟——Go 侧命中后拒绝注入且不回退唯一匹配"）、`cmd_verify` 同步断言、`resolve_candidates` 复用同一判定 |
+| **B8** 🟠 | `isAcmeShSkip` 仅凭输出串判定 ⇒ 某次**真实失败**的输出恰好命中跳过文案时会被吞成 `KindSkipped`（不记 error） | 新增 `certContentChanged()`，判定改为 `!force && isAcmeShSkip(combined) && !certContentChanged(certDir, before)`；读不到文件时按"可能已变"处理（宁可多一条 error，不可漏报）。回归用例 `TestRenewByName_AcmeShSkip_MarkerButContentChanged_IsFailed` |
+| T30 🟢 | "统计 `PickCertPEM(` 次数"的守卫**无法发现**新增生成点绕过 helper | 改为 **AST 级逐函数断言**（调用 `GeneratePFX`/`GeneratePFXModern` 的函数内必须出现 `PickCertPEM`）；已用"注入违规函数 → 守卫失败并报出函数名"做**判别力反证** |
+
+**自查发现并修复**：两处 `force=false` 用例原本**空转**（harness 证书 90 天 → 在"未到期预检"即返回，从未调用 acme.sh）。已加 `makeCertDue()` 并在用例中断言"acme.sh 确实被调用"（反空转守卫）。
+
+### 🔎 送审包复核整改（第 3 轮，5 项非阻断建议全部落地）
+
+| 复核意见 | 整改 |
+|------|------|
+| 待裁定问题数量口径不一致（送审说明 8 / 报告 6） | 2 个新问题已**并入报告 §11（#7/#8）**，报告 §0.5 口径同步为 8 |
+| 附录 C 未收录本轮材料 | 已补入送审说明 / 补丁 / 指纹 / `rt-repro.sh` / 送审包复核报告，并新增"评审轮次汇总"（方案 4 + 实施 1 + 验收 2 = 7 轮） |
+| `InstallCert` 单 `-d` 守卫（可选） | `TestInstallCert_PassesBundlePaths` 断言 **argv 中 `-d` 恰好 1 次**；已做**注入式反证**（多传一个 `-d` → FAIL，报 `got 2`）。理由：RT2a/RT2b 实测——首个 `-d` 决定装入哪张证书，首参为**另一张有效证书**时会 **exit 0 静默装错证书** |
+| 反空转约定 helper 化（可选） | 抽出 `requireAcmeShInvoked()`（+ `argvLines` / `countArg`），原两处手写 guard 改用之 |
+| 仓库根抗污染（卫生） | `.gitignore` 新增 `/home/`（沙箱误在仓库根执行时的产物，内含自签私钥）；实测创建 `home/` 后 `git status` 与 `git ls-files --others` 均不再出现 |
+
+**顺带修正**：`InstallCert` 原注释写"多 `-d` 行为未验证（见 U3）"，与 RT2a/RT2b 已实测的结论不符，已按实测重写（U3 就此结案）。
+
+### 🧪 测试（T1–T33 全部有覆盖）
+
+- 新增测试文件 6 个、测试函数 **33 个**（1802 行）：
+  - `internal/crypto/pkcs12_consistency_test.go` — `ParsePFXLeafChain` 对 Legacy/Modern 均可解出完整 CA 链、错误分类、`PickCertPEM` 确定性且不取私钥
+  - `internal/acme/dnskey_env_test.go` — env 注入三态 + `resolveDNSKey` 真值表 9 分支 + `dnsAPILookup` 大小写不敏感（B6 回归）
+  - `internal/acme/renew_integration_test.go` — **fake acme.sh 端到端契约**：续期注入凭据／无解析器时继承父环境／provider 不匹配不注入／S4 内容未变不报成功且**原因可达 UI**（B1 回归）／Key 名含 `"` 与中文时 meta 仍是合法 JSON／`--install-cert` 入参正确且不注入凭据；T14 `RenewWithOutcomes` 并发无共享态；T15 per-cert 串行化 + 等锁重判到期 → `KindSkipped`（且不调用 acme.sh）；RT1 回归 acme.sh 跳过 → `KindSkipped` 而非失败
+  - `internal/server/cert_consistency_test.go` — S9 全链路 + **4 个反向用例** + 不可判定分级（B4：缺源文件=warning / 解码失败=error）+ T26 重建链长 == fullchain 链长（I20/R36）+ T28 密码候选遍历成功路径与"密码不符"分类 + T29 返回重载 bundle（hash==磁盘==meta）+ T30 证书源统一（机制 + 5 处生成点结构守卫）+ T33 去重签名生命周期（清理/重启/并发）
+  - `internal/server/startup_audit_test.go` — 启动双自检分级 + 只读预检预热去重签名（B5）
+  - `internal/store/certmeta_test.go` — `dns_key` 经 `SaveCertBundle` 存活（迁移的立论基础）、路径穿越拒绝
+- 反向用例（防修复自身引入复发）：仅 mtime 不同**不重建**、链长不同**不重建**、解码失败**不重建且去重**（含恢复仅 1 条）、非 ACME **不触碰**、并发触发**仅重建一次**、**跳过文案但内容已变 → 判失败**（B8）
+- 说明：`T12`（并发无竞争）由全量 `-race` 覆盖但无专用用例；`T22`/`T20b` 由 `T16`/`T20` 内的断言覆盖
+- 覆盖口径：**33/33 有覆盖 = 30 项专用用例 + 3 项间接覆盖**（T12 并发无竞争仅由全量 `-race` 覆盖、无专用用例；T22 由 T16/T29 内 hash 断言覆盖；T24 为既有回归套件）；本批新落地 T14 / T15 / T26 / T28 / T29 / T30 / T31(恢复) / T33
+- 门禁：`go build ./... && go vet ./... && go test ./... -race -count=1` **全绿**
+- 基线指纹（补丁 sha256 / 逐文件 sha256 / 行数）：见 `internal-docs/audits/2026-09-16-acme-renew-fingerprints.txt`
+
+### 📁 涉及文件
+
+`internal/acme/acme.go`、`internal/crypto/pkcs12.go`、`internal/store/store.go`、`internal/server/server.go`、`internal/server/handlers_nodes.go`、`internal/server/handlers_certs.go`、`internal/server/cert_consistency.go`（新增）、`scripts/migrate-acme-dns-key.py`（新增）、测试 6 个（33 个测试函数）、`VERSION`、`CHANGELOG.md`
+
+---
+
 ## v1.6.69 — 2026-08-07
 
 ### ✨ 多站点 IIS 证书自动绑定支持（sp 场景）
 
-- **背景**: sp.lanxun.pro 是多站点 IIS（SharePoint），站点通过**主机名（SNI）**区分，只有绑定 `sp.lanxun.pro` 主机名的站点使用该证书。v1.6.68 的多 IP 保护（ipCount>1 跳过）对多站点场景过于保守 → sp 绑定未自动更新
+- **背景**: sp.example.com 是多站点 IIS（SharePoint），站点通过**主机名（SNI）**区分，只有绑定 `sp.example.com` 主机名的站点使用该证书。v1.6.68 的多 IP 保护（ipCount>1 跳过）对多站点场景过于保守 → sp 绑定未自动更新
 - **修复 A (scanIISBindings)**: 改用 `Get-WebBinding`（bindingInformation = `IP:Port:Host`）上报**真实 SNI 主机名**。旧实现用 `IIS:\SSLBindings` 的 IPAddress（无 Host 字段）→ 多站点 SNI 绑定上报 hostname=0.0.0.0 丢失主机名，无法识别站点。同时从 `ItemXPath` 提取站点名
 - **修复 B (bindIISWebAdmin)**: 扫描时提取站点名；匹配优先级:
   1. **SNI 主机名**匹配（fitsBinding 精确/泛域名）
-  2. **站点名**匹配（siteMatchesCert: 站点名含证书域名, 如 "sp.lanxun.pro" 站点）— IP 绑定多站点场景也能精确更新唯一绑定证书的站点
+  2. **站点名**匹配（siteMatchesCert: 站点名含证书域名, 如 "sp.example.com" 站点）— IP 绑定多站点场景也能精确更新唯一绑定证书的站点
   3. IP 绑定 + 无 SNI + 单站点（默认匹配）
   4. IP 绑定 + 无 SNI + 多站点 + 站点名不匹配 → 跳过（防误覆盖保护）
 - **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `cmd/agent/pfx_dump_test.go`, `VERSION`, `CHANGELOG.md`
@@ -23,14 +175,14 @@
 ### 🐛 修复 5：IIS 自动绑定静默失败 — netsh 中文输出解析失败 → IIS 绑定永不更新（Agent 端）
 
 - **根因**: `autoBindExisting` 用 `netsh http show sslcert` **英文标签**（`IP:port` / `Application ID`）解析绑定，但中文 Windows 输出**中文标签**（`IP:端口` / `应用程序 ID`）→ 解析失败 → bindings=0 → 打印"未找到现有 SSL 绑定 — 无需更新"→ **静默跳过** → IIS 绑定永不更新
-- **事故闭环**: v1.6.67 修好指纹提取后，Agent 导入证书成功、写 `.cert_hash` 真实 hash（Manager 判定"已部署"停止推送），但 **IIS 站点仍绑定旧证书**（Win2022 实测：Get-WebBinding 显示旧 2F0823AB，新证书 EFBA8A81 已导入但未绑定）→ 用户浏览器仍拿旧证书。Agent 认为"成功"（importPFXToIIS 返回 true），实际 IIS 绑定从未执行
-- **修复**: 新增 `bindIISWebAdmin` —— 用 **WebAdministration API**（跨 locale，对齐 scanIISBindings v1.6.15 C7）扫描 `Get-WebBinding -Protocol https` 结构化 JSON → `fitsBinding` 三级匹配（SNI/泛域名/单 IP）→ `$b.AddSslCertificate(thumb,'My')` 更新。`AddSslCertificate` **同时更新 applicationHost.config 与 HTTP.sys**（Win2022 实测两层均更新）。`autoBindExisting` 优先 WebAdministration，模块缺失时降级 netsh（add/delete 仅增删不解析输出）
+- **事故闭环**: v1.6.67 修好指纹提取后，Agent 导入证书成功、写 `.cert_hash` 真实 hash（Manager 判定"已部署"停止推送），但 **IIS 站点仍绑定旧证书**（win-test 实测：Get-WebBinding 显示旧 2F0823AB，新证书 EFBA8A81 已导入但未绑定）→ 用户浏览器仍拿旧证书。Agent 认为"成功"（importPFXToIIS 返回 true），实际 IIS 绑定从未执行
+- **修复**: 新增 `bindIISWebAdmin` —— 用 **WebAdministration API**（跨 locale，对齐 scanIISBindings v1.6.15 C7）扫描 `Get-WebBinding -Protocol https` 结构化 JSON → `fitsBinding` 三级匹配（SNI/泛域名/单 IP）→ `$b.AddSslCertificate(thumb,'My')` 更新。`AddSslCertificate` **同时更新 applicationHost.config 与 HTTP.sys**（win-test 实测两层均更新）。`autoBindExisting` 优先 WebAdministration，模块缺失时降级 netsh（add/delete 仅增删不解析输出）
 - **效果**: IIS 站点绑定真正自动更新（此前 4 个修复 + 本修复 = Windows IIS 证书自动部署全链路打通）
 - **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `VERSION`, `CHANGELOG.md`
 
 ### 🧪 验证
 
-- Win2022 实测: `AddSslCertificate` 后 `Get-WebBinding` 与 `netsh http show sslcert` 均更新为新证书 EFBA8A81
+- win-test 实测: `AddSslCertificate` 后 `Get-WebBinding` 与 `netsh http show sslcert` 均更新为新证书 EFBA8A81
 - 全量 `go test ./... -count=1` 通过
 
 ---
@@ -65,8 +217,8 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 
 ### 🐛 修复 3：强制推送失效 + IIS 绑定失败永不重试死锁
 
-- **根因 A (Manager)**: `handleForcePushCert` 只清空 `rec.Status.CertHashes`，但推送判定用的是 **Agent 实时上报的 hash**（磁盘文件未变则上报仍匹配 meta）→ 强制推送形同虚设 → sp.lanxun.pro 升级 v1.6.65 后 force push 未触发重推
-- **根因 B (Agent)**: IIS 绑定失败时不写 `.cert_hash`，`collectCertHashes` 走 Phase 3 磁盘扫描上报磁盘 hash — 文件已写入则磁盘 hash == meta hash → Manager 判定"已部署"停止推送 → **IIS 绑定永不重试**（sp/Win2022 事故：文件已写入但 IIS 绑定失败后 Manager 不再推送）
+- **根因 A (Manager)**: `handleForcePushCert` 只清空 `rec.Status.CertHashes`，但推送判定用的是 **Agent 实时上报的 hash**（磁盘文件未变则上报仍匹配 meta）→ 强制推送形同虚设 → sp.example.com 升级 v1.6.65 后 force push 未触发重推
+- **根因 B (Agent)**: IIS 绑定失败时不写 `.cert_hash`，`collectCertHashes` 走 Phase 3 磁盘扫描上报磁盘 hash — 文件已写入则磁盘 hash == meta hash → Manager 判定"已部署"停止推送 → **IIS 绑定永不重试**（sp.example.com/win-test 事故：文件已写入但 IIS 绑定失败后 Manager 不再推送）
 - **修复 A (Manager)**: `NodeRecord` 新增 `ForcePushBundles` 标记；`handleForcePushCert` 设置标记；`handleHeartbeat` 对该 bundle 跳过 matched 判定**无条件推送**，推送成功后清除标记
 - **修复 B (Agent)**: IIS 绑定失败时写**哨兵 `.cert_hash`**（值 `pending`，非 sha256 格式），上报非匹配 hash → Manager 持续重推直到 IIS 绑定成功；成功后覆盖为真实 hash
 - **效果**: ① force push 真正生效（运维可手动触发重推）② 未来 IIS 绑定失败自动重试直至成功（防死锁闭环）
@@ -86,7 +238,7 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 ### 🐛 修复 1：证书推送判定改用磁盘实时 hash — 修复新证书永不推送（管理端）
 
 - **根因**: Manager 证书推送判定依赖 `meta.json` 中缓存的 hash。acme.sh 自动续签（cron）直接覆盖 `certs/acme-*/` 下的 PEM 文件，**绕过 `SaveCertBundle`**，导致 meta.json hash 与实际磁盘内容脱钩（meta 仍为旧值）。心跳比对时 `Agent上报hash == Manager meta hash`（均为旧值）→ 误判"客户端已部署" → **新证书永不推送**
-- **生产事故复现**（192.168.110.30）: `acme-*.noxen.pro` / `acme-sp.lanxun.pro` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.lanxun.pro` / `acme-oof.noxen.pro`）推送正常——与理论完全吻合
+- **生产事故复现**（192.0.2.30）: `acme-*.example.net` / `acme-sp.example.com` 的 PEM 于 Jul 16 被 acme.sh 续签更新，meta.hash 仍是旧值；而 Aug 6 用户更新 PFX 密码触发 `SaveCertBundle` 的两个证书（`acme-*.example.com` / `acme-oof.example.net`）推送正常——与理论完全吻合
 - **修复**: `LoadCertBundle` 从磁盘实时重算 hash（排序文件名+全部内容，与 `SaveCertBundle` 同一算法），不再信任 meta.json 缓存值；检测到漂移时自愈回写 meta.json（保留 acme/ca/email 等扩展字段）
 - **效果**: acme.sh 续签后 Manager 下个心跳即感知新 hash → 自动推送；存量受影响节点无需操作，重启 Manager 后自动推送
 
@@ -94,7 +246,7 @@ UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取
 
 - **根因**: `extractPFXInfo` 解析 `certutil -dump` 输出提取指纹，**只匹配英文标签**（`Cert Hash(sha1):`/`Subject:`）。中文 Windows 输出 `证书哈希(sha1):`/`使用者:` → 指纹提取失败 → "PFX 证书指纹提取失败" → IIS 导入失败。与 netsh 中文 locale 问题（v1.6.1~1.6.7 已解决）**同源但遗漏于 certutil -dump**
 - **双重 bug**: ① 中文标签不匹配；② 取第一个证书块（**根证书**，无私钥）的指纹而非**带私钥的叶子证书**（certutil -dump 根在前、叶子在后）→ 即使匹配成功也会用错指纹
-- **生产实测**（中文 Windows Server 2022 测试机）: `certutil -importpfx` 每次都成功，但随后的 `-dump` 解析失败；go-pkcs12 PFX 与密码均正确（openssl/手动 certutil 均验证通过）
+- **生产实测**（中文 Windows Server 测试机）: `certutil -importpfx` 每次都成功，但随后的 `-dump` 解析失败；go-pkcs12 PFX 与密码均正确（openssl/手动 certutil 均验证通过）
 - **修复**: `extractPFXInfo` 重构为 `parsePFXInfoDump`（可测试纯函数）：① `cutAnyPrefix` 同时匹配中英文标签（参考 v1.6.6 已验证方案）；② 按"证书 N"分块，提取含 `Provider=`/`提供程序 =` 行的**叶子证书**块指纹与 CN；③ 指纹去除空格（英文版字节分隔）
 - **效果**: 中文 Windows 节点升级 Agent 后 IIS 证书自动导入并绑定成功
 
@@ -1021,7 +1173,7 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
 - **bug**: PowerShell `ConvertTo-Json` 将 `$_.IPAddress` 序列化为嵌套对象
   `{"Address":0,"AddressFamily":2,...}` 而非字符串 "0.0.0.0"
 - **fix**: `[string]$_.IPAddress` 强制转换为字符串
-- **结果**: Win2022 IIS 扫描成功 → 1个SSL绑定 0.0.0.0:443 thumb=2f0823ab...
+- **结果**: win-test IIS 扫描成功 → 1个SSL绑定 0.0.0.0:443 thumb=2f0823ab...
 
 #### v1.6.7 — WebAdministration API 替代 netsh
 - **突破**: 用 `Get-ChildItem IIS:\SSLBindings` 替代 netsh 文本解析
@@ -1064,7 +1216,7 @@ PowerShell API 替代 netsh 文本解析，彻底解决 SYSTEM 权限和中文 l
 
 #### 🧪 部署状态
 - Manager (192.0.2.1): v1.6.0 ✅
-- Win2022 (192.0.2.3): v1.6.8 ✅ IIS扫描1个SSL绑定
+- win-test (192.0.2.3): v1.6.8 ✅ IIS扫描1个SSL绑定
 - sp.example.com: v1.5.41 → 待心跳升级
 
 ---

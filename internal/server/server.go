@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,15 +26,15 @@ const defaultAdminPassword = "Admin12345"
 const maxUploadSize = 50 << 20
 
 type Server struct {
-	cfg             *srvcfg.ManagerConfig
-	store           *store.ManagerStore
-	acme            *acme.Manager   // default (backward compat)
-	acmeMgrs        []*acme.Manager // multi-account managers (protected by acmeMu)
-	logMgr          *logger.Manager
-	adminToken      string // protected by adminTokenMu
-	version         string // Manager version (from ldflags)
+	cfg              *srvcfg.ManagerConfig
+	store            *store.ManagerStore
+	acme             *acme.Manager   // default (backward compat)
+	acmeMgrs         []*acme.Manager // multi-account managers (protected by acmeMu)
+	logMgr           *logger.Manager
+	adminToken       string // protected by adminTokenMu
+	version          string // Manager version (from ldflags)
 	installerVersion string // Installer version (from ldflags)
-	accessCollector *accessStatsCollector
+	accessCollector  *accessStatsCollector
 	// rate limiting
 	globalLimiter    *rateLimiter
 	heartbeatLimiter *rateLimiter
@@ -44,8 +45,15 @@ type Server struct {
 	// concurrency protection
 	adminTokenMu sync.RWMutex
 	acmeMu       sync.RWMutex
+	// v1.6.71 N1: acme.sh 路径/home 接线（I26/I27/I29）。
+	// acmeHasCerts 必须在**未持有 acmeMu** 时求值 —— 锁顺序规范禁止同时持有
+	// acmeMu 与 store.mu，故 attachAcmeShPath 全程不触碰 store。
+	acmeHasCerts     bool
+	acmeWireMu       sync.Mutex
+	acmeWireIssues   []acmeWireIssue
+	acmeHomeNotified bool
 	// system info cache (updated by background goroutine)
-	sysInfoMu   sync.RWMutex
+	sysInfoMu    sync.RWMutex
 	sysInfoCache map[string]interface{}
 	// timezone cache (from timezone.json, defaults to Asia/Shanghai)
 	timezoneMu sync.RWMutex
@@ -56,8 +64,183 @@ type Server struct {
 	// trusted proxy config (from proxy_config.json, runtime modifiable via Web UI)
 	proxyConfigMu sync.RWMutex
 	proxyConfig   *store.ProxyConfig
+	// v1.6.70 S9: per-bundle serialisation of PFX reconciliation (I18/I22)
+	certRebuildMu sync.Mutex
+	certRebuild   map[string]*sync.Mutex
+	// v1.6.70 S9: state-change dedup for bundle consistency audits (I23/I25).
+	// Keyed by bundle name; guarded by its own lock, never by the rebuild lock.
+	pfxAuditMu  sync.Mutex
+	pfxAuditSig map[string]string
 }
 
+// attachDNSKeyLookup wires the DNS key resolver into an ACME manager.
+//
+// Every registered Manager must be wired, otherwise renewals silently fall back
+// to acme.sh's global account.conf credentials — the sp incident root cause.
+// It only touches the manager's own mutex, so it is safe to call while holding
+// acmeMu (sync.RWMutex is not reentrant, so routing through addACMEMgr inside
+// the lock would self-deadlock — invariant I10).
+// acmeWireIssue 记录一次 acme.sh 接线问题：在 acmeMu 锁内只做收集，
+// 统一在锁外落审计（锁顺序规范）。
+type acmeWireIssue struct{ action, detail string }
+
+// detectLocalACMECerts 判定本地是否已管理 ACME 证书（用于候选判定表的"语义分层"）。
+// ⚠️ 必须在不持有 acmeMu 时调用。
+func (s *Server) detectLocalACMECerts() bool {
+	names, err := s.store.ListCertBundles()
+	if err != nil {
+		// v1.6.71 G4: 读失败时**保守**按"已有证书"处理 —— 返回 false 会等价于"全新安装"，
+		// 从而解锁判定表中"未初始化路径被采用"的分支（异常场景下把 home 建到非预期位置）。
+		s.reportAcmeWireIssue("无法判定本地 ACME 证书集合（按“已有证书”保守处理）", err.Error())
+		return true
+	}
+	readErr := 0
+	for _, n := range names {
+		meta, err := s.store.LoadCertMeta(n)
+		if err != nil {
+			readErr++
+			continue
+		}
+		if is, _ := meta["acme"].(bool); is {
+			return true
+		}
+	}
+	if readErr > 0 {
+		// 同理：有 meta 不可读 ⇒ 无法排除"存在 ACME 证书" ⇒ 保守处理 + 审计
+		s.reportAcmeWireIssue("部分证书 meta 不可读（按“已有证书”保守处理）",
+			fmt.Sprintf("%d 个 bundle 的 meta 读取失败", readErr))
+		return true
+	}
+	return false
+}
+
+// resolveAcmeShPath 解析 acme.sh 可执行路径（C5/I29）：
+// 优先 cfg.Cert.Provider（须绝对路径 + 存在 + 可执行），否则回退 exec.LookPath。
+func (s *Server) resolveAcmeShPath() (string, *acmeWireIssue) {
+	if p := strings.TrimSpace(s.cfg.Cert.Provider); p != "" {
+		switch {
+		case !filepath.IsAbs(p):
+			return s.lookPathAcmeSh(), &acmeWireIssue{"cert.provider 非绝对路径，已回退 PATH 查找", p}
+		default:
+			fi, err := os.Stat(p)
+			if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+				return s.lookPathAcmeSh(), &acmeWireIssue{"cert.provider 不可用（不存在/非文件/不可执行），已回退 PATH 查找", p}
+			}
+			return p, nil
+		}
+	}
+	return s.lookPathAcmeSh(), nil
+}
+
+func (s *Server) lookPathAcmeSh() string {
+	if p, err := exec.LookPath("acme.sh"); err == nil {
+		return p
+	}
+	return ""
+}
+
+// attachAcmeShPath 注入 acme.sh 路径并显式固定 ACME home（I26/I29）。
+//
+// 覆盖全部 Manager 构造点；只调用 Manager 自身方法与 acmeWireMu，因此可在 acmeMu
+// 锁内安全调用。解析失败不阻断启动，但该 Manager 的所有 acme.sh 调用都会 fail-fast。
+func (s *Server) attachAcmeShPath(mgr *acme.Manager) {
+	if mgr == nil {
+		return
+	}
+	if path, issue := s.resolveAcmeShPath(); issue != nil {
+		s.reportAcmeWireIssue(issue.action, issue.detail)
+	} else if path != "" {
+		mgr.SetAcmeShPath(path)
+	}
+	if err := mgr.ResolveAcmeHome(s.acmeHasCerts); err != nil {
+		s.reportAcmeWireIssue("acme.sh home 解析失败（已拒绝执行 acme.sh）", err.Error())
+	}
+}
+
+func (s *Server) reportAcmeWireIssue(action, detail string) {
+	s.acmeWireMu.Lock()
+	s.acmeWireIssues = append(s.acmeWireIssues, acmeWireIssue{action: action, detail: detail})
+	s.acmeWireMu.Unlock()
+}
+
+// flushAcmeWireIssues 在锁外落审计，并对 home 解析失败做**一次性**通知（Q4）。
+func (s *Server) flushAcmeWireIssues() {
+	s.acmeWireMu.Lock()
+	issues := s.acmeWireIssues
+	s.acmeWireIssues = nil
+	notified := s.acmeHomeNotified
+	s.acmeWireMu.Unlock()
+	if len(issues) == 0 {
+		return
+	}
+	failFast, detail := false, ""
+	seen := make(map[string]bool, len(issues))
+	for _, is := range issues {
+		// v1.6.71 G5: 多账号共用同一故障 ⇒ 审计只记一条（与通知去重口径一致）
+		key := is.action + "\x00" + is.detail
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if s.logMgr != nil {
+			s.logMgr.Log("acme", is.action, is.detail, "error")
+		}
+		if strings.Contains(is.action, "home 解析失败") {
+			failFast, detail = true, is.detail
+		}
+	}
+	if failFast && !notified {
+		s.acmeWireMu.Lock()
+		s.acmeHomeNotified = true
+		s.acmeWireMu.Unlock()
+		s.tryNotify("acme", "acme.sh home 不可用 — 已拒绝执行 acme.sh（证书续期将失效）", detail, "")
+	}
+}
+
+func (s *Server) attachDNSKeyLookup(mgr *acme.Manager) {
+	if mgr == nil {
+		return
+	}
+	mgr.SetDNSKeyLookup(func() map[string]*acme.DNSProvider {
+		keys, err := s.store.LoadDNSKeys()
+		if err != nil {
+			log.Printf("[acme] 读取 DNS Key 失败: %v", err)
+			return nil
+		}
+		out := make(map[string]*acme.DNSProvider, len(keys))
+		for name, k := range keys {
+			out[name] = &acme.DNSProvider{
+				Name: k.Provider, KeyID: k.AccessKeyID,
+				KeySecret: k.AccessKeySecret, KeyName: name,
+			}
+		}
+		return out
+	})
+}
+
+// lockBundleRebuild serialises PFX reconciliation for a single bundle (I18).
+// Returns the unlock func. Must never be acquired while holding a store lock.
+func (s *Server) lockBundleRebuild(name string) func() {
+	s.certRebuildMu.Lock()
+	if s.certRebuild == nil {
+		s.certRebuild = map[string]*sync.Mutex{}
+	}
+	mu, ok := s.certRebuild[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.certRebuild[name] = mu
+	}
+	s.certRebuildMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// clearPFXAuditSig drops the dedup signature of a deleted bundle (I25).
+func (s *Server) clearPFXAuditSig(name string) {
+	s.pfxAuditMu.Lock()
+	delete(s.pfxAuditSig, name)
+	s.pfxAuditMu.Unlock()
+}
 
 func (s *Server) getAdminToken() string {
 	s.adminTokenMu.RLock()
@@ -82,12 +265,16 @@ func (s *Server) acmeMgrList() []*acme.Manager {
 func (s *Server) addACMEMgr(mgr *acme.Manager) {
 	s.acmeMu.Lock()
 	defer s.acmeMu.Unlock()
+	s.attachDNSKeyLookup(mgr) // v1.6.70: 挂载点 4/4
+	s.attachAcmeShPath(mgr)   // v1.6.71 N1: acme.sh 路径 + home（I29）
 	s.acmeMgrs = append(s.acmeMgrs, mgr)
 }
 
 func (s *Server) setACMEMgr(index int, mgr *acme.Manager) {
 	s.acmeMu.Lock()
 	defer s.acmeMu.Unlock()
+	s.attachDNSKeyLookup(mgr) // v1.6.70: 挂载点 4/4
+	s.attachAcmeShPath(mgr)   // v1.6.71 N1: acme.sh 路径 + home（I29）
 	if index < len(s.acmeMgrs) {
 		s.acmeMgrs[index] = mgr
 	} else {
@@ -172,17 +359,29 @@ func (s *Server) StartAutoRenew(shutdown <-chan struct{}) {
 					func() {
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 						defer cancel()
-						renewed := mgr.Renew(ctx)
-						for _, name := range renewed {
-							if b, err := s.store.LoadCertBundle(name); err == nil {
-								if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
-									log.Printf("[acme] SaveCertBundle %s: %v", name, saveErr)
+						email := mgr.AccountInfo().Email
+						// v1.6.70: 改为按次返回 outcomes —— 每个证书独立结果，
+						// 不再依赖共享 lastRenewErr（并发下互相覆盖），
+						// 并按 RenewKind 分级落审计（S4）。
+						for _, o := range mgr.RenewWithOutcomes(ctx) {
+							switch o.Kind {
+							case acme.KindOK:
+								if b, err := s.store.LoadCertBundle(o.Name); err == nil {
+									if saveErr := s.store.SaveCertBundle(b); saveErr != nil {
+										log.Printf("[acme] SaveCertBundle %s: %v", o.Name, saveErr)
+									}
 								}
+								s.logMgr.Log("acme", "自动续期成功",
+									fmt.Sprintf("%s (帐号=%s)", o.Name, email), "success")
+								totalRenewed++
+							case acme.KindNotReplaced:
+								s.logMgr.Log("acme", "自动续期未替换证书",
+									fmt.Sprintf("%s: acme.sh 返回成功但 fullchain.pem 未变化", o.Name), "warning")
+							case acme.KindFailed:
+								s.logMgr.Log("acme", "自动续期失败",
+									fmt.Sprintf("%s: %v", o.Name, o.Err), "error")
 							}
-							s.logMgr.Log("acme", "自动续期成功",
-								fmt.Sprintf("%s (帐号=%s)", name, mgr.AccountInfo().Email), "success")
 						}
-						totalRenewed += len(renewed)
 					}()
 				}
 				// v1.5.29 H2: ACME 空续签记录审计日志 (修复 v1.5.19 C4 回归)
@@ -359,12 +558,12 @@ func (s *Server) StartBinWatcher(shutdown <-chan struct{}) {
 func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager, logMgr *logger.Manager, version string, installerVersion string) *Server {
 	svr := &Server{
 		cfg: cfg, store: s, acme: acmeMgr, logMgr: logMgr,
-		version:         version,
+		version:          version,
 		installerVersion: installerVersion,
-		accessCollector: newAccessStatsCollector(cfg.DataDir),
-		pingLimiter:     newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
-		bcryptLimiter:   newRateLimiter(5),    // H3: bcrypt 回退限流 5 req/min per IP
-		notifyCooldown:  make(map[string]time.Time),
+		accessCollector:  newAccessStatsCollector(cfg.DataDir),
+		pingLimiter:      newRateLimiter(1000), // /api/ping 轻量限流 1000 req/min
+		bcryptLimiter:    newRateLimiter(5),    // H3: bcrypt 回退限流 5 req/min per IP
+		notifyCooldown:   make(map[string]time.Time),
 	}
 	st, err := s.LoadAdminState()
 	if err != nil {
@@ -395,8 +594,15 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 			svr.adminToken = tokenFromPassword(defaultAdminPassword)
 		}
 	}
+	// v1.6.71 N1: acme.sh 路径 + home 接线。
+	// ① acmeHasCerts 必须在未持 acmeMu 时求值（锁顺序规范：不得同时持 acmeMu 与 store.mu）；
+	// ② 先接线 main.go 构造的默认 Manager（I29 覆盖该构造点）。
+	svr.acmeHasCerts = svr.detectLocalACMECerts()
+	svr.attachAcmeShPath(svr.acme)
 	// init multi-account ACME managers
 	svr.initACMEManagers()
+	// v1.6.70 I15: 启动自检（凭据解析器接线 + meta.dns_key 数据前置条件），仅一次
+	svr.startupAudit()
 	// 加载时区配置，应用到流量统计、日志轮转、和所有时间展示
 	tzCfg, _ := s.LoadTimezoneConfig()
 	loc, err := time.LoadLocation(tzCfg.Timezone)
@@ -416,8 +622,105 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 	return svr
 }
 
+// startupAudit performs the one-shot wiring and data self-checks (I15).
+//
+// Two failure modes motivated it: (1) an ACME manager whose DNS key resolver was
+// never attached silently falls back to acme.sh's global account.conf, so the
+// fix would appear to work while doing nothing; (2) an ACME bundle without
+// meta.dns_key cannot resolve its key precisely and degrades to the ambiguous
+// unique-match fallback.
+func (s *Server) startupAudit() {
+	unwired := 0
+	for _, mgr := range s.acmeMgrList() {
+		if mgr == nil || !mgr.KeyLookupConfigured() {
+			unwired++
+		}
+	}
+	if unwired > 0 {
+		msg := fmt.Sprintf("%d 个 ACME 帐号缺少 DNS Key 解析器 — 续期将回退 acme.sh account.conf，自动续期可能失效", unwired)
+		log.Printf("[acme] 启动自检: %s", msg)
+		if s.logMgr != nil {
+			s.logMgr.Log("acme", "凭据解析器未挂载", msg, "error")
+		}
+	}
+
+	names, err := s.store.ListCertBundles()
+	if err != nil {
+		return
+	}
+	missing := 0
+	for _, name := range names {
+		meta, err := s.store.LoadCertMeta(name)
+		if err != nil {
+			continue
+		}
+		if is, _ := meta["acme"].(bool); !is {
+			continue
+		}
+		if keyName, _ := meta["dns_key"].(string); keyName == "" {
+			missing++
+		}
+	}
+	if missing > 0 {
+		msg := fmt.Sprintf("%d 个 ACME 证书缺少 meta.dns_key — 续期将回退唯一匹配/account.conf，建议执行迁移脚本", missing)
+		log.Printf("[acme] 启动自检: %s", msg)
+		if s.logMgr != nil {
+			s.logMgr.Log("acme", "凭据未登记", msg, "warning")
+		}
+	}
+
+	// ④ v1.6.71 N1（I29）: acme.sh 路径 + ACME home 接线自检。
+	// 未接线 ⇒ 相关 acme.sh 调用一律拒绝执行（fail-fast），此处必须显式可见。
+	pathUnset, homeUnset := 0, 0
+	for _, mgr := range s.acmeMgrList() {
+		if mgr == nil {
+			continue
+		}
+		if mgr.AcmeShPath() == "" {
+			pathUnset++
+		}
+		if !mgr.AcmeHomeConfigured() {
+			homeUnset++
+		}
+	}
+	if pathUnset > 0 || homeUnset > 0 {
+		msg := fmt.Sprintf("%d 个 ACME 帐号未接线 acme.sh 路径、%d 个未固定 ACME home — 相关调用将拒绝执行", pathUnset, homeUnset)
+		log.Printf("[acme] 启动自检: %s", msg)
+		if s.logMgr != nil {
+			s.logMgr.Log("acme", "acme.sh 接线未完成", msg, "error")
+		}
+	}
+	s.flushAcmeWireIssues()
+
+	// ③ 一致性只读预检（v1.6.70 B5）：只判定与审计，绝不重建。
+	// 两个作用：a) 启动即暴露 PEM/PFX 不一致，不必等首个心跳；
+	//          b) 预热去重签名，避免重启后首轮心跳为每个 bundle 各输出一条 info。
+	flagged := 0
+	for _, name := range names {
+		meta, err := s.store.LoadCertMeta(name)
+		if err != nil {
+			continue
+		}
+		if is, _ := meta["acme"].(bool); !is {
+			continue
+		}
+		b, err := s.store.LoadCertBundle(name)
+		if err != nil {
+			continue
+		}
+		verdict, reason, hard := s.checkBundlePFXConsistency(b, meta)
+		s.auditBundleConsistency(name, b, meta, verdict, reason, hard)
+		if verdict != pfxConsistent {
+			flagged++
+		}
+	}
+	if flagged > 0 {
+		log.Printf("[acme] 启动自检: %d 个 ACME bundle 存在一致性问题（详见 cert 审计；心跳推送时按需重建）", flagged)
+	}
+}
+
 // initACMEManagers initializes multi-account ACME managers from stored config.
-// 
+//
 // ⚠️ 锁顺序规范: acmeMu 和 store.mu 是独立锁，任何代码路径不得同时持有两者。
 // handleACMESaveAccountIndex 持有 store.mu → acmeMu (PutACMEAccount → addACMEMgr)，
 // 因此 initACMEManagers 不能持有 acmeMu 时调用 store 方法（反序死锁）。
@@ -429,6 +732,8 @@ func (s *Server) initACMEManagers() {
 	if err != nil || len(accounts) == 0 {
 		if s.acme != nil {
 			s.acmeMgrs = []*acme.Manager{s.acme}
+			s.attachDNSKeyLookup(s.acme) // v1.6.70: 挂载点 2/4（回退分支）
+			s.attachAcmeShPath(s.acme)   // v1.6.71 N1: 同一 acme.sh 路径/home（I29）
 		}
 		s.acmeMu.Unlock()
 		return
@@ -460,6 +765,11 @@ func (s *Server) initACMEManagers() {
 			mgr.SetEAB(&acme.EAB{KID: ac.EABKID, HMACKey: ac.EABKey})
 		}
 		s.acmeMgrs = append(s.acmeMgrs, mgr)
+		// v1.6.70: 挂载点 3/4 —— 就在 acmeMu 锁内。attachDNSKeyLookup 只触
+		// manager 自身 m.mu，不改动 acmeMu 语义；若改走 addACMEMgr 会因
+		// RWMutex 非重入而在启动时自死锁（I10）。
+		s.attachDNSKeyLookup(mgr)
+		s.attachAcmeShPath(mgr) // v1.6.71 N1: 同一 acme.sh 路径/home（I29）
 		inits = append(inits, mgrInit{
 			mgr: mgr, idx: len(s.acmeMgrs) - 1,
 			email: ac.Email, ac: ac,
@@ -554,7 +864,7 @@ func (s *Server) Router() *mux.Router {
 	a.HandleFunc("/certs/{name}/pfx", s.handleDownloadPFX).Methods("GET")
 	a.HandleFunc("/certs/{name}/pfx-password", s.handleSetCertPFXPassword).Methods("POST")
 	a.HandleFunc("/certs/{name}/renew", s.handleRenewCert).Methods("POST")
-	a.HandleFunc("/certs/{name}/push/{id}", s.handleForcePushCert).Methods("POST")  // v1.6.0: 测试用强制推送
+	a.HandleFunc("/certs/{name}/push/{id}", s.handleForcePushCert).Methods("POST") // v1.6.0: 测试用强制推送
 	// acme (multi-account)
 	a.HandleFunc("/acme/all", s.handleACMEList).Methods("GET")
 	a.HandleFunc("/acme/accounts/{index}", s.handleACMESaveAccountIndex).Methods("PUT")

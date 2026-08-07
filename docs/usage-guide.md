@@ -97,6 +97,11 @@ Type=simple
 ExecStart=/opt/ddns-manager/ddns-manager -data-dir /opt/ddns-manager/data
 Restart=always
 RestartSec=10
+# ⚠️ 必须显式提供这两项（见 §2.4 "acme.sh 安装与 home 约定"）：
+#    systemd 默认不设置 HOME ⇒ acme.sh 会把自己的 home 推导成 /.acme.sh，
+#    导致证书续期时"找不到既有配置"并在非预期目录写入凭据。
+Environment=HOME=/root
+Environment=LE_WORKING_DIR=/root/.acme.sh
 
 [Install]
 WantedBy=multi-user.target
@@ -105,6 +110,56 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now ddns-manager
 ```
+
+### 2.4 acme.sh 安装与 home 约定
+
+Manager 通过调用 **acme.sh**（同进程外的独立脚本）完成证书签发与续期，因此必须让
+Manager 与 acme.sh 对"home 目录"有完全一致的认识。
+
+#### 为什么必须显式指定
+
+acme.sh 以 `$HOME/.acme.sh` **推导**自己的 home。systemd 服务默认**不设置** `HOME`，
+于是 home 会变成 `/.acme.sh`：
+
+- acme.sh 读不到既有域名的配置 ⇒ 续期时报"安装到 `<bundle 之外的目录>` 失败"；
+- 更严重：acme.sh 会在该目录创建 `account.conf` 并写入**明文 DNS 凭据**。
+
+Manager 自身也做了防护（代码会显式固定 home，缺失 `HOME` 时自动补为 home 的父目录，
+并在无法确定 home 时**拒绝执行** acme.sh），但**部署层仍应显式声明**，二者构成纵深防御。
+
+#### 推荐配置
+
+```ini
+# /etc/systemd/system/ddns-manager.service 的 [Service] 段
+Environment=HOME=/root
+Environment=LE_WORKING_DIR=/root/.acme.sh
+```
+
+- `LE_WORKING_DIR` 是 acme.sh v3.1.4 实际读取的变量（**不是** `ACME_HOME`）。
+- 自定义安装位置时，把 `LE_WORKING_DIR` 指向该 home，并在 `manager.yaml` 中同步
+  `cert.provider`（见下）。
+
+#### `cert.provider` 的语义
+
+```yaml
+cert:
+  provider: /usr/local/bin/acme.sh   # acme.sh 可执行文件的路径（绝对路径）
+```
+
+- 该值**优先**于 `PATH` 查找；若路径不存在/不可执行，会回退 `PATH` 查找并记录告警。
+- 留空则不读取配置，直接使用 `PATH` 查找。
+- 注意：该值指向**可执行文件**，其 home 由 Manager 依序解析
+  （`LE_WORKING_DIR` → 解析符号链接后的脚本所在目录 → `$HOME/.acme.sh`），
+  并要求目标目录是**已初始化的 acme home**（含 `account.conf` 或 `ca/`）。
+
+#### 自检与排错
+
+- 启动时会在事件日志中输出 `[acme] ACME home 已固定: <路径>` 与逐候选的解析轨迹；
+- 若出现 `acme.sh home 解析失败（已拒绝执行 acme.sh）`，说明所有候选都不可用
+  —— 此时**不会有任何 acme.sh 调用被发出**（fail-fast，属保护行为），
+  请按提示的候选解析结果修正 `LE_WORKING_DIR` / `cert.provider` / `HOME`。
+- 不要手工执行 `acme.sh --renew` 来"绕过"本管理端：手工执行缺少 Manager 注入的
+  DNS 凭据，会与 `account.conf` 中保存的历史凭据混用，产生难以排查的问题。
 
 ### 2.3 首次登录
 

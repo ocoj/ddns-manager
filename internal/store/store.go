@@ -237,6 +237,26 @@ type CertBundle struct {
 	PFXPassword string           `json:"pfx_password,omitempty"` // PFX 证书密码
 }
 
+// LoadCertMeta reads the raw meta.json fields of a cert bundle. It is used by
+// callers that need fields not modelled on CertBundle (notably "acme" and
+// "dns_key"). Deliberately a separate reader rather than adding a same-named
+// field to CertBundle: SaveCertBundle preserves unknown keys via a structKeys
+// whitelist, so a duplicate struct field would create a double-write ambiguity.
+func (s *ManagerStore) LoadCertMeta(name string) (map[string]interface{}, error) {
+	if err := sanitizeBundleName(name); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(s.dir, "certs", name, "meta.json"))
+	if err != nil {
+		return nil, err
+	}
+	var meta map[string]interface{}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
 func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
 	if err := sanitizeBundleName(name); err != nil {
 		return nil, err

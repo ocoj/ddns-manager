@@ -2,6 +2,8 @@ package main
 
 import (
 	"testing"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // v1.6.65 回归测试: parsePFXInfoDump 中英文 certutil -dump 输出解析。
@@ -126,5 +128,38 @@ func TestParsePFXInfoDump_Empty(t *testing.T) {
 	thumb, cn := parsePFXInfoDump("")
 	if thumb != "" || cn != "" {
 		t.Errorf("空输出: thumb=%q cn=%q, want 空", thumb, cn)
+	}
+}
+
+// toGBK 将 UTF-8 字符串转为 GBK 编码 (模拟中文 Windows certutil 输出)。
+func toGBK(s string) []byte {
+	enc := simplifiedchinese.GBK.NewEncoder()
+	b, _ := enc.Bytes([]byte(s))
+	return b
+}
+
+// TestParsePFXInfoDump_GBKEncodedChinese v1.6.67 回归测试:
+// 中文 Windows 的 certutil 输出是 GBK 编码(非 UTF-8)。直接按 UTF-8 解析
+// 中文标签会因字节序列不匹配而失败 (sp/Win2022 实测: certutil -importpfx
+// 成功但 "PFX 证书指纹提取失败")。decodeCertutilOutput 需先转 UTF-8。
+func TestParsePFXInfoDump_GBKEncodedChinese(t *testing.T) {
+	gbkOut := toGBK(zhDump) // 模拟真实 GBK 编码的 certutil -dump 输出
+	text := decodeCertutilOutput(gbkOut)
+	thumb, cn := parsePFXInfoDump(text)
+	if thumb != "efba8a811b958121514c9700400e06451aff3517" {
+		t.Errorf("GBK 输出指纹 = %q, want 叶子证书 efba8a81...", thumb)
+	}
+	if cn != "*.lanxun.pro" {
+		t.Errorf("GBK 输出 CN = %q, want *.lanxun.pro", cn)
+	}
+}
+
+// TestParsePFXInfoDump_GBKDirectFails 验证修复的必要性:
+// 不转码直接按 UTF-8 解析 GBK 输出应失败 (中文标签字节不匹配)。
+func TestParsePFXInfoDump_GBKDirectFails(t *testing.T) {
+	gbkText := string(toGBK(zhDump)) // 未转码
+	thumb, _ := parsePFXInfoDump(gbkText)
+	if thumb == "efba8a811b958121514c9700400e06451aff3517" {
+		t.Error("GBK 输出未转码竟然解析成功 — 说明测试样例有问题")
 	}
 }

@@ -1,3 +1,29 @@
+## v1.6.67 — 2026-08-07
+
+### 🐛 修复 4：certutil -dump 输出 GBK 编码 → 中文标签匹配失败（Agent 端最终根因）
+
+- **根因**: 中文 Windows 的 `certutil -dump` 输出是 **GBK 编码**（非 UTF-8），
+而 `parsePFXInfoDump` 匹配的中文标签（`证书哈希(sha1):` / `使用者:`）是 Go 源码
+UTF-8 字节 → `strings.HasPrefix` 按字节比较不匹配 → **指纹提取失败** → Agent 无法
+从 PFX 提取叶子证书指纹 → IIS 自动部署判定失配
+- **事故链路闭环**: v1.6.65 修复中文标签匹配（单测 UTF-8 样例通过），但真实环境
+仍是 GBK 字节 → 单测通过≠生产通过。SYSTEM 账户（计划任务）下 certutil -dump
+实测输出确认为 GBK 编码
+- **修复**: `extractPFXInfo` 解析前先 `decodeCertutilOutput(out)` 转码：
+  1. `utf8.Valid(out)` 为真 → 原样（英文 Windows / 已是 UTF-8）
+  2. 否则按 **GB18030**（GBK 超集，兼容全部字节）解码为 UTF-8
+  3. 回退原样
+  - 不用 `html/charset` 嗅探（对无 BOM 纯 GBK 文本检测失败，实测返回空指纹）
+- **效果**: 中文 Windows IIS 证书自动部署全链路打通（此前的 3 个修复 + 本修复）
+- **涉及文件**: `cmd/agent/main.go`, `cmd/agent-win/main.go`, `cmd/agent/pfx_dump_test.go`, `VERSION`, `CHANGELOG.md`
+
+### 🧪 测试
+
+- 新增 `TestParsePFXInfoDump_GBKEncodedChinese`（GBK 编码输入 → 正确提取）+ `TestParsePFXInfoDump_GBKDirectFails`（未转码应失败，验证修复必要性）
+- 全量 `go test ./... -count=1` 通过
+
+---
+
 ## v1.6.66 — 2026-08-07
 
 ### 🐛 修复 3：强制推送失效 + IIS 绑定失败永不重试死锁

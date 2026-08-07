@@ -30,9 +30,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ocoj/ddns-manager/internal/crypto"
 	"github.com/ocoj/ddns-manager/internal/model"
+	"golang.org/x/text/encoding/simplifiedchinese"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1979,7 +1981,27 @@ func extractPFXInfo(pfxFile, pfxPassword string) (thumb string, cn string) {
 		log.Printf("[cert] certutil -dump 失败: %v", err)
 		return "", ""
 	}
-	return parsePFXInfoDump(string(out))
+	// v1.6.67 修复: 中文 Windows 的 certutil 输出 GBK 编码(非 UTF-8)。
+	// 直接按 UTF-8 解析中文标签会因字节序列不匹配而失败
+	// (sp/Win2022 实测: certutil -importpfx 成功但指纹提取失败)。
+	// 先自动检测编码(GBK/GB18030/UTF-8)转为 UTF-8 再解析。
+	return parsePFXInfoDump(decodeCertutilOutput(out))
+}
+
+// decodeCertutilOutput 将 certutil 输出转为 UTF-8 (自动检测 GBK/GB18030/UTF-8)。
+// v1.6.67: 不用 html/charset 嗅探 — 它对无 BOM 的纯 GBK 文本检测失败(实测返回
+// 空指纹)。改用: 合法 UTF-8 直接用, 否则按 GBK 解码 (中文 Windows ANSI 代码页)。
+func decodeCertutilOutput(out []byte) string {
+	// 1) 合法 UTF-8 (英文 Windows 或已是 UTF-8) → 原样
+	if utf8.Valid(out) {
+		return string(out)
+	}
+	// 2) 否则按 GBK/GB18030 解码 (GB18030 是 GBK 超集, 兼容全部字节)
+	if b, err := simplifiedchinese.GB18030.NewDecoder().Bytes(out); err == nil {
+		return string(b)
+	}
+	// 3) 回退: 原样返回
+	return string(out)
 }
 
 // parsePFXInfoDump 解析 certutil -dump 输出，提取叶子证书(带私钥)的指纹和 CN。

@@ -572,7 +572,10 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	certDir := filepath.Join(s.cfg.DataDir, "certs", certName)
-	bundle := &store.CertBundle{Name: "acme-" + certName, Files: map[string][]byte{}}
+	// v1.6.72 P2/F7: `SaveCertBundle` 的 structKeys 白名单含 `domains`，若这里不赋值，
+	// 预写 meta 的 domains 会被结构体零值覆盖为 null（首发路径全量中招；续期/重建路径
+	// 因 Load→Save 会回填 Domains 而不受影响）。
+	bundle := &store.CertBundle{Name: "acme-" + certName, Domains: req.Domains, Files: map[string][]byte{}}
 	for _, fn := range []string{"fullchain.pem", "privkey.pem", "cert.pem"} {
 		if data, err := os.ReadFile(filepath.Join(certDir, fn)); err == nil {
 			bundle.Files[fn] = data
@@ -627,6 +630,15 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[acme] SaveCertBundle 失败: %v", err)
 		jsonErr(w, http.StatusInternalServerError, "保存证书失败: "+err.Error())
 		return
+	}
+	// v1.6.72 P2/F7: 后置自检 —— 若 SaveCertBundle 后 meta.domains 仍为空（预写值被覆盖
+	// 或赋值路径回归），记 warning 审计。不阻断签发（该字段当前无功能性消费者）。
+	if meta, metaErr := s.store.LoadCertMeta("acme-" + certName); metaErr == nil {
+		ds, ok := meta["domains"].([]interface{})
+		if !ok || len(ds) == 0 {
+			s.logMgr.Log("acme", "meta.domains 缺失",
+				fmt.Sprintf("acme-%s: 期望 %v（structKeys 白名单覆盖回归？）", certName, req.Domains), "warning")
+		}
 	}
 	// v1.6.70 S7/I9: 把 acme.sh 的安装路径重指向 bundle 目录。
 	// issueViaAcmeSh 首次安装到 certs/<域名>/，本函数随后会 os.RemoveAll 该目录；

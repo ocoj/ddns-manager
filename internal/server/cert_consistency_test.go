@@ -806,3 +806,41 @@ func TestPFXAuditSigLifecycle(t *testing.T) {
 		t.Errorf("the mismatch state must be deduped, got %d audits", n)
 	}
 }
+
+// T56 [A6 / P4-G1]: 一致性告警的 detail 必须写明"疑似外部写入（PEM/PFX 不同源）"，
+// 且该告警按**状态签名去重**（I23）⇒ 同一状态连续判定**只记 1 条**（扩写文案不增噪音）。
+func TestT56_ConsistencyAudit_MentionsExternalWrite_AndDeduped(t *testing.T) {
+	s, st, dir := newCertConsistencyServer(t)
+
+	leaf, chain, key := genLeafChain(t, "t56.example.com", 0)
+	older, _, olderKey := genLeafChain(t, "t56.example.com", 0) // PFX 内是**另一张**（不同源）
+	acmeBundle(t, dir, "acme-t56.example.com",
+		struct{ cert, chain, key []byte }{leaf, chain, key},
+		struct{ cert, chain, key []byte }{older, chain, olderKey},
+		"pw", 0, map[string]interface{}{"acme": true, "domains": []string{"t56.example.com"}, "pfx_password": "pw"})
+
+	b, err := st.LoadCertBundle("acme-t56.example.com")
+	if err != nil {
+		t.Fatalf("LoadCertBundle: %v", err)
+	}
+	meta, err := st.LoadCertMeta("acme-t56.example.com")
+	if err != nil {
+		t.Fatalf("LoadCertMeta: %v", err)
+	}
+
+	// ① 判定应确为 NeedsRebuild（PFX 的叶证书与 PEM 不一致）
+	if v, reason, _ := s.checkBundlePFXConsistency(b, meta); v != pfxNeedsRebuild {
+		t.Fatalf("夹具应判为 NeedsRebuild，实际 %v（%s）", v, reason)
+	}
+
+	// ② 连续两次同状态判定 ⇒ detail 含"疑似外部写入"、且**只记 1 条**（去重 = 不增噪音）
+	s.auditBundleConsistency("acme-t56.example.com", b, meta, pfxNeedsRebuild, "cert.pfx 的叶证书与 PEM 不一致", false)
+	s.auditBundleConsistency("acme-t56.example.com", b, meta, pfxNeedsRebuild, "cert.pfx 的叶证书与 PEM 不一致", false)
+
+	if n := countInLog(t, dir, "证书内容不一致"); n != 1 {
+		t.Errorf("同一状态应只记 1 条一致性告警（去重），实际 %d", n)
+	}
+	if n := countInLog(t, dir, "疑似外部写入（PEM/PFX 不同源"); n != 1 {
+		t.Errorf("告警 detail 必须写明「疑似外部写入（PEM/PFX 不同源）」且不增噪音，实际 %d 条", n)
+	}
+}

@@ -1,3 +1,63 @@
+## v1.6.72 — 2026-09-16
+
+> **本版范围**：把「证书全链路」余下已知问题（登记项 1–16 / P1–P13）**一次性收口**，并补上
+> **结构性护栏**（静态守卫 + 运行时看门狗）与**运维文档**。共 **12 个文件**（含 2 个新增测试文件）。
+> 基线：`v1.6.71`（`2235ec6`）。生产部署与观察窗口另见部署清单。
+
+### 🔴 修复 1: 签发路径 `meta.domains` 被覆盖为 `null`（P2 / F7）
+
+- **根因**: `SaveCertBundle` 的 `structKeys` 白名单含 `domains`，而 `handleACMEIssue` 构造
+  `store.CertBundle` 时**未赋值** `Domains` ⇒ 预写 meta 的域名列表被零值覆盖为 `null`
+  （全新签发全量中招；续期/重建路径因 `Load→Save` 会回填而不受影响）
+- **修复**: 显式 `Domains: req.Domains`；并在 `SaveCertBundle` 成功后**后置自检**（为空则 warning 审计）
+- **测试**: `T54`（赋值落盘 / `Load→Save` 保持 / 反证 `null`）+ `T54b`（AST 接线守卫）
+
+### 🔴 修复 2: 自有符号链接可绕过 acme.sh home 位置体检（P1 / R-E）
+
+- **根因**: 既有检查只拦「**他人所有**」符号链接；**自有**符号链接指向公共可写目录（`/tmp` 等）时被放行 ⇒
+  acme.sh 会在该处写入明文 `account.conf`（DNS 凭据）
+- **修复**: 新增 `selfSymlinkInPath`（**仅自有**，`uid == 进程 uid`）+ 位置体检三分法：
+  **A** 自有符号链接且**解析后**落公共可写前缀 ⇒ **拒绝**（显式来源 fail-fast）；**B** 字面公共可写 ⇒ 采用 + 强告警（原语义）；
+  **C** 祖先 group/other 可写 ⇒ **仅显式来源**附信息性强告警（**不参与** adopt/skip 判定）
+- **测试**: `T52a/b/c`；`T40`–`T48`（含 `T48b/T48c/T48e`）**原断言不变**
+
+### 🟠 结构性护栏 1: `--install-cert` 落点守卫（P3 / G-2）
+
+- 新增 **`T55`**：**全仓扫描** `internal/**/*.go`（排除测试），断言全部 `InstallCert(` 调用点第 3 实参为白名单
+  bundle 目录变量、且调用点总数 == 1；实现侧断言三路径由 `dir` 形参经 `filepath.Join` 派生
+- 目的：防止落点漂移（指向随后被 `RemoveAll` 的 `certs/<域名>/`）⇒ 续期结果不再落入 bundle
+
+### 🟠 结构性护栏 2: 公开入口自死锁看门狗（P5 / D4）与锁规则成文（P6 / D5）
+
+- **`T50`**：表驱动 **6 项**（`IssueDNS01` / `IssueHTTP01` / `RenewByName` / `RenewWithOutcomes` /
+  `InstallCert` / `AcmeShAvailable`）各 10s 看门狗 + `requireAcmeShInvoked` 防空转
+- **`T51`** 头注释写明 **L1/L2/L3**：L1 包内自死锁（本守卫）· L2 `acmeMu` 与 `store.mu` **不得同时持有** ·
+  L3 跨层 `s.acmeMu → m.mu` **单向**；并如实写入 **T51 的判别边界**
+
+### 🟠 可观测性与成文
+
+- **P4 / G-1**：一致性告警 detail 增「**疑似外部写入（PEM/PFX 不同源）**」（仅扩写**已去重**告警 ⇒ 不增噪音），
+  新增 **`T56`** 断言文案 + 同状态只记 1 条；时序/锁序成文
+- **维护文档**：`docs/usage-guide.md` 新增 **§2.4.1 运维约束 + home 正例**、**附录 A 证书退役流程**（400 保护 + 三步）
+
+### 🔧 工程与发布
+
+- **P9**：`release.yml` 在**版本化改名之后**生成 Manager `.sha256`（**纯哈希**，与既有 3 个 Agent 同构）
+  ⇒ 修复"哈希对象名与附件名不一致导致校验必然失败"
+- **P10**：仅格式化本批改动文件（本次**无操作**，改动 `.go` 均 `gofmt` 干净）
+- **P11–P13 / C1 / C2**：报告顺序更正（v7 冻结件不动）· DNS 凭据落盘加密**本轮不实施**（评估成文）·
+  5 条长期观察项登记
+
+### 测试与门禁
+
+- 新增/强化测试：`T50`（6 子例）· `T52a/b/c` · `T54`/`T54b`/`T55`/`T56`
+- 门禁：`go build ./...` · `go vet ./...` · `go test ./... -race -count=1` → **8/8 全绿**
+- 变更文件（12）：`VERSION` · `CHANGELOG.md` · `.github/workflows/release.yml` · `docs/usage-guide.md` ·
+  `internal/acme/{acmehome.go,acmehome_test.go,deadlock_regression_test.go}` ·
+  `internal/server/{acmesh_wiring_test.go,cert_consistency.go,cert_consistency_test.go,handlers_certs.go,handlers_certs_test.go}`
+
+---
+
 ## v1.6.71 — 2026-09-16
 
 > **版本归并说明**：当日全部修复（**4 个 🔴 根因** + 评审/审计/验收各轮整改）并入**本版本**。

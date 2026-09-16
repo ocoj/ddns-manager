@@ -158,8 +158,42 @@ cert:
 - 若出现 `acme.sh home 解析失败（已拒绝执行 acme.sh）`，说明所有候选都不可用
   —— 此时**不会有任何 acme.sh 调用被发出**（fail-fast，属保护行为），
   请按提示的候选解析结果修正 `LE_WORKING_DIR` / `cert.provider` / `HOME`。
+- **排查入口（推荐）**：
+
+  ```bash
+  journalctl -u ddns-manager | grep -E "home 解析|ACME home"   # 逐候选轨迹 + 最终固定值
+  systemctl show ddns-manager -p Environment                   # 是否已显式声明 LE_WORKING_DIR
+  ```
+
+  期望看到 `ACME home 已固定: <路径>`。若轨迹显示的是 `[binary-dir]`（**启发式**）而非
+  `[env:LE_WORKING_DIR]`（**显式**），说明未显式声明：该启发式依赖「`cert.provider` 指向的脚本路径
+  **能解析到真实 home**」，一旦该脚本被替换为 wrapper／多级软链，解析即失败并 **fail-fast**
+  ⇒ **生产环境建议显式声明**（见上文"推荐配置"），以获得确定性与可观测性。
 - 不要手工执行 `acme.sh --renew` 来"绕过"本管理端：手工执行缺少 Manager 注入的
   DNS 凭据，会与 `account.conf` 中保存的历史凭据混用，产生难以排查的问题。
+
+#### 2.4.1 运维约束（P7 / R-E：home 的落点必须可信）
+
+ACME home 是 acme.sh 存放**账号凭据（`account.conf`，含 DNS/CA 密钥）与证书**的目录。
+Manager 启动时会按 §2.4 顺序解析 home，并对候选做**位置体检**：
+
+| 形态 | 判据 | 结果 |
+|---|---|---|
+| 路径层含**他人所有**符号链接 | `Lstat` 逐层 + `uid ≠ 本进程` | **拒绝**（防凭据写入他人可控路径） |
+| 路径层含**自有**符号链接、且**解析后**落在公共可写前缀（`/tmp`、`/var/tmp`、`/dev/shm`、`/run`） | `EvalSymlinks` 结果前缀命中 | **拒绝**（显式来源）/ 跳过（启发式来源） |
+| **字面**路径落在公共可写前缀 | 前缀比对 | 采用 + **强告警**（`/tmp` 类目录通常 sticky，风险受限） |
+| 祖先目录对 group/other 可写 | 逐层 `mode & 0o022` | **仅显式来源**附加强告警（不改判定） |
+
+**运维要求**：不要把 ACME home（或指向它的符号链接）放在公共可写目录；推荐本例：
+
+```
+/root/.acme.sh            属主 root、0700、无符号链接
+/root/.acme.sh/ca/        账号与 CA 数据（acme.sh 自动创建）
+/root/.acme.sh/account.conf  600，含 SAVED_* 凭据
+```
+
+> 若必须放在自定义路径（如 `/opt/acme/.acme.sh`），请确保：目录属主为本进程、`0700`、
+> 祖先链无可被同组替换的层，并通过 `LE_WORKING_DIR`（**显式来源**）指定。
 
 ### 2.3 首次登录
 
@@ -502,3 +536,54 @@ rm /opt/ddns-manager/data/admin.json
 docker restart ddns-manager
 # 然后立即登录修改密码
 ```
+
+---
+
+## 附录 A. 证书退役流程（P8）
+
+退役一张证书（不再签发/分发/续期）请**按序**执行，避免节点上残留旧证书：
+
+| 步 | 动作 | 说明 |
+|:--:|---|---|
+| **1** | 在节点侧**解除绑定** | IIS/nginx 等先切到新证书，确认新证书生效（浏览器/`certutil` 指纹核对） |
+| **2** | **手动删除证书 bundle** | ⚠️ **ACME 托管的证书不能用 UI/API 删除**（删除接口按设计**无条件拒绝**：返回 `不能删除 ACME 管理的证书`）。手动路径：**(a) 先做引用检查** —— `data/nodes.json`（各节点 `cert_bindings`）、`dns_keys.json`、`agent_config.json`+`agent_manifest.json` 中**均无**该 bundle；**(b)** 删除 `data/certs/acme-<主域名>/` 目录 |
+| **3** | 清理 acme.sh 侧残留 | **先打印当前生效 home**（见 §2.4：`journalctl -u ddns-manager \| grep "home 解析"`，或直接读 `LE_WORKING_DIR`），再用**同一个** home 执行 `acme.sh --remove -d <主域名>`；确认 **`$LE_WORKING_DIR/<主域名>_ecc/`** 已移除。**不要把路径写死为 `~/.acme.sh`**（home 可能被显式指定到别处） |
+| **4** | **删除后跟进（观察一次续期 tick 与推送）** | 期望：**仅一条预期审计**（如 `自动续期`/`无到期证书`）、**无 error 级噪音**、推送日志中无该 bundle 报错。出现 error ⇒ 回到第 2 步复查引用检查是否漏项 |
+
+**两种删除保护（勿混淆）**：
+
+- **绑定保护（400，可解绑后删）**：bundle 仍绑定到节点 ⇒ 返回 400 并拒绝删除 ⇒ **先做第 1 步**，
+  避免"节点仍在用、中心已删"的悬空状态；
+- **ACME 托管保护（一律拒绝）**：`acme-` 前缀的 ACME 托管证书 ⇒ 删除接口在**任何绑定检查之前无条件拒绝**
+  ⇒ **只能走第 2 步的手动路径**（旧版本文档曾写"UI 删除"，对 ACME 证书**不可行**）。
+
+**退役前自检**：`acme.sh --list` 应不再列出该域名；`certs/acme-<域名>/` 目录应不存在；
+**`$LE_WORKING_DIR/<主域名>_ecc/`** 应不存在；节点上报的 `status.cert_hashes` 中不再含该 bundle 的哈希。
+
+
+---
+
+## 附录 B. 为什么会出现「PEM 与 PFX 不同源」（G-1 结论）
+
+**结论**：本项目历史上存在**两个并行的 acme home**，外部 acme.sh 会把新证书装到其中一个、
+而 Manager 从另一个读取 ⇒ 同一 bundle 内 `fullchain.pem`（新）与 `cert.pfx`（旧）**不是同一张证书**，
+进而把**旧证书**推送到节点（IIS 重新绑定旧证书）。
+
+**取证要点**（只读取证，未输出任何凭据值）：
+
+- 孤儿 home（`/.acme.sh`，已退役）在 **≥2026-05-09 至 2026-09-16** 期间被实际使用；
+  其中 `*.lanxun.pro` / `*.noxen.pro` / `oof.noxen.pro` 于 **2026-07-16** 在该 home 内签发并安装
+  ⇒ 与历史「PEM 于 7-16 被外部写入」的观测**吻合**，即**外部写入者的来源**。
+- 另有一组「已轮换但未禁用」的旧 DNS 凭据残留在该 home 的 `account.conf` 中，是续期失败（`InvalidAccessKeyId.Inactive`）的直接原因。
+
+**Manager 的自愈与检测（v1.6.70+）**：
+
+1. **审计信号**：一致性巡检在 `detail` 中标注「**疑似外部写入（PEM/PFX 不同源）**」⇒ 可据此定位外部写入者；
+2. **推送前自愈**（S9）：推送前判定四路（`fullchain.pem`/`cert.pem`/`cert.pfx`/`cert-modern.pfx`）叶证书是否同源，
+   不同源则**按磁盘 `fullchain.pem` 重建双 PFX** 后再推送（避免把旧证书推出去）；
+3. **安装路径固定**（R3/R4）：签发后统一 `--install-cert` 到 **bundle 目录**，并让 acme.sh 的 home **显式固定**，
+   避免"签发写 home A、续期读 home B"；
+4. **凭据按调用注入**（R1）：DNS 凭据不再依赖 `account.conf` 中的历史值，而是**每次调用注入**。
+
+**运维建议**：只保留**一个** acme home；若曾存在第二 home，按附录 A 流程退役其域名并清理目录；
+证书类异常优先看 `events.log` 中的「证书一致性」与「疑似外部写入」两条线索。

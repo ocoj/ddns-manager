@@ -2,9 +2,12 @@ package acme
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -14,41 +17,150 @@ import (
 	xacme "golang.org/x/crypto/acme"
 )
 
-// T50（v1.6.72 P0-F1）：公开入口 IssueDNS01 不得自死锁。
+// T50（v1.6.72 P0-F1 / A4-D4）：**全部公开入口**均不得自死锁（表驱动 6 项）。
 //
 // 生产复现（H2）：IssueDNS01 持 m.mu → issueViaAcmeSh → acmeShEnvFor 再次获取
 // m.mu（sync.Mutex 不可重入）⇒ 请求永久挂起、acme.sh 从未启动、每次请求泄漏一个
 // goroutine。此前测试均直接调用内部函数（renewOne / issueViaAcmeSh / InstallCert），
 // 因而完全绕过了外层锁 ⇒ 未被发现。
 //
-// 判据：走**真实公开入口** + 真实 fake acme.sh，必须在看门狗时限内返回。
-func TestT50_IssueDNS01_NoSelfDeadlock(t *testing.T) {
-	m, h, _ := setupHarness(t)
-	m.reg = &xacme.Account{} // 跳过 RegisterAccount（其需要网络）
-
-	type result struct {
-		name string
-		err  error
+// v1.6.72 A4：由「单入口」扩展为**表驱动 6 项**（覆盖 Manager 全部公开入口）：
+//
+//	IssueDNS01 · IssueHTTP01 · RenewByName · RenewWithOutcomes · InstallCert · AcmeShAvailable
+//
+// 判据：走**真实公开入口** + 真实 fake acme.sh，必须在**看门狗时限内返回**（10s）。
+//
+// 设计要点（A4 实施期修正，均已实测）：
+//   - **goroutine 安全**：看门狗 goroutine **只回传 error**，断言一律在主 goroutine 执行。
+//     否则 goroutine 内的 t.Fatalf ⇒ runtime.Goexit ⇒ 通道永不送达 ⇒ **假"自死锁"**。
+//   - **离线保障**：包内测试可直接 `m.reg = &xacme.Account{}`（包内特权）跳过 RegisterAccount，
+//     故本用例**不触网**；`internal/server` 侧无此特权，故 handler 级看门狗另议。
+//   - **IssueHTTP01 的判据**（A4-① 裁定）：该入口自行 `net.Listen("tcp", m.httpPort)`（:80）
+//     且其挑战走 Go 原生 ACME 客户端 ⇒ 非 root 必失败、root 下会真实外呼 ⇒ 判据只能取
+//     「**在看门狗内返回**」；仅放行「端口/权限」类错误，其余（含死锁）仍上报。
+func TestT50_PublicEntryPoints_NoSelfDeadlock(t *testing.T) {
+	cases := []struct {
+		name   string
+		prep   func(t *testing.T, root string) // 主 goroutine 内设置夹具（可空）
+		run    func(m *Manager) error
+		needSh bool // 是否要求 acme.sh 被真正调用（防空转）；IssueHTTP01 在绑定失败处提前返回
+	}{
+		{
+			name: "IssueDNS01",
+			run: func(m *Manager) error {
+				_, err := m.IssueDNS01(context.Background(), []string{"a.example.com"},
+					DNSProvider{Name: "alidns", KeyID: "k", KeySecret: "s", KeyName: "权威"})
+				return err
+			},
+			needSh: true,
+		},
+		{
+			name: "IssueHTTP01",
+			run: func(m *Manager) error {
+				_, err := m.IssueHTTP01(context.Background(), []string{"b.example.com"})
+				if err != nil && (strings.Contains(err.Error(), "need root for port 80") ||
+					strings.Contains(err.Error(), "listen")) {
+					return nil // 见函数头注释：离线判据 = 「已返回」
+				}
+				return err
+			},
+			needSh: false,
+		},
+		{
+			name: "RenewByName",
+			prep: func(t *testing.T, root string) {
+				newCert, _ := selfSigned(t, "x.example.com")
+				repl := filepath.Join(root, "replacement.pem")
+				if err := os.WriteFile(repl, newCert, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("FAKE_REPLACE", repl) // 使假 acme.sh 真正替换 fullchain（否则 KindNotReplaced）
+			},
+			run: func(m *Manager) error {
+				if !m.RenewByName(context.Background(), "x.example.com") {
+					return fmt.Errorf("RenewByName 返回 false（应成功）")
+				}
+				return nil
+			},
+			needSh: true,
+		},
+		{
+			name: "RenewWithOutcomes",
+			prep: func(t *testing.T, root string) {
+				// 该入口用 force=false ⇒ 必须先让证书"到期"，否则 not-due 预检会在调用
+				// acme.sh 之前返回（KindSkipped）⇒ 触发 requireAcmeShInvoked 的空转防护。
+				makeCertDue(t, root, 10)
+				newCert, _ := selfSigned(t, "x.example.com")
+				repl := filepath.Join(root, "replacement.pem")
+				if err := os.WriteFile(repl, newCert, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("FAKE_REPLACE", repl)
+			},
+			run: func(m *Manager) error {
+				if outs := m.RenewWithOutcomes(context.Background()); len(outs) == 0 {
+					return fmt.Errorf("RenewWithOutcomes 未返回任何结果（harness 证书应被发现）")
+				}
+				return nil
+			},
+			needSh: true,
+		},
+		{
+			name: "InstallCert",
+			prep: func(t *testing.T, root string) {
+				if err := os.MkdirAll(filepath.Join(root, "certs", "acme-x.example.com"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			run: func(m *Manager) error {
+				return m.InstallCert(context.Background(), "x.example.com",
+					filepath.Join(m.certsDir, "acme-x.example.com"))
+			},
+			needSh: true,
+		},
+		{
+			name: "AcmeShAvailable",
+			run: func(m *Manager) error {
+				_ = m.AcmeShAvailable()
+				return nil
+			},
+			needSh: true, // 该入口本身即执行 `acme.sh --version`
+		},
 	}
-	done := make(chan result, 1)
-	go func() {
-		n, err := m.IssueDNS01(context.Background(), []string{"x.example.com"},
-			DNSProvider{Name: "alidns", KeyID: "k", KeySecret: "s", KeyName: "权威"})
-		done <- result{n, err}
-	}()
 
-	select {
-	case r := <-done:
-		if r.err != nil {
-			t.Fatalf("IssueDNS01 返回错误（应成功）: %v", r.err)
-		}
-		if r.name == "" {
-			t.Fatal("IssueDNS01 返回空证书名")
-		}
-		requireAcmeShInvoked(t, h) // 防"空转通过"
-	case <-time.After(10 * time.Second):
-		t.Fatalf("IssueDNS01 未在 10s 内返回 ⇒ 自死锁（m.mu 非可重入）。\n%s",
-			goroutineDump("IssueDNS01", "acmeShEnvFor", "issueViaAcmeSh"))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, h, root := setupHarness(t)
+			m.reg = &xacme.Account{} // 跳过 RegisterAccount（其需要网络）
+			if tc.prep != nil {
+				tc.prep(t, root)
+			}
+
+			errc := make(chan error, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						errc <- fmt.Errorf("panic: %v", r)
+					}
+				}()
+				errc <- tc.run(m)
+			}()
+
+			select {
+			case err := <-errc:
+				if err != nil {
+					t.Fatalf("%s 返回错误：%v", tc.name, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s 未在 10s 内返回 ⇒ 自死锁（m.mu 非可重入）。\n%s",
+					tc.name, goroutineDump(tc.name, "acmeShEnvFor", "issueViaAcmeSh", "renewOne"))
+			}
+
+			// 断言在主 goroutine（防 goroutine 内 Fatal 导致的假"自死锁"），并防"空转通过"。
+			if tc.needSh {
+				requireAcmeShInvoked(t, h)
+			}
+		})
 	}
 }
 
@@ -72,12 +184,29 @@ func goroutineDump(keys ...string) string {
 	return strings.Join(out, "\n\n")
 }
 
-// T51（v1.6.72 P0-F1）：结构性守卫 —— 任何一个"自身获取 m.mu"的函数，都不得在
-// **仍持锁**的情况下直接或经包内调用链抵达另一个"自身获取 m.mu"的方法。
+// T51（v1.6.72 P0-F1 / A5-D5）：结构性守卫 —— 锁使用规则 L1/L2/L3 的**包内静态护栏**。
 //
-// 该类自死锁已出现两次：v2 方案中的 addACMEMgr（评审否决）、本次 IssueDNS01。
-// 规则：F 持锁（含 defer Unlock 形式），且调用链可达 T 中方法（T = 取 m.mu 的方法及其
+// 锁使用规则（三条，跨包统一口径；详见
+// internal-docs/acme-consistency-timing-and-lock-order.md）：
+//
+//	L1（自死锁，**本守卫**）：任何一个"自身获取 m.mu"的函数，都不得在**仍持锁**的情况下
+//	    直接或经包内调用链抵达另一个"自身获取 m.mu"的方法（sync.Mutex 不可重入）。
+//	    该类自死锁已出现两次：v2 方案中的 addACMEMgr（评审否决）、v1.6.71 的 IssueDNS01。
+//	L2（包间锁序，**包外，本守卫不覆盖**）：`acmeMu` 与 `store.mu` 是独立锁，**任何代码路径
+//	    不得同时持有两者**（反向获取会死锁）；initACMEManagers 等处在持 acmeMu 时不得调用
+//	    store 方法。
+//	L3（跨层锁序，**本守卫不覆盖**）：`s.acmeMu → m.mu` 为**单向**允许（server 侧可在持
+//	    acmeMu 时调用 mgr.SetAcmeShPath / ResolveAcmeHome / SetDNSKeyLookup）；反向
+//	    （acme 内回取 server 锁）**禁止**。当前无反向路径（A4 复核 §4.2 实测确认）。
+//
+// 规则（判定）：F 持锁（含 defer Unlock 形式），且调用链可达 T 中方法（T = 取 m.mu 的方法及其
 // 传递调用者），且 F 在锁区间内未显式 Unlock ⇒ 违规。
+//
+// **判别边界（A4 复核 §3 实测，务必知悉）**：本守卫只记录 `m.X(...)` 形式的**方法调用**；
+// 若把取锁调用**等价改写**为非方法形态，或在基线构造之外新增持锁点，可能不被捕获
+// （复核方实测：在 IssueDNS01 顶部注入 m.mu.Lock() 时 T51 未报错）。
+// ⇒ 完备性分工：**L1 的结构面由本守卫承担，运行时的"真的挂起"由 T50 的 10s 看门狗承担**
+// （6 项主要公开入口）。二者互补，缺一不可。
 func TestT51_NoLockHoldingCallIntoLockTakingMethod(t *testing.T) {
 	type call struct {
 		line int

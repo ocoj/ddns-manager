@@ -84,6 +84,10 @@ jobs:
         run: |
           cd build
           mv ddns-manager ddns-manager-v${VER}-linux-amd64
+          # v1.6.72 P9：Manager 的 .sha256 必须在**版本化改名之后**生成，
+          # 否则哈希的是未版本化名 `ddns-manager`，与附件名不符（校验必然不一致）。
+          # 格式与既有 3 个 Agent 一致：**纯哈希**（`awk '{print $1}'`，无文件名）。
+          sha256sum ddns-manager-v${VER}-linux-amd64 | awk '{print $1}' > ddns-manager-v${VER}-linux-amd64.sha256
           mv node-agent-linux-amd64 node-agent-v${VER}-linux-amd64
           mv node-agent-linux-amd64.sha256 node-agent-v${VER}-linux-amd64.sha256
           mv node-agent-linux-arm64 node-agent-v${VER}-linux-arm64

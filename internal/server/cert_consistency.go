@@ -206,6 +206,9 @@ func (s *Server) auditBundleConsistency(name string, b *store.CertBundle, meta m
 		}
 		s.logMgr.Log("cert", "证书一致性不可判定", detail, lvl)
 	case v == pfxNeedsRebuild:
+		// v1.6.72 P4/G-1：把"很可能的外部写入"写进 detail —— 该告警本身已按状态签名去重
+		// （I23），故仅扩写文案、**不新增审计行**。
+		detail = detail + "；疑似外部写入（PEM/PFX 不同源：bundle 内的 PEM 与 PFX 不是同一张证书）"
 		s.logMgr.Log("cert", "证书内容不一致", detail, "warning")
 	default:
 		// Leaves are identical. Chain-length differences are informational only

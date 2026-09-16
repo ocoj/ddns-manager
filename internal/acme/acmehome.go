@@ -112,12 +112,75 @@ func acmeHomePositionCheck(p HomeProbe, dir string) (bool, string, string) {
 	if len(tmpLike) == 0 {
 		tmpLike = tmpLikeDirs
 	}
-	for _, d := range tmpLike {
-		if dir == d || strings.HasPrefix(dir, d+"/") {
-			return true, "位于公共可写目录 " + d, ""
+	// v1.6.72 P1/R-E（A 形态）：路径层存在**自有**符号链接、且解析后落在公共可写前缀 ⇒ 拒绝。
+	// 与 D 形态（他人所有符号链接，由 foreignSymlinkInPath 处理）区分：本分支只处理自有链接，
+	// 以免遮蔽"他人所有"的归因文本（T48e 断言，C1 收口）。
+	if hasLink, linkPath := selfSymlinkInPath(p, dir); hasLink {
+		if real, err := p.EvalSymlinks(dir); err == nil {
+			for _, d := range tmpLike {
+				if real == d || strings.HasPrefix(real, d+"/") {
+					return false, "", fmt.Sprintf(
+						"路径层 %s 是自有符号链接，解析后落在公共可写目录 %s", linkPath, d)
+				}
+			}
 		}
 	}
-	return true, "", ""
+	// B 形态（C4 既有语义）：**字面**路径落在公共可写前缀 ⇒ 采用 + 强告警（T48b/T48c 依赖该语义）。
+	warn := ""
+	for _, d := range tmpLike {
+		if dir == d || strings.HasPrefix(dir, d+"/") {
+			warn = "位于公共可写目录 " + d
+			break
+		}
+	}
+	// 注：C 形态（祖先组/other 可写）**不在此处**返回告警 —— 位置告警会参与"启发式来源 ⇒ 跳过"的
+	// 判定（decideHomeCandidate），而 /tmp、/home 等常见祖先是组可写的 ⇒ 会把合法的启发式 home
+	// （如 binary-dir 推导）误判为跳过（T40 实测回归）。故 C 形态改为在 decideHomeCandidate 中
+	// **仅对显式来源**附加为信息性强告警（见该函数），不改变任何 adopt/skip 判定。
+	return true, warn, ""
+}
+
+// selfSymlinkInPath 检查路径任一层是否为**自有**（uid == p.UID）的符号链接。
+// 他人所有的符号链接由 foreignSymlinkInPath 负责（保持既有归因文本与 T48e 断言）。
+func selfSymlinkInPath(p HomeProbe, dir string) (bool, string) {
+	cur := ""
+	for _, seg := range strings.Split(dir, "/") {
+		if seg == "" {
+			continue
+		}
+		cur += "/" + seg
+		fi, err := p.Lstat(cur)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		if sys, ok := fi.Sys().(*syscall.Stat_t); ok && int(sys.Uid) == p.UID {
+			return true, cur
+		}
+	}
+	return false, ""
+}
+
+// ancestorGroupWritable 检查 dir 的**祖先链**（不含 dir 自身）是否存在 group/other 可写层。
+func ancestorGroupWritable(p HomeProbe, dir string) string {
+	cur := ""
+	segs := strings.Split(dir, "/")
+	for i, seg := range segs {
+		if seg == "" {
+			continue
+		}
+		cur += "/" + seg
+		if i == len(segs)-1 {
+			break // 不含 dir 自身（由 acmeHomeHealth 负责）
+		}
+		fi, err := p.Stat(cur)
+		if err != nil {
+			continue
+		}
+		if sys, ok := fi.Sys().(*syscall.Stat_t); ok && sys.Mode&0o022 != 0 {
+			return fmt.Sprintf("祖先目录 %s 对 group/other 可写", cur)
+		}
+	}
+	return ""
 }
 
 // warnSuffix 把位置/体检告警并入"采用"说明；"强告警"字样同时供审计与测试断言。
@@ -259,6 +322,20 @@ func decideHomeCandidate(p HomeProbe, c homeCandidate) (bool, string, string, bo
 			return false, "", fmt.Sprintf("[%s] %s 体检不通过：%s ⇒ 拒绝", c.Source, dir, fatalReason), true
 		}
 		return false, "", fmt.Sprintf("[%s] %s 体检不通过：%s ⇒ 跳过", c.Source, dir, fatalReason), false
+	}
+	// v1.6.72 P1/R-E：C 形态（祖先链 group/other 可写）**仅对显式来源**附加为信息性强告警 ——
+	// 不改变 adopt/skip 判定（启发式来源在 /tmp、/home 等组可写祖先下必须仍可采纳，见 T40）。
+	if c.Explicit {
+		if w := ancestorGroupWritable(p, dir); w != "" {
+			if warn == "" {
+				warn = w
+			} else {
+				warn = warn + "；" + w
+			}
+		}
+	}
+	if warn == "" && posWarn != "" {
+		warn = posWarn
 	}
 	if warn != "" {
 		if !c.Explicit {

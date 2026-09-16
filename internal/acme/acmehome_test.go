@@ -568,3 +568,71 @@ func TestT48e_Home_ForeignSymlinkInAncestors(t *testing.T) {
 		t.Errorf("trace 应说明符号链接问题：%v", res.Trace)
 	}
 }
+
+// ── v1.6.72 P1/R-E：自有符号链接可绕过位置体检（A 形态） ──
+
+// T52a [D]：路径层存在**自有**符号链接、且解析后落在公共可写前缀 ⇒ **必须拒绝**。
+// 修复前（仅拦"他人所有"符号链接 + 按字面前缀比对）会放行本用例。
+func TestT52a_Home_SelfSymlinkResolvedIntoTmpLike_Rejected(t *testing.T) {
+	p := fakeProbe{uid: 1000, hasCerts: false,
+		ents: map[string]fakeDirEnt{
+			"/srv":                {isDir: true, mode: 0o755, uid: 1000},
+			"/srv/link":           {isDir: true, mode: 0o700, uid: 1000, symlink: true}, // 自有符号链接
+			"/tmp":                {isDir: true, mode: 0o1777, uid: 0},
+			"/tmp/x":              {isDir: true, mode: 0o700, uid: 1000},
+			"/tmp/x/account.conf": {mode: 0o600, uid: 1000},
+		},
+		evalOut: map[string]string{"/srv/link": "/tmp/x"},
+	}.probe()
+	p.TmpLike = []string{"/tmp"}
+
+	res := ResolveAcmeHome(p, "", "/srv/link", "") // 显式来源（env）
+	if res.OK() {
+		t.Fatalf("自有符号链接解析后落入公共可写前缀时必须拒绝（R-E），got %q", res.Home)
+	}
+	if !traceHas(res.Trace, "符号链接") {
+		t.Errorf("trace 应说明符号链接问题：%v", res.Trace)
+	}
+}
+
+// T52b：无符号链接、路径干净 ⇒ **采用**（且 trace 不应出现"符号链接"）。
+func TestT52b_Home_CleanPath_Adopted(t *testing.T) {
+	p := fakeProbe{uid: 1000, hasCerts: false,
+		ents: map[string]fakeDirEnt{
+			"/opt":                   {isDir: true, mode: 0o755, uid: 0},
+			"/opt/acme":              {isDir: true, mode: 0o700, uid: 1000},
+			"/opt/acme/account.conf": {mode: 0o600, uid: 1000},
+		},
+		evalOut: map[string]string{},
+	}.probe()
+	p.TmpLike = []string{"/definitely-not-tmp"}
+
+	res := ResolveAcmeHome(p, "", "/opt/acme", "")
+	if !res.OK() {
+		t.Fatalf("干净路径必须采用，trace=%v", res.Trace)
+	}
+	if traceHas(res.Trace, "符号链接") {
+		t.Errorf("干净路径不应出现符号链接告警：%v", res.Trace)
+	}
+}
+
+// T52c：**祖先链** group/other 可写（C 形态）⇒ **采用 + 强告警**（不得 fatal；保住 T48b/T48c 语义）。
+func TestT52c_Home_AncestorGroupWritable_AdoptedWithStrongWarn(t *testing.T) {
+	p := fakeProbe{uid: 1000, hasCerts: false,
+		ents: map[string]fakeDirEnt{
+			"/w":                   {isDir: true, mode: 0o775, uid: 1000}, // 组可写祖先
+			"/w/acme":              {isDir: true, mode: 0o700, uid: 1000},
+			"/w/acme/account.conf": {mode: 0o600, uid: 1000},
+		},
+		evalOut: map[string]string{},
+	}.probe()
+	p.TmpLike = []string{"/definitely-not-tmp"}
+
+	res := ResolveAcmeHome(p, "", "/w/acme", "")
+	if !res.OK() {
+		t.Fatalf("组可写祖先必须「采用 + 强告警」而非拒绝，trace=%v", res.Trace)
+	}
+	if !traceHas(res.Trace, "强告警") {
+		t.Errorf("trace 应含强告警（祖先组可写）：%v", res.Trace)
+	}
+}

@@ -85,15 +85,21 @@ func TestInstallerFingerprintMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("指纹查询失败: %v", err)
 	}
-	if exists2 { t.Error("新节点不应存在") }
-	if fp2 != "" { t.Errorf("新节点指纹应为空: got %s", fp2) }
+	if exists2 {
+		t.Error("新节点不应存在")
+	}
+	if fp2 != "" {
+		t.Errorf("新节点指纹应为空: got %s", fp2)
+	}
 
 	localFP, _ := generateFingerprint()
 	if localFP == existingFingerprint {
 		t.Skip("本地指纹与测试指纹意外匹配，跳过")
 	}
 	t.Logf("本地指纹: %s, 服务端指纹: %s", localFP, existingFingerprint)
-	if localFP == fp { t.Error("不同机器的指纹不应相同") }
+	if localFP == fp {
+		t.Error("不同机器的指纹不应相同")
+	}
 }
 
 // ========== T4: install.bat 模板版本替换 ==========

@@ -12,7 +12,8 @@ import (
 // getMachineID returns a stable machine identifier on non-Windows platforms.
 //
 // Linux: /etc/machine-id (systemd-generated, survives reboots, stable across kernel updates)
-//   fallback: /var/lib/dbus/machine-id
+//
+//	fallback: /var/lib/dbus/machine-id
 //
 // Other (macOS/BSD/etc): hostname + OS/arch as fallback
 func getMachineID() (string, error) {

@@ -50,7 +50,8 @@ func init() {
 
 // ========== main ==========
 // ⚠️ 安装接口契约: 本文档定义的所有行为受 docs/安装接口规范.md 约束
-//    安装器 v1.0.0 冻结 — 修改接口逻辑需升级安装器主版本号
+//
+//	安装器 v1.0.0 冻结 — 修改接口逻辑需升级安装器主版本号
 func main() {
 	managerURL := flag.String("manager-url", "", "manager server URL")
 	nodeName := flag.String("name", "", "node name")
@@ -399,7 +400,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	if nodeName == "" {
 		fmt.Print("  节点名称 (如 win-pc): ")
 		var err error
-		nodeName, err = readLine(reader)  // v1.5.29: 修复变量遮蔽 — 用 = 而非 :=
+		nodeName, err = readLine(reader) // v1.5.29: 修复变量遮蔽 — 用 = 而非 :=
 		if err != nil {
 			fmt.Println("\n  [FAIL] 取消安装")
 			os.Exit(1)
@@ -483,7 +484,7 @@ func runInstall(managerURL, nodeName, installDir string, insecure bool) {
 	// ================================================================
 	stepWait(4, 5, "安装 Agent")
 	// 使用符号链接名下载（服务器上指向最新版 agent），本地直接存为 node-agent
-	downloadName := "node-agent-" + goos + "-" + goarch  // 服务器符号链接名
+	downloadName := "node-agent-" + goos + "-" + goarch   // 服务器符号链接名
 	agentBin := filepath.Join(agentBaseDir, "node-agent") // 直接存为 node-agent
 	if runtime.GOOS == "windows" {
 		downloadName += ".exe"

@@ -14,29 +14,33 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
-        with: { go-version: '1.25' }
+        # N-21（v1.6.73 收口）：**CI 与生产构建工具链统一为 go1.26.4**。
+        # 此前 CI=go1.25 vs 生产=go1.26.4 ⇒ CI 产物与部署件**永远哈希不同**，
+        # 外部无法用 CI 产物做逐字节校验（「哈希差异 ≠ 代码差异」被工具链污染）。
+        # 注意：统一工具链后仍须**同侧归一**才可逐字节比对（`-buildvcs` 的 VCS 戳受
+        # checkout 状态影响：干净提交 vs 脏工作区，见 N-15/N-17）。
+        with: { go-version: '1.26.4' }
 
-      # v1.6.73 S2（A-7 升级）：**全仓 gofmt 门禁** —— 显式枚举 + 数量断言 + 排除项独立断言。
+      # v1.6.73 S2（A-7 升级）+ N-21 收口：**全仓 gofmt 门禁（无排除项）**。
       # 取代 v1.6.72 的"仅改动文件"过渡门禁（其空列表形态曾为空真，见 N-9 教训）。
-      # 口径：排除 cmd/_deprecated（已知漂移，仅记录，不格式化 —— 该目录不参与发布链）。
-      - name: gofmt (repo-wide, excl. cmd/_deprecated)
+      # cmd/_deprecated 已格式化干净 ⇒ **排除名单取消**（该项此前是唯一排除项）。
+      # 非空真守卫：先对枚举到的文件数做下限断言，避免"枚举为空 ⇒ gofmt -l 空跑 ⇒ 恒绿"。
+      - name: gofmt (repo-wide, no exclusion)
         run: |
           set -euo pipefail
-          OUT="$(gofmt -l internal/ cmd/ || true)"
-          EXC="$(printf '%s\n' "$OUT" | grep '^cmd/_deprecated/' | grep . || true)"
-          REST="$(printf '%s\n' "$OUT" | grep -v '^cmd/_deprecated/' | grep . || true)"
-          EXC_N="$(printf '%s\n' "${EXC:-}" | grep -c . || true)"
-          echo "排除项（cmd/_deprecated，仅记录）: ${EXC_N}"
-          [ -n "$EXC" ] && echo "$EXC"
-          if [ -n "$REST" ]; then
-            echo "::error::以下文件未通过 gofmt（应为 0）："; echo "$REST"; exit 1
-          fi
-          # 排除项必须仍存在：若 _deprecated 被删/改名，本门禁的排除断言将静默失效 ⇒ 显式失败
-          if [ "${EXC_N:-0}" -lt 1 ]; then
-            echo "::error::cmd/_deprecated 漂移项为 0 —— 目录可能被删除/改名，本门禁需同步更新（防静默失效）"
+          FILES="$(git ls-files '*.go')"
+          FN="$(printf '%s\n' "$FILES" | grep -c . || true)"
+          if [ "${FN:-0}" -lt 50 ]; then
+            echo "::error::仅枚举到 ${FN} 个 .go 文件（异常，期望 ~100）⇒ 门禁可能空真"
             exit 1
           fi
-          echo "✅ gofmt：非排除漂移 0；排除项 ${EXC_N}（已知）"
+          OUT="$(gofmt -l $FILES || true)"
+          if [ -n "$OUT" ]; then
+            echo "::error::以下 $(( $(printf '%s\n' "$OUT" | grep -c .) )) 个文件未通过 gofmt（应为 0）："
+            echo "$OUT"
+            exit 1
+          fi
+          echo "✅ gofmt：全仓 ${FN} 个 .go 文件，漂移 0（无排除项）"
 
       - run: go test ./...
 
@@ -47,7 +51,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
-        with: { go-version: '1.25' }
+        # N-21（v1.6.73 收口）：同上，统一 go1.26.4（此前为 1.25）
+        with: { go-version: '1.26.4' }
 
       - name: Read version
         id: ver

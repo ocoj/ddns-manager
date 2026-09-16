@@ -16,11 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        # N-21（v1.6.73 #4）：**CI 工具链必须显式记录**。当前 CI = go1.25，而生产部署件由
-        # **go1.26.4** 构建（见 ~/ddns-backups/v1.6.72-deployed-*/PROVENANCE.txt 的 toolchain 字段）
-        # ⇒ 二者产物**不可逐字节比较**（「哈希差异 ≠ 代码差异」；size 相同也不构成证据）。
-        # 「统一 Go 版本」列为**独立项**（未在本批实施，登记）。
-        with: { go-version: '1.25' }
+        # N-21（v1.6.73 **收口**）：CI 工具链已**统一为 go1.26.4**，与生产部署件同工具链
+        # （见 ~/ddns-backups/*/PROVENANCE.txt 的 toolchain / ci_toolchain 字段，二者现相同）。
+        # ⇒ 此前「CI 产物与部署件永远哈希不同」的干扰已消除；但逐字节比对仍须**同侧归一**
+        #   （`-buildvcs=false`），因 VCS 戳受 checkout 状态影响（干净提交 vs 脏工作区，N-15/N-17）。
+        with: { go-version: '1.26.4' }
 
       - name: Read version
         id: ver
@@ -136,8 +136,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
-        # N-21（v1.6.73 #4）：同 build job —— CI 工具链 go1.25（与生产 go1.26.4 不一致，见 build job 处注释）
-        with: { go-version: '1.25' }
+        # N-21（v1.6.73 收口）：同 build job —— 统一 go1.26.4
+        with: { go-version: '1.26.4' }
 
       - name: Build binary
         env: { VER: "${{ needs.build.outputs.version }}" }

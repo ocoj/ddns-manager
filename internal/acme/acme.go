@@ -100,13 +100,14 @@ type Manager struct {
 	acmeShPath  string
 	// v1.6.71 N1: acme.sh home 由代码显式固定（I26/I27/I28），不再依赖父环境 HOME。
 	// 解析失败时 acmeHomeErr != nil —— 所有 acme.sh 调用一律拒绝执行（fail-fast）。
-	acmeHome      string
-	acmeHomeTrace []string
-	acmeHomeErr   error
-	keyType       KeyType
-	eab           *EAB
-	logBuf        strings.Builder // collects operation output for debug
-	lastRenewErr  error
+	acmeHome        string
+	acmeHomeTrace   []string
+	acmeHomeCaveats []string // B-2：非判定性提示（仅告警，不参与判定）
+	acmeHomeErr     error
+	keyType         KeyType
+	eab             *EAB
+	logBuf          strings.Builder // collects operation output for debug
+	lastRenewErr    error
 
 	// v1.6.70: DNS 凭据解析器（由 server 注入；解析期间不持 m.mu，见 I6）
 	keyLookup DNSKeyLookup
@@ -432,6 +433,7 @@ func (m *Manager) ResolveAcmeHome(hasCerts bool) error {
 
 	m.mu.Lock()
 	m.acmeHomeTrace = append([]string(nil), res.Trace...)
+	m.acmeHomeCaveats = append([]string(nil), res.Caveats...)
 	if res.OK() {
 		m.acmeHome, m.acmeHomeErr = res.Home, nil
 	} else {
@@ -470,6 +472,14 @@ func (m *Manager) AcmeHomeTrace() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.acmeHomeTrace...)
+}
+
+// AcmeHomeCaveats 返回 home 解析过程中的**非判定性**提示（仅告警；不参与 adopt/skip 判定）。
+// v1.6.73 B-2：供 Server 侧写入独立审计通道（warning 级），与「解析失败」通道物理隔离。
+func (m *Manager) AcmeHomeCaveats() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.acmeHomeCaveats...)
 }
 
 // AcmeHomeConfigured 表示 acme.sh home 是否已成功固定（I26）。

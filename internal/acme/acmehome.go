@@ -66,6 +66,9 @@ func DefaultHomeProbe(hasCerts bool) HomeProbe {
 type HomeResolution struct {
 	Home  string   // 采用时的绝对路径；fail-fast 时为空
 	Trace []string // 逐候选判定说明（写入审计，便于运维一次定位）
+	// Caveats 为**非判定性**提示（仅告警，不参与 adopt/skip 判定）。
+	// v1.6.73 B-2：仅供 Server 侧消费（审计/通知），不改变任何判定结果（N-26）。
+	Caveats []string
 }
 
 // OK 表示已确定可用 home。
@@ -323,17 +326,9 @@ func decideHomeCandidate(p HomeProbe, c homeCandidate) (bool, string, string, bo
 		}
 		return false, "", fmt.Sprintf("[%s] %s 体检不通过：%s ⇒ 跳过", c.Source, dir, fatalReason), false
 	}
-	// v1.6.72 P1/R-E：C 形态（祖先链 group/other 可写）**仅对显式来源**附加为信息性强告警 ——
-	// 不改变 adopt/skip 判定（启发式来源在 /tmp、/home 等组可写祖先下必须仍可采纳，见 T40）。
-	if c.Explicit {
-		if w := ancestorGroupWritable(p, dir); w != "" {
-			if warn == "" {
-				warn = w
-			} else {
-				warn = warn + "；" + w
-			}
-		}
-	}
+	// v1.6.73 B-2：C 形态（祖先链 group/other 可写）**不再并入 warn** ——
+	// warn 会参与 adopt/skip 判定（见下方 `if warn != ""`）；本项改为在**采纳后**
+	// 由 ResolveAcmeHome 收集进 `Caveats`（非判定通道），且对**全部来源**（含启发式）生效。
 	if warn == "" && posWarn != "" {
 		warn = posWarn
 	}
@@ -383,6 +378,12 @@ func ResolveAcmeHome(p HomeProbe, acmeShPath, envWorkDir, homeEnv string) HomeRe
 		}
 		if use {
 			res.Home = home
+			// v1.6.73 B-2：**非判定性**提示（仅告警）—— 采纳后收集，写入审计/通知通道。
+			// 「强告警」字样与既有 T52c 断言一致（该字样原由 adopt 消息携带，现由告警通道携带）。
+			if w := ancestorGroupWritable(p, home); w != "" {
+				res.Caveats = append(res.Caveats, w)
+				res.Trace = append(res.Trace, "[home 告警] "+w+"（强告警）")
+			}
 			return res
 		}
 	}

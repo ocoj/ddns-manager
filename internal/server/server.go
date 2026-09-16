@@ -52,6 +52,9 @@ type Server struct {
 	acmeWireMu       sync.Mutex
 	acmeWireIssues   []acmeWireIssue
 	acmeHomeNotified bool
+	// acmeCaveatSeen 只增不退：键为 (action, detail)，其中 detail 含 home 路径。
+	// 前提 = home 路径集合有界（实际 ≤ 候选数），故不构成内存泄漏；tick 场景亦不会增长。
+	acmeCaveatSeen map[string]bool
 	// system info cache (updated by background goroutine)
 	sysInfoMu    sync.RWMutex
 	sysInfoCache map[string]interface{}
@@ -82,7 +85,10 @@ type Server struct {
 // the lock would self-deadlock — invariant I10).
 // acmeWireIssue 记录一次 acme.sh 接线问题：在 acmeMu 锁内只做收集，
 // 统一在锁外落审计（锁顺序规范）。
-type acmeWireIssue struct{ action, detail string }
+type acmeWireIssue struct {
+	action, detail string
+	level          string // "error"（默认/接线故障）或 "warning"（B-2 非判定性提示）
+}
 
 // detectLocalACMECerts 判定本地是否已管理 ACME 证书（用于候选判定表的"语义分层"）。
 // ⚠️ 必须在不持有 acmeMu 时调用。
@@ -120,11 +126,11 @@ func (s *Server) resolveAcmeShPath() (string, *acmeWireIssue) {
 	if p := strings.TrimSpace(s.cfg.Cert.Provider); p != "" {
 		switch {
 		case !filepath.IsAbs(p):
-			return s.lookPathAcmeSh(), &acmeWireIssue{"cert.provider 非绝对路径，已回退 PATH 查找", p}
+			return s.lookPathAcmeSh(), &acmeWireIssue{action: "cert.provider 非绝对路径，已回退 PATH 查找", detail: p, level: "error"}
 		default:
 			fi, err := os.Stat(p)
 			if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
-				return s.lookPathAcmeSh(), &acmeWireIssue{"cert.provider 不可用（不存在/非文件/不可执行），已回退 PATH 查找", p}
+				return s.lookPathAcmeSh(), &acmeWireIssue{action: "cert.provider 不可用（不存在/非文件/不可执行），已回退 PATH 查找", detail: p, level: "error"}
 			}
 			return p, nil
 		}
@@ -155,12 +161,38 @@ func (s *Server) attachAcmeShPath(mgr *acme.Manager) {
 	if err := mgr.ResolveAcmeHome(s.acmeHasCerts); err != nil {
 		s.reportAcmeWireIssue("acme.sh home 解析失败（已拒绝执行 acme.sh）", err.Error())
 	}
+	// v1.6.73 B-2：非判定性提示走独立 warning 通道（跨 flush 去重），不影响 fail-fast 判定。
 }
 
 func (s *Server) reportAcmeWireIssue(action, detail string) {
 	s.acmeWireMu.Lock()
 	s.acmeWireIssues = append(s.acmeWireIssues, acmeWireIssue{action: action, detail: detail})
 	s.acmeWireMu.Unlock()
+}
+
+// reportAcmeCaveats 记录**非判定性**提示（B-2）：一律 warning 级，
+// 且**跨 flush 去重**（同一 (action, detail) 只记一次），避免每次 attach 重复噪音。
+// 注：去重键含 detail（其中含 home 路径）⇒ 不同路径各自成条（正确）。
+func (s *Server) reportAcmeCaveats(caveats []string) {
+	if len(caveats) == 0 {
+		return
+	}
+	s.acmeWireMu.Lock()
+	defer s.acmeWireMu.Unlock()
+	if s.acmeCaveatSeen == nil {
+		s.acmeCaveatSeen = map[string]bool{}
+	}
+	for _, c := range caveats {
+		if strings.TrimSpace(c) == "" {
+			continue
+		}
+		key := "home 告警\x00" + c
+		if s.acmeCaveatSeen[key] {
+			continue
+		}
+		s.acmeCaveatSeen[key] = true
+		s.acmeWireIssues = append(s.acmeWireIssues, acmeWireIssue{action: "home 告警", detail: c, level: "warning"})
+	}
 }
 
 // flushAcmeWireIssues 在锁外落审计，并对 home 解析失败做**一次性**通知（Q4）。
@@ -182,8 +214,12 @@ func (s *Server) flushAcmeWireIssues() {
 			continue
 		}
 		seen[key] = true
+		lvl := is.level
+		if lvl == "" {
+			lvl = "error"
+		}
 		if s.logMgr != nil {
-			s.logMgr.Log("acme", is.action, is.detail, "error")
+			s.logMgr.Log("acme", is.action, is.detail, lvl)
 		}
 		if strings.Contains(is.action, "home 解析失败") {
 			failFast, detail = true, is.detail
@@ -630,6 +666,13 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 // meta.dns_key cannot resolve its key precisely and degrades to the ambiguous
 // unique-match fallback.
 func (s *Server) startupAudit() {
+	// v1.6.73 B-2：统一采集各 manager 的**非判定性**提示（仅告警通道；不参与任何判定）。
+	// 采集点放在这里而非 attachAcmeShPath —— attach 保持"纯接线"，不改动既有审计时序（T49e 不变量）。
+	for _, cm := range s.acmeMgrs {
+		if cm != nil {
+			s.reportAcmeCaveats(cm.AcmeHomeCaveats())
+		}
+	}
 	unwired := 0
 	for _, mgr := range s.acmeMgrList() {
 		if mgr == nil || !mgr.KeyLookupConfigured() {

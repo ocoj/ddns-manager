@@ -269,6 +269,13 @@ func (s *Server) attachDNSKeyLookup(mgr *acme.Manager) {
 		}
 		return out
 	})
+	// v1.6.73 B-1 Slice 3b：PFX 口令解析器与 DNS Key **同挂载点**接线（4/4 覆盖）。
+	// 放在本函数内 ⇒ **不新增挂载点数量**（避开 AST 守卫 T49c 白名单）。
+	// 取值经 store 单一取值入口：pfx_password_enc 解密 ⇒ 明文兼容 ⇒ 默认；
+	// 解密失败返回错误（绝不静默回落默认口令）。
+	mgr.SetPFXPasswordResolver(func(meta map[string]interface{}) (string, error) {
+		return s.store.MetaPFXPassword(meta)
+	})
 }
 
 // lockBundleRebuild serialises PFX reconciliation for a single bundle (I18).
@@ -683,6 +690,15 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 // meta.dns_key cannot resolve its key precisely and degrades to the ambiguous
 // unique-match fallback.
 func (s *Server) startupAudit() {
+	// v1.6.73 B-1 Slice 3b：cert_consistency 的**纯函数**上下文（candidatePFXPasswords
+	// / consistencySignature / chainLengths / rebuildBundlePFX）无法访问 store ⇒ 经包级
+	// hook 接线到 store 的单一取值入口（解密优先 ⇒ 明文兼容 ⇒ 默认；解密失败报错）。
+	// 必须在任何一致性判定/重建之前完成 —— startupAudit 在 server.New 内一次性执行，
+	// 早于心跳与续期（生产唯一入口 cmd/manager/main.go:134）。
+	pfxPasswordResolverFn = func(meta map[string]interface{}) (string, error) {
+		return s.store.MetaPFXPassword(meta)
+	}
+
 	// v1.6.73 B-3：把 store 的受管键冲突回调接到 warning 审计（仅键名，跨 flush 去重）。
 	s.store.SetCertMetaConflictReporter(s.reportCertMetaConflict)
 

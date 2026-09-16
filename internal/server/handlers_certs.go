@@ -109,7 +109,20 @@ func (s *Server) handleGetCert(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(files)
 	// parse cert details
-	detail := map[string]interface{}{"name": name, "files": files, "hash": b.Hash, "pfx_password": b.PFXPassword}
+	// v1.6.73 B-1 Slice 3b：口令经 store **单一取值入口**（解密优先 ⇒ 明文兼容 ⇒
+	// 默认）。Slice 3a 起 `b.PFXPassword`（来自盘上明文键）恒为空 ⇒ 直读会让 UI
+	// 显示空口令（UI 真实消费该字段，契约不变 ⇒ 值必须仍然正确）。
+	// 解密失败时**不静默回默认**：记一条 error 审计并返回空值（可见），绝不展示一个
+	// 看似可用的错误口令。
+	pfxPw, pfxErr := s.store.BundlePFXPassword(b)
+	if pfxErr != nil {
+		if s.logMgr != nil {
+			s.logMgr.Log("cert", "PFX 口令解析失败",
+				fmt.Sprintf("bundle=%s detail 接口已置空口令: %v", name, pfxErr), "error")
+		}
+		pfxPw = ""
+	}
+	detail := map[string]interface{}{"name": name, "files": files, "hash": b.Hash, "pfx_password": pfxPw}
 	var certPEM []byte
 	for fn, content := range b.Files {
 		if strings.HasSuffix(strings.ToLower(fn), ".pem") || strings.HasSuffix(strings.ToLower(fn), ".crt") {

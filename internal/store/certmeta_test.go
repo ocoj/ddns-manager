@@ -67,8 +67,8 @@ func TestLoadCertMeta_ExtraFieldsSurviveSaveCertBundle(t *testing.T) {
 	if pw, _ := got["pfx_password"].(string); pw != "" {
 		t.Errorf("pfx_password 明文不得留存在盘上（B-1 落盘脱敏），实际 %q", pw)
 	}
-	if _, ok := got[pfxPasswordEncKey]; !ok {
-		t.Errorf("meta.json 必须含 %s（密文承载口令），keys=%v", pfxPasswordEncKey, got)
+	if _, ok := got[PFXPasswordEncKey]; !ok {
+		t.Errorf("meta.json 必须含 %s（密文承载口令），keys=%v", PFXPasswordEncKey, got)
 	}
 	if pw, err := st.BundlePFXPassword(&CertBundle{Name: "acme-x"}); err != nil || pw != "pw" {
 		t.Errorf("口令应经单一取值入口解回 pw，实际 %q err=%v", pw, err)

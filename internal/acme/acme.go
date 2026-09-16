@@ -111,6 +111,10 @@ type Manager struct {
 
 	// v1.6.70: DNS 凭据解析器（由 server 注入；解析期间不持 m.mu，见 I6）
 	keyLookup DNSKeyLookup
+	// v1.6.73 B-1 Slice 3b: PFX 口令解析器（由 server 注入）。Slice 3a 起落盘明文
+	// 口令恒为空，口令唯一来源是 meta.json 的密文 `pfx_password_enc` ⇒ acme 层
+	// 不得直读 meta 键，必须经此解析器（解析期间不持 m.mu，见 I6）。
+	pfxPasswordLookup PFXPasswordResolver
 	// v1.6.70: 同一证书的续期串行化（I13）；renewMu 仅保护 renewing 映射本身
 	renewMu  sync.Mutex
 	renewing map[string]*sync.Mutex
@@ -122,6 +126,17 @@ type Manager struct {
 
 // DNSKeyLookup returns a snapshot of the configured DNS keys, keyed by key name.
 type DNSKeyLookup func() map[string]*DNSProvider
+
+// PFXPasswordResolver resolves the PFX password that a bundle's PFX containers
+// must be regenerated with, given that bundle's meta.json content.
+//
+// v1.6.73 B-1 Slice 3b: after Slice 3a the on-disk plaintext password is always
+// empty, so the value can only be obtained by decrypting meta's `pfx_password_enc`.
+// The decryption lives in internal/store (purpose-scoped derived key), so the
+// resolver is injected by the server rather than implemented here. An error must
+// NOT be treated as "use the default" — that would re-encrypt the containers with
+// the wrong password and destroy the user's custom one.
+type PFXPasswordResolver func(meta map[string]interface{}) (string, error)
 
 // RenewKind classifies the outcome of a single certificate renewal.
 type RenewKind int
@@ -172,6 +187,46 @@ func (m *Manager) loadDNSKeys() map[string]*DNSProvider {
 		return nil
 	}
 	return fn()
+}
+
+// SetPFXPasswordResolver installs the PFX password resolver (B-1 Slice 3b). It is
+// called for every Manager through the same mount point as the DNS key resolver
+// (Server.attachDNSKeyLookup), so the mount-point count is unchanged.
+func (m *Manager) SetPFXPasswordResolver(fn PFXPasswordResolver) {
+	m.mu.Lock()
+	m.pfxPasswordLookup = fn
+	m.mu.Unlock()
+}
+
+// PFXPasswordResolverConfigured reports whether a PFX password resolver has been
+// installed. Used by tests to assert the wiring (injection ⑧: without the wiring
+// the acme read point must fall back to the default and fail its assertion).
+func (m *Manager) PFXPasswordResolverConfigured() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pfxPasswordLookup != nil
+}
+
+// resolvePFXPassword returns the password the PFX containers must be regenerated
+// with, for the given bundle meta. Precedence (B-1 Slice 3b):
+//
+//	resolver(meta)  →  明文 pfx_password（v1 兼容读）  →  mycrypto.DefaultPFXPassword
+//
+// The resolver is invoked with m.mu released (I6): it reaches the store, and the
+// store must never be entered while m.mu is held. A resolver error is returned to
+// the caller, never converted into the default password — the default may not be
+// the user's custom password, and using it would overwrite the stored one.
+func (m *Manager) resolvePFXPassword(meta map[string]interface{}) (string, error) {
+	m.mu.Lock()
+	fn := m.pfxPasswordLookup
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(meta)
+	}
+	if pw, ok := meta["pfx_password"].(string); ok && pw != "" {
+		return pw, nil // v1 兼容读（解析器未接线时的退路）
+	}
+	return mycrypto.DefaultPFXPassword, nil
 }
 
 // lockCert serialises renewals of a single certificate directory (I13).
@@ -1196,42 +1251,53 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 	certPEM := mycrypto.PickCertPEM(fileContents)
 
 	// C2: 先生成双 PFX 文件（Modern + Legacy），后续算 hash 时包含它们
-	// v1.5.36 C1: 从 meta.json 读取已存储的 PFX 密码，防止自动续签覆盖用户自定义密码
+	// v1.6.73 B-1 Slice 3b: 读取已存储的 PFX 口令（经**解析器**，见下方注释）——
+	// 防止自动续签覆盖用户自定义口令。
 	if certPEM != nil && keyPEM != nil {
-		// 继承已存储的 PFX 密码。
-		// 优先从 meta.json 读取（首次签发时持久化的），
-		// 其次从 Manager bundle 目录读取（handleACMEIssue 写入的）。
-		pfxPassword := mycrypto.DefaultPFXPassword
-		if pw, ok := metaMap["pfx_password"]; ok {
-			if pws, ok := pw.(string); ok && pws != "" {
-				pfxPassword = pws
-			}
-		}
-		if pfxPassword == mycrypto.DefaultPFXPassword {
+		// v1.6.73 B-1 Slice 3b：口令必须经**解析器**取值（resolver ⇒ 明文兼容 ⇒
+		// 默认），不再直读 meta 键。理由：Slice 3a 起落盘明文 `pfx_password` 恒为
+		// 空，口令的唯一磁盘来源是 Manager bundle meta.json 的密文
+		// `pfx_password_enc`，只有 store 的 purpose 派生密钥能解开。
+		//  ① 本函数读到的 certDir/meta.json 由 acme 侧写入（domains/issued/acme/
+		//     ca/…），**从不含口令键** ⇒ 这一步通常只得到默认值；
+		//  ② 口令的权威来源是 Manager bundle 目录（`acme-<certName>`）的 meta.json；
+		//  ③ 解析失败（密文损坏 / `.storage_key` 不符）⇒ **绝不用默认口令顶替**：
+		//     那会用错误口令重建 PFX 并下发，正好破坏本块「防止自动续签覆盖用户
+		//     自定义口令」的意图。此时跳过 PFX 重建、保留磁盘既有 PFX，并把失败
+		//     写进 acme 操作日志（可见、不静默）。
+		pfxPassword, pfxResolveErr := m.resolvePFXPassword(metaMap)
+		if pfxResolveErr == nil && pfxPassword == mycrypto.DefaultPFXPassword {
 			bundleDir := filepath.Join(filepath.Dir(certDir), "acme-"+filepath.Base(certDir))
 			if bundleData, err := os.ReadFile(filepath.Join(bundleDir, "meta.json")); err == nil {
 				var bundleMeta map[string]interface{}
 				if json.Unmarshal(bundleData, &bundleMeta) == nil {
-					if pw, ok := bundleMeta["pfx_password"]; ok {
-						if pws, ok := pw.(string); ok && pws != "" {
-							pfxPassword = pws
-						}
+					if pw, err := m.resolvePFXPassword(bundleMeta); err != nil {
+						pfxResolveErr = err
+					} else {
+						pfxPassword = pw
 					}
 				}
 			}
 		}
-		pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword)
-		if pfxErr != nil {
-			log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
+		if pfxResolveErr != nil {
+			log.Printf("[acme] PFX 口令解析失败 %s — 跳过 PFX 重建（保留既有口令，不用默认值顶替）: %v",
+				filepath.Base(certDir), pfxResolveErr)
+			m.AppendLog(fmt.Sprintf("PFX 口令解析失败 %s: %v（已跳过 PFX 重建，保留既有 PFX）\n",
+				filepath.Base(certDir), pfxResolveErr))
 		} else {
-			os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
-			fileContents["cert.pfx"] = pfxData
-			log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
-		}
-		if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
-			os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
-			fileContents["cert-modern.pfx"] = modernData
-			log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))
+			pfxData, pfxErr := mycrypto.GeneratePFX(certPEM, keyPEM, pfxPassword)
+			if pfxErr != nil {
+				log.Printf("[acme] PFX 重新生成失败 %s: %v", filepath.Base(certDir), pfxErr)
+			} else {
+				os.WriteFile(filepath.Join(certDir, "cert.pfx"), pfxData, 0o600)
+				fileContents["cert.pfx"] = pfxData
+				log.Printf("[acme] PFX(Legacy) 已重新生成: %s", filepath.Base(certDir))
+			}
+			if modernData, modernErr := mycrypto.GeneratePFXModern(certPEM, keyPEM, pfxPassword); modernErr == nil {
+				os.WriteFile(filepath.Join(certDir, "cert-modern.pfx"), modernData, 0o600)
+				fileContents["cert-modern.pfx"] = modernData
+				log.Printf("[acme] PFX(Modern) 已重新生成: %s", filepath.Base(certDir))
+			}
 		}
 	}
 

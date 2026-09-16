@@ -46,10 +46,29 @@ func (v pfxVerdict) String() string {
 	}
 }
 
+// pfxPasswordResolverFn resolves a bundle's PFX password from its meta map
+// (decrypt first ⇒ v1 plaintext ⇒ default). It is wired exactly once, in
+// Server.startupAudit, to store.MetaPFXPassword.
+//
+// v1.6.73 B-1 Slice 3b: the password consumers below (checkBundlePFXConsistency,
+// consistencySignature, chainLengths, rebuildBundlePFX) are pure functions with no
+// access to the store, so resolution enters through this package-level hook rather
+// than a threaded parameter. It is written once at startup and only read afterwards
+// (tests run serially) ⇒ there is no concurrent writer. Left nil — e.g. a unit test
+// calling the pure helpers directly — it degrades to the pre-B-1 behaviour
+// (plaintext meta + default only).
+var pfxPasswordResolverFn func(meta map[string]interface{}) (string, error)
+
 // candidatePFXPasswords returns the deduplicated, non-empty password candidates
-// in precedence order (bundle → meta → default), matching the inheritance order
-// used by acme.UpdateCertMeta.
-func candidatePFXPasswords(b *store.CertBundle, meta map[string]interface{}) []string {
+// in precedence order (bundle → meta plaintext → resolved/decrypted → default),
+// matching the inheritance order used by acme.UpdateCertMeta.
+//
+// v1.6.73 B-1 Slice 3b: Slice 3a removed the on-disk plaintext password, so for a
+// bundle written by SaveCertBundle the only usable candidate is the decrypted one.
+// A resolver failure is RETURNED rather than swallowed: rebuildBundlePFX takes
+// pws[0] and persists it, so silently falling back to the default would re-encrypt
+// the containers with the wrong password and destroy the user's custom one.
+func candidatePFXPasswords(b *store.CertBundle, meta map[string]interface{}) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	add := func(pw string) {
@@ -66,9 +85,16 @@ func candidatePFXPasswords(b *store.CertBundle, meta map[string]interface{}) []s
 		if pw, ok := meta["pfx_password"].(string); ok {
 			add(pw)
 		}
+		if pfxPasswordResolverFn != nil {
+			pw, err := pfxPasswordResolverFn(meta)
+			if err != nil {
+				return out, fmt.Errorf("解析 PFX 口令失败: %w", err)
+			}
+			add(pw)
+		}
 	}
 	add(mycrypto.DefaultPFXPassword)
-	return out
+	return out, nil
 }
 
 // decodePFXWithCandidates tries every password candidate and returns the leaf,
@@ -134,7 +160,11 @@ func (s *Server) checkBundlePFXConsistency(b *store.CertBundle, meta map[string]
 		return pfxNeedsRebuild, "fullchain.pem 与 cert.pem 的叶证书不一致", false
 	}
 
-	pws := candidatePFXPasswords(b, meta)
+	pws, pwErr := candidatePFXPasswords(b, meta)
+	if pwErr != nil {
+		// 口令解析失败 ⇒ 无法判定（hard ⇒ error 级审计，人工可介入）
+		return pfxUnverifiable, pwErr.Error(), true
+	}
 	for _, item := range []struct {
 		name string
 		data []byte
@@ -161,12 +191,17 @@ func consistencySignature(b *store.CertBundle, meta map[string]interface{}, v pf
 		h := sha256.Sum256(chain[0].Raw)
 		parts = append(parts, "fc="+hex.EncodeToString(h[:8])+fmt.Sprintf("/%d", len(chain)))
 	}
+	pws, pwErr := candidatePFXPasswords(b, meta)
 	for _, name := range []string{"cert.pfx", "cert-modern.pfx"} {
 		data := b.Files[name]
 		if len(data) == 0 {
 			continue
 		}
-		if leaf, caLen, _, err := decodePFXWithCandidates(data, candidatePFXPasswords(b, meta)); err == nil && leaf != nil {
+		if pwErr != nil {
+			parts = append(parts, name+"=unresolved")
+			continue
+		}
+		if leaf, caLen, _, err := decodePFXWithCandidates(data, pws); err == nil && leaf != nil {
 			h := sha256.Sum256(leaf.Raw)
 			parts = append(parts, name+"="+hex.EncodeToString(h[:8])+fmt.Sprintf("/%d", caLen+1))
 		} else {
@@ -238,7 +273,11 @@ func chainLengths(b *store.CertBundle, meta map[string]interface{}) (fcLen, lega
 	if fcLen == 0 {
 		return 0, 0, 0, false
 	}
-	pws := candidatePFXPasswords(b, meta)
+	pws, pwErr := candidatePFXPasswords(b, meta)
+	if pwErr != nil {
+		// 口令解析失败 ⇒ 各 PFX 的链长不可判定（仅 fullchain 已知）
+		return fcLen, 0, 0, false
+	}
 	for _, item := range []struct {
 		name string
 		dst  *int
@@ -271,7 +310,12 @@ func (s *Server) rebuildBundlePFX(b *store.CertBundle, meta map[string]interface
 	if len(fc) == 0 || len(key) == 0 {
 		return fmt.Errorf("缺少 fullchain.pem 或 privkey.pem")
 	}
-	pws := candidatePFXPasswords(b, meta)
+	pws, pwErr := candidatePFXPasswords(b, meta)
+	if pwErr != nil {
+		// 绝不以默认口令重建：那会用错误口令重写两个 PFX 容器，并把错误口令
+		// 回写进 meta（覆盖用户自定义口令）⇒ 拒绝重建，由调用方记 error 审计。
+		return fmt.Errorf("PFX 口令解析失败，拒绝以默认口令重建: %w", pwErr)
+	}
 	if len(pws) == 0 {
 		return fmt.Errorf("无可用 PFX 密码候选")
 	}

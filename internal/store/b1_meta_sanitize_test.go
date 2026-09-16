@@ -62,8 +62,8 @@ func TestT70d_PFXPasswordSanitizedOnDisk(t *testing.T) {
 	if raw == "" || strings.Contains(raw, pw) {
 		t.Errorf("meta.json 全文**不得**出现明文口令")
 	}
-	if _, ok := meta[pfxPasswordEncKey]; !ok {
-		t.Errorf("meta.json 必须含 %s（密文），keys=%v", pfxPasswordEncKey, keysOf(meta))
+	if _, ok := meta[PFXPasswordEncKey]; !ok {
+		t.Errorf("meta.json 必须含 %s（密文），keys=%v", PFXPasswordEncKey, keysOf(meta))
 	}
 	// ③ 单一入口可解回
 	env2 := &CertBundle{Name: "acme-3a"} // 空口令 ⇒ 走 meta 解密路径
@@ -86,7 +86,7 @@ func TestT70e_ExistingEncPreservedOnLaterSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, _ := b1ReadMetaRaw(t, dir, "acme-3b")
-	enc1, _ := first[pfxPasswordEncKey].(string)
+	enc1, _ := first[PFXPasswordEncKey].(string)
 	if enc1 == "" {
 		t.Fatal("首写应产生 enc")
 	}
@@ -95,7 +95,7 @@ func TestT70e_ExistingEncPreservedOnLaterSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, raw2 := b1ReadMetaRaw(t, dir, "acme-3b")
-	if _, ok := second[pfxPasswordEncKey]; !ok {
+	if _, ok := second[PFXPasswordEncKey]; !ok {
 		t.Errorf("既有 enc 必须原样保留（非受管键语义）；raw=%s", raw2)
 	}
 	if s, _ := second["pfx_password"].(string); s != "" {

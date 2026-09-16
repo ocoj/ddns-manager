@@ -364,13 +364,18 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if matched && !forcePush {
 			continue
 		}
-		// 存量上传证书从未存过 PFXPassword（上传 Bug 历史遗留）。
-		// 首次心跳时检测到空密码 → 自动回填默认密码。
-		// 这些证书的 PFX 文件在创建时就是用默认密码加密的，
-		// 回填是陈述事实，hash 不变，不触发无意义部署。
-		if bundle.PFXPassword == "" {
-			bundle.PFXPassword = mycrypto.DefaultPFXPassword
-			s.store.SaveCertBundle(bundle)
+		// v1.6.73 B-1 Slice 3b：口令必须经 store **单一取值入口**（解密优先 ⇒ 明文
+		// 兼容 ⇒ 默认）。Slice 3a 起落盘明文恒为空 ⇒ 不能再以 `PFXPassword == ""`
+		// 判定「需回填默认口令」：那会把用户自定义口令强制回默认（心跳用错口令推送）✗。
+		// 存量上传证书「用默认口令」的旧语义现由取值入口天然承担（无 enc/明文 ⇒
+		// 默认），无需再写盘回填。
+		// 解析失败（密文损坏 / `.storage_key` 不符）⇒ **跳过本次下发**，绝不用默认
+		// 口令顶替（否则 Agent 会以错口令导入 PFX）。
+		pfxPw, pfxErr := s.store.BundlePFXPassword(bundle)
+		if pfxErr != nil {
+			s.logMgr.LogWithNode("cert", "PFX 口令解析失败", nodeID,
+				fmt.Sprintf("bundle=%s 已跳过本次下发: %v", binding.BundleName, pfxErr), "error")
+			continue
 		}
 		encFiles := map[string]string{}
 		for name, content := range bundle.Files {
@@ -396,12 +401,14 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: targetPath,
 			ReloadServices: binding.ReloadServices,
-			PFXPassword:    bundle.PFXPassword,
+			PFXPassword:    pfxPw,
 		})
-		// v1.5.22 H3: PFX 密码为空时记录日志
-		if bundle.PFXPassword == "" {
+		// v1.5.22 H3（v1.6.73 B-1 Slice 3b 口径更新）：口令为**默认值**时记录日志。
+		// 原判据 `PFXPassword == ""` 在落盘脱敏后恒为空（恒真 ⇒ 语义失真），
+		// 现改为与解析结果比较 —— 仍如实告知 Agent 将使用默认口令。
+		if pfxPw == mycrypto.DefaultPFXPassword {
 			s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
-				fmt.Sprintf("bundle=%s (无PFX密码,Agent将用默认值) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
+				fmt.Sprintf("bundle=%s (使用默认PFX密码,Agent将用默认值) hash=%s...", binding.BundleName, bundle.Hash[:14]), "warning")
 		}
 		s.logMgr.LogWithNode("cert", "证书已下发", nodeID,
 			fmt.Sprintf("bundle=%s hash=%s... path=%s", binding.BundleName, bundle.Hash[:14], targetPath), "success")

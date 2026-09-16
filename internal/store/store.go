@@ -392,7 +392,7 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 		if cerr != nil {
 			return cerr
 		}
-		extra[pfxPasswordEncKey] = ct
+		extra[PFXPasswordEncKey] = ct
 	}
 	disk := *b
 	disk.PFXPassword = ""
@@ -1729,10 +1729,10 @@ func (s *ManagerStore) MetaPFXPassword(meta map[string]interface{}) (string, err
 	if meta == nil {
 		return mycrypto.DefaultPFXPassword, nil
 	}
-	if enc, ok := meta[pfxPasswordEncKey].(string); ok && enc != "" {
+	if enc, ok := meta[PFXPasswordEncKey].(string); ok && enc != "" {
 		pt, err := s.decryptWithPurpose(purposePFXPassword, enc)
 		if err != nil {
-			return "", fmt.Errorf("解密 %s 失败（purpose=%s）：%w", pfxPasswordEncKey, purposePFXPassword, err)
+			return "", fmt.Errorf("解密 %s 失败（purpose=%s）：%w", PFXPasswordEncKey, purposePFXPassword, err)
 		}
 		return string(pt), nil
 	}
@@ -1761,8 +1761,12 @@ func (s *ManagerStore) BundlePFXPassword(b *CertBundle) (string, error) {
 	return s.MetaPFXPassword(meta)
 }
 
-// pfxPasswordEncKey 为 PFX 口令的**密文字段名**（B-1 起由 extra 通道写入 ⇒ 非受管键 ⇒ 原样保留）。
-const pfxPasswordEncKey = "pfx_password_enc"
+// PFXPasswordEncKey 为 PFX 口令的**密文字段名**（B-1 起由 extra 通道写入 ⇒ 非受管键 ⇒ 原样保留）。
+//
+// v1.6.73 B-1 Slice 3b: 导出以供 server / acme 层判键（Slice 3a 后落盘明文恒为空，
+// 读取方必须知道密文键名才能取值）。判**键是否存在**，绝不做文本匹配 ——
+// `pfx_password` 是 `pfx_password_enc` 的前缀（N-31）。
+const PFXPasswordEncKey = "pfx_password_enc"
 
 // ResetCaches clears in-memory node/DNS-key caches so next reads reload from disk.
 func (s *ManagerStore) ResetCaches() {

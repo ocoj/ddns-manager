@@ -28,10 +28,11 @@ import (
 // v1.6.10 L3: 两个独立标志, 防止并发场景下 loadNodesToCache 设置 cacheLoaded=true
 // 导致 dnsKeysCache 被误标记为已加载 (两个 load 函数之前共享一个 cacheLoaded)
 type ManagerStore struct {
-	mu               sync.RWMutex
-	dir              string
-	storageKey       []byte                       // v1.6.56: at-rest encryption key for ACME secrets
-	certMetaConflict func(bundleName, key string) // v1.6.73 B-3：受管键冲突回调（仅键名）
+	mu                       sync.RWMutex
+	dir                      string
+	storageKey               []byte                             // v1.6.56: at-rest encryption key for ACME secrets
+	certMetaConflict         func(bundleName, key string)       // v1.6.73 B-3：受管键冲突回调（仅键名）
+	dnsKeysMigrationReporter func(backupPath string, err error) // v1.6.73 B-1：迁移回调
 
 	// In-memory caches — populated on first read, kept in sync by write methods.
 	// Protected by mu (reads hold RLock, writes hold Lock).
@@ -600,7 +601,138 @@ func (s *ManagerStore) BumpDNSKeysVersion() error {
 }
 
 // loadDNSKeysToCache reads dns_keys.json into memory cache (called under write lock).
+
+// ── v1.6.73 B-1：DNS 凭据落盘加密（v2 信封）与迁移 ────────────────────────────
+
+const (
+	// dnsKeysEncKey 为信封哨兵键：存在 ⇒ 该文件是 v2 密文（**判键不判文本**，N-31）。
+	dnsKeysEncKey = "__ddnskey_enc"
+	// dnsKeysEnvelopeVersion 为当前信封版本（未来换算法/派生参数时递增）。
+	dnsKeysEnvelopeVersion = 2
+)
+
+// dnsKeysEnvelope 是 dns_keys.json 的 v2 落盘形态（仅含密文，无任何明文键值）。
+type dnsKeysEnvelope struct {
+	Version int    `json:"__ddnskey_enc"`
+	Cipher  string `json:"ct"`
+}
+
+// readDNSKeysFile 读取 dns_keys.json：v2 ⇒ 解密（**解密失败即报错，不静默回落/不降级空跑**）；
+// v1 明文 ⇒ 返回 wasEncrypted=false（由调用方决定迁移）。文件不存在 ⇒ (nil, false, nil)。
+func (s *ManagerStore) readDNSKeysFile() (map[string]*model.DNSKeyRecord, bool, error) {
+	data, err := os.ReadFile(s.dnsKeysPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, false, fmt.Errorf("dns_keys.json 不是合法 JSON：%w", err)
+	}
+	if _, isV2 := probe[dnsKeysEncKey]; !isV2 {
+		keys := map[string]*model.DNSKeyRecord{}
+		if err := json.Unmarshal(data, &keys); err != nil {
+			return nil, false, fmt.Errorf("dns_keys.json（v1 明文）解析失败：%w", err)
+		}
+		return keys, false, nil
+	}
+	var env dnsKeysEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return nil, true, fmt.Errorf("dns_keys.json（v2 信封）解析失败：%w", err)
+	}
+	pt, err := s.decryptWithPurpose(purposeDNSKeys, env.Cipher)
+	if err != nil {
+		// 密钥丢失/不匹配/密文损坏 —— 一律 fail-fast（**不降级为空集合**，否则会静默丢凭据）
+		return nil, true, fmt.Errorf("解密 dns_keys.json 失败（purpose=%s；.storage_key 是否变更/丢失？）：%w", purposeDNSKeys, err)
+	}
+	keys := map[string]*model.DNSKeyRecord{}
+	if err := json.Unmarshal(pt, &keys); err != nil {
+		return nil, true, fmt.Errorf("dns_keys.json 明文结构非法：%w", err)
+	}
+	return keys, true, nil
+}
+
+// loadDNSKeysToCache 取代旧 loader：v2 走解密；v1 明文先**迁移**（备份原件后重写为 v2）再加载。
 func (s *ManagerStore) loadDNSKeysToCache() error {
+	keys, encrypted, err := s.readDNSKeysFile()
+	if err != nil {
+		return err
+	}
+	if !encrypted && keys != nil {
+		// 迁移：**不就地覆盖** —— 先落备份（0600，原件字节），再写 v2。
+		// 备份写入失败 ⇒ 放弃迁移并继续用明文数据（不阻断服务），但记审计。
+		if data, rerr := os.ReadFile(s.dnsKeysPath()); rerr == nil {
+			backup := fmt.Sprintf("%s.bak.%s", s.dnsKeysPath(), time.Now().UTC().Format("20060102T150405Z"))
+			// 注意：本函数由 LoadDNSKeys **持 s.mu 调用** ⇒ 此处**绝不可再取 s.mu**
+			// （sync.Mutex 非可重入；历史上 P0-F1 即此形态 ⇒ 自死锁）。直接读字段。
+			cb := s.dnsKeysMigrationReporter
+			if werr := atomicWriteFile(backup, data, 0o600); werr != nil {
+				if cb != nil {
+					cb("", werr)
+				}
+			} else {
+				if cb != nil {
+					cb(backup, nil)
+				}
+				_ = s.saveDNSKeysLocked(keys) // 无锁版本：调用方已持锁
+			}
+		}
+	}
+	if keys == nil {
+		keys = map[string]*model.DNSKeyRecord{}
+	}
+	s.dnsKeysCache = keys
+	s.dnsKeysCacheLoaded = true
+	return nil
+}
+
+// saveDNSKeysLocked 与 SaveDNSKeys 同语义，但**不取锁**（供已持锁的迁移路径调用）。
+func (s *ManagerStore) saveDNSKeysLocked(keys map[string]*model.DNSKeyRecord) error {
+	plain, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	ct, err := s.encryptWithPurpose(purposeDNSKeys, plain)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(map[string]interface{}{dnsKeysEncKey: dnsKeysEnvelopeVersion, "ct": ct}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(s.dnsKeysPath(), data, 0o600)
+}
+
+// SetDNSKeysMigrationReporter 注册迁移回调（backupPath 为空表示备份失败，err 非 nil）。
+func (s *ManagerStore) SetDNSKeysMigrationReporter(f func(backupPath string, err error)) {
+	s.mu.Lock()
+	s.dnsKeysMigrationReporter = f
+	s.mu.Unlock()
+}
+
+// ValidateDNSKeysDecryptable 供部署前 preflight 与启动自检使用：对**现存密文**真解一次 +
+// 结构校验（令牌 ≡ 密文自身可解性 + 结构合法，而非比对任何明文令牌）。
+// 返回 (状态, error)：状态形如 "v2-ok" / "v1-plaintext" / "absent"。
+func (s *ManagerStore) ValidateDNSKeysDecryptable() (string, error) {
+	keys, encrypted, err := s.readDNSKeysFile()
+	if err != nil {
+		return "", err
+	}
+	if keys == nil {
+		return "absent", nil
+	}
+	if !encrypted {
+		return "v1-plaintext", nil
+	}
+	if keys == nil {
+		return "", fmt.Errorf("解密成功但结构为空")
+	}
+	return "v2-ok", nil
+}
+
+func (s *ManagerStore) loadDNSKeysToCacheLegacy() error {
 	keys := map[string]*model.DNSKeyRecord{}
 	data, err := os.ReadFile(s.dnsKeysPath())
 	if os.IsNotExist(err) {
@@ -664,7 +796,17 @@ func (s *ManagerStore) LoadDNSKeys() (map[string]*model.DNSKeyRecord, error) {
 func (s *ManagerStore) SaveDNSKeys(keys map[string]*model.DNSKeyRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := json.MarshalIndent(keys, "", "  ")
+	// v1.6.73 B-1：**DNS 凭据落盘必须为密文**（此前为明文 0600 ⇒ 文件副本即可直接使用）。
+	// 信封形态：{"__ddnskey_enc":2,"ct":"<base64 GCM,内含 nonce>"}；purpose = dns-keys-at-rest。
+	plain, err := json.MarshalIndent(keys, "", "  ")
+	if err != nil {
+		return err
+	}
+	ct, err := s.encryptWithPurpose(purposeDNSKeys, plain)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(map[string]interface{}{dnsKeysEncKey: dnsKeysEnvelopeVersion, "ct": ct}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -2,5 +2,5 @@
 
 package main
 
-func useModernPFX() bool { return false }
+func useModernPFX() bool   { return false }
 func isIISInstalled() bool { return false }

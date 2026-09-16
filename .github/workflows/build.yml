@@ -16,29 +16,27 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: '1.25' }
 
-      # S1-0 过渡门禁（v1.6.72 补丁 v2）：只检查**本次改动**的 .go 文件是否 gofmt 干净。
-      # 说明（N-9 教训）：`gofmt -l <空列表>` 恒为真 ⇒ 必须先构造**非空**文件列表并显式断言，
-      #   否则该门禁在"无改动/未提交"时形同不存在（空真）。
-      # 待 S2 升级为「全仓漂移白名单 + 数量断言（显式枚举，排除 cmd/_deprecated）」。
-      - name: gofmt (changed files only)
+      # v1.6.73 S2（A-7 升级）：**全仓 gofmt 门禁** —— 显式枚举 + 数量断言 + 排除项独立断言。
+      # 取代 v1.6.72 的"仅改动文件"过渡门禁（其空列表形态曾为空真，见 N-9 教训）。
+      # 口径：排除 cmd/_deprecated（已知漂移，仅记录，不格式化 —— 该目录不参与发布链）。
+      - name: gofmt (repo-wide, excl. cmd/_deprecated)
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          else
-            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          OUT="$(gofmt -l internal/ cmd/ || true)"
+          EXC="$(printf '%s\n' "$OUT" | grep '^cmd/_deprecated/' | grep . || true)"
+          REST="$(printf '%s\n' "$OUT" | grep -v '^cmd/_deprecated/' | grep . || true)"
+          EXC_N="$(printf '%s\n' "${EXC:-}" | grep -c . || true)"
+          echo "排除项（cmd/_deprecated，仅记录）: ${EXC_N}"
+          [ -n "$EXC" ] && echo "$EXC"
+          if [ -n "$REST" ]; then
+            echo "::error::以下文件未通过 gofmt（应为 0）："; echo "$REST"; exit 1
           fi
-          FILES="$(git diff --name-only "$BASE" HEAD -- '*.go' | grep -v '^cmd/_deprecated/' || true)"
-          if [ -z "$FILES" ]; then
-            echo "::notice::本次无改动的 .go 文件 ⇒ 该门禁无判别对象（**显式声明**，非静默通过）"
-            exit 0
+          # 排除项必须仍存在：若 _deprecated 被删/改名，本门禁的排除断言将静默失效 ⇒ 显式失败
+          if [ "${EXC_N:-0}" -lt 1 ]; then
+            echo "::error::cmd/_deprecated 漂移项为 0 —— 目录可能被删除/改名，本门禁需同步更新（防静默失效）"
+            exit 1
           fi
-          echo "检查文件："; echo "$FILES"
-          OUT="$(gofmt -l $FILES)"
-          if [ -n "$OUT" ]; then
-            echo "::error::以下改动文件未通过 gofmt："; echo "$OUT"; exit 1
-          fi
-          echo "✅ gofmt 通过（改动文件 ${FILES}）"
+          echo "✅ gofmt：非排除漂移 0；排除项 ${EXC_N}（已知）"
 
       - run: go test ./...
 

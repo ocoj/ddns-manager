@@ -35,8 +35,8 @@ type Config struct {
 	NotifyCertExpiry    bool `json:"notify_cert_expiry"`
 	// notification cooldown in minutes (0 = no cooldown, -1 = use default)
 	HeartbeatFailCooldown int `json:"heartbeat_fail_cooldown"` // 默认 60
-	AuthFailCooldown      int `json:"auth_fail_cooldown"`       // 默认 30
-	UnknownNodeCooldown   int `json:"unknown_node_cooldown"`    // 默认 30
+	AuthFailCooldown      int `json:"auth_fail_cooldown"`      // 默认 30
+	UnknownNodeCooldown   int `json:"unknown_node_cooldown"`   // 默认 30
 }
 
 func (c *Config) now() time.Time {

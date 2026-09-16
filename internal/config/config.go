@@ -18,7 +18,7 @@ type ManagerConfig struct {
 }
 
 type ServerConfig struct {
-	Listen       string `yaml:"listen"`        // :9877
+	Listen       string `yaml:"listen"` // :9877
 	TLSCert      string `yaml:"tls_cert"`
 	TLSKey       string `yaml:"tls_key"`
 	RedirectPort string `yaml:"redirect_port"` // HTTP→HTTPS redirect port
@@ -26,13 +26,13 @@ type ServerConfig struct {
 }
 
 type CertConfig struct {
-	Provider          string `yaml:"provider"`           // acme.sh path
+	Provider          string `yaml:"provider"`            // acme.sh path
 	RenewalDaysBefore int    `yaml:"renewal_days_before"` // 30
 }
 
 type DDNSConfig struct {
 	GithubReleaseURL string `yaml:"github_release_url"`
-	LatestVersion    string `yaml:"latest_version"`     // enforced ddns-go version
+	LatestVersion    string `yaml:"latest_version"` // enforced ddns-go version
 }
 
 type AgentConfig struct {

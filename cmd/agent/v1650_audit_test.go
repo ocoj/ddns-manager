@@ -90,7 +90,6 @@ func TestCertutilErrorCode_LongLine(t *testing.T) {
 	}
 }
 
-
 // ─── M2: collectCertHashes 键名一致性 ───
 
 // TestCollectCertHashes_KeyFormat v1.6.50 M2: 验证 collectCertHashes 返回目录路径键。
@@ -173,7 +172,6 @@ func TestCollectCertHashes_MissingDir(t *testing.T) {
 	}
 }
 
-
 // ─── H1: SanitizeCertDirName 在 Agent 端调用 ───
 
 // TestH1_SanitizeCertDirName_AgentCallSite v1.6.50 H1: 确认 agent 端通过 model.SanitizeCertDirName 调用。
@@ -197,7 +195,6 @@ func TestH1_SanitizeCertDirName_AgentCallSite(t *testing.T) {
 		t.Errorf("model.SanitizeCertDirName(\"*.*.test.com\") = %q, want \"_._.test.com\"", got)
 	}
 }
-
 
 // ─── H2: LogBuffer Peek/Commit 去重逻辑 ───
 

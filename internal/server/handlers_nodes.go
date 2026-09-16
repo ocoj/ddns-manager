@@ -69,8 +69,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Status.AgentVersion = req.Status.AgentVersion
 	rec.Status.CertHashes = req.Status.CertHashes
-	rec.Status.CertErrors = req.Status.CertErrors // v1.5.31 C1: 结构化存储证书部署错误, 供 WebUI 展示
-	rec.Status.CertPath = req.Status.CertPath     // v1.5.37: 持久化证书路径, 供 WebUI 获取 Agent CertPath
+	rec.Status.CertErrors = req.Status.CertErrors       // v1.5.31 C1: 结构化存储证书部署错误, 供 WebUI 展示
+	rec.Status.CertPath = req.Status.CertPath           // v1.5.37: 持久化证书路径, 供 WebUI 获取 Agent CertPath
 	rec.Status.IISBoundSites = req.Status.IISBoundSites // v1.6.0: IIS 绑定快照
 	oldStatus := ""
 	if rec.Status.DDNSHealth != nil {
@@ -126,9 +126,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			st = "success"
 		}
 		from := oldStatus
-		if from == "" { from = "—" }
+		if from == "" {
+			from = "—"
+		}
 		msg := h.StatusMsg
-		if msg == "" { msg = h.Status }
+		if msg == "" {
+			msg = h.Status
+		}
 		s.logMgr.LogWithNode("节点", "健康状态变更", "管理端",
 			fmt.Sprintf("%s 健康状态变更 %s → %s (%s)", nodeID, from, h.Status, msg), st)
 	}
@@ -145,7 +149,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if len(h.FailedDomains) > 0 {
 			detail += fmt.Sprintf(" failed=%s", strings.Join(h.FailedDomains, ","))
 		}
-		// v1.5.33+v1.6.45 H4: 心跳 detail 仅含简短摘要 (LastError/FailedDomains), 
+		// v1.5.33+v1.6.45 H4: 心跳 detail 仅含简短摘要 (LastError/FailedDomains),
 		// 完整错误详情仅通过独立日志记录 (下方 LogWithNode), 避免 events.log 中重复存储 500 字符 detail
 		if h.LastErrorDetail != "" {
 			detail += fmt.Sprintf(" detail(len=%d)", len(h.LastErrorDetail))
@@ -218,7 +222,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 					}
 					if t, err := time.Parse(time.RFC3339, job.Triggered); err == nil {
 						if job.TargetVer == agentCfg.LatestVersion && now.Sub(t) < 10*time.Minute {
-						// v1.5.22 H1: 退避窗口 10 分钟 (≥2 心跳周期)
+							// v1.5.22 H1: 退避窗口 10 分钟 (≥2 心跳周期)
 							shouldPush = false
 						}
 					}
@@ -253,8 +257,8 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 						// v1.5.36 C3: 携带 SHA256 校验和, Agent 下载后验证完整性
 						checksum := s.store.GetAgentBinarySHA256(safeName)
 						resp.AgentUpdate = &model.AgentUpdate{Version: agentCfg.LatestVersion, URL: "dl/" + safeName, Checksum: checksum}
-					s.logMgr.LogWithNode("upgrade", "升级已推送", nodeID,
-						fmt.Sprintf("ver=%s url=dl/%s sum=%s", agentCfg.LatestVersion, safeName, truncate(checksum, 12)), "info")
+						s.logMgr.LogWithNode("upgrade", "升级已推送", nodeID,
+							fmt.Sprintf("ver=%s url=dl/%s sum=%s", agentCfg.LatestVersion, safeName, truncate(checksum, 12)), "info")
 						if agentCfg.UpgradeState == nil {
 							agentCfg.UpgradeState = make(map[string]store.UpgJob)
 						}
@@ -392,7 +396,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 			CertHash: bundle.Hash, BundleName: binding.BundleName,
 			Files: encFiles, TargetPath: targetPath,
 			ReloadServices: binding.ReloadServices,
-			PFXPassword: bundle.PFXPassword,
+			PFXPassword:    bundle.PFXPassword,
 		})
 		// v1.5.22 H3: PFX 密码为空时记录日志
 		if bundle.PFXPassword == "" {
@@ -413,7 +417,6 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 // ── admin: dashboard ──
 
-
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, err := s.store.LoadNodes()
 	if err != nil {
@@ -422,7 +425,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	// 超时检测: 超过5分钟未心跳的节点标记为不在线
 	// （dashboard用handleStats独立计算，这里统一节点列表口径）
-	now := s.nowInTZ()  // v1.5.22 H4: 使用配置时区，与心跳时间源一致
+	now := s.nowInTZ() // v1.5.22 H4: 使用配置时区，与心跳时间源一致
 	for _, n := range nodes {
 		if n.Status.DDNSHealth != nil && now.Sub(n.LastSeen) > 5*time.Minute {
 			n.Status.DDNSHealth.Running = false
@@ -480,6 +483,7 @@ func (s *Server) handleApproveNode(w http.ResponseWriter, r *http.Request) {
 	s.logMgr.LogWithNode("节点", "已审批", id, "", "info")
 	jsonOK(w, map[string]string{"status": "approved"})
 }
+
 // classifyLogStatus 根据日志内容判定事件状态：含失败/错误关键词 → error，否则 info。
 func classifyLogStatus(line string) string {
 	lower := strings.ToLower(line)
@@ -531,9 +535,9 @@ func (s *Server) handleSaveNodeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// v1.6.54: 先自动填充 deploy_path，再校验 — 填充后绝对路径可在 certBase 白名单内通过
-// 空路径 → 自动生成 {CertPath}/{sanitized_BundleName}
-// 已有路径含 * → 替换为 _ (防止旧配置循环回带)
-if rec.Status.CertPath != "" {
+	// 空路径 → 自动生成 {CertPath}/{sanitized_BundleName}
+	// 已有路径含 * → 替换为 _ (防止旧配置循环回带)
+	if rec.Status.CertPath != "" {
 		for i := range req.CertBindings {
 			if req.CertBindings[i].BundleName == "" {
 				continue
@@ -587,7 +591,7 @@ if rec.Status.CertPath != "" {
 	//   前端发非空数组 ([...])  → 替换所有绑定
 	// CertBindings 优先于 ConfigYAML 中的 cert_bindings 用于证书推送判定
 	if req.CertBindings != nil && len(req.CertBindings) == 0 {
-		rec.CertBindings = nil  // 显式清空
+		rec.CertBindings = nil // 显式清空
 	} else if req.CertBindings != nil {
 		rec.CertBindings = req.CertBindings
 	}
@@ -652,6 +656,7 @@ if rec.Status.CertPath != "" {
 
 	jsonOK(w, map[string]string{"status": "saved"})
 }
+
 // handleNodeFingerprint returns the fingerprint of a registered node.
 // Public endpoint (no auth) — used by the installer to check for name conflicts
 // and distinguish same-machine reinstall (fingerprint match) from name hijacking.
@@ -705,10 +710,10 @@ func computeBundleHash(files map[string][]byte) string {
 // renderDDNSConfig converts NodeConfigRequest JSON into ddns-go YAML config.
 // dnsConfItem mirrors ddns-go config file structure for safe YAML marshaling.
 type dnsConfItem struct {
-	DNS  dnsAuth    `yaml:"dns"`
-	IPv4 ipConf     `yaml:"ipv4"`
-	IPv6 ipv6Conf   `yaml:"ipv6"`
-	TTL  string     `yaml:"ttl"`
+	DNS  dnsAuth  `yaml:"dns"`
+	IPv4 ipConf   `yaml:"ipv4"`
+	IPv6 ipv6Conf `yaml:"ipv6"`
+	TTL  string   `yaml:"ttl"`
 }
 
 type dnsAuth struct {
@@ -746,11 +751,11 @@ type ddnsGoConfig struct {
 // v1.6.48: 支持新格式 dns_confs 数组，每段独立 DNS Key/IPv4/IPv6/TTL
 func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, hash string, err error) {
 	type nc struct {
-		DNSKeyName  string             `json:"dns_key_name"`
-		DnsProvider string             `json:"dns_provider"`
-		TTL         string             `json:"ttl"`
-		IPv4        model.IPv4Config   `json:"ipv4"`
-		IPv6        model.IPv6Config   `json:"ipv6"`
+		DNSKeyName  string              `json:"dns_key_name"`
+		DnsProvider string              `json:"dns_provider"`
+		TTL         string              `json:"ttl"`
+		IPv4        model.IPv4Config    `json:"ipv4"`
+		IPv6        model.IPv6Config    `json:"ipv6"`
 		DnsConfs    []model.DnsConfItem `json:"dns_confs"`
 	}
 	var c nc
@@ -811,8 +816,12 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 			}
 		}
 		// v1.6.49: 防呆 — 启用但无域名 → 视为未启用
-		if v4.Enable && len(v4Domains) == 0 { v4.Enable = false }
-		if v6.Enable && len(v6Domains) == 0 { v6.Enable = false }
+		if v4.Enable && len(v4Domains) == 0 {
+			v4.Enable = false
+		}
+		if v6.Enable && len(v6Domains) == 0 {
+			v6.Enable = false
+		}
 		return &dnsConfItem{
 			DNS: dnsAuth{Name: dk.Provider, ID: dk.AccessKeyID, Secret: dk.AccessKeySecret},
 			IPv4: ipConf{Enable: v4.Enable, GetType: v4.GetType, URL: v4.URL,
@@ -880,7 +889,6 @@ func renderDDNSConfig(jsonCfg string, s *store.ManagerStore) (yamlOut string, ha
 	hash = "sha256:" + fmt.Sprintf("%x", sha256.Sum256([]byte(yamlOut)))
 	return
 }
-
 
 // detectPlatform 将节点硬件信息映射为 Go 标准平台字符串 (goos-goarch)。
 // 用于 manifest (agent_manifest.json) 键查找和 AgentUpdate.URL 构建。
@@ -1074,4 +1082,3 @@ func validateCertBinding(b model.CertBinding, certBase string) error {
 	}
 	return nil
 }
-

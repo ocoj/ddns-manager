@@ -459,7 +459,7 @@ func TestInvalidateConfigHashesForDNSKey(t *testing.T) {
 	// DNS key: "阿里云-生产" (provider alidns)
 	keys := map[string]*model.DNSKeyRecord{
 		"阿里云-生产": {Name: "阿里云-生产", Provider: "alidns"},
-		"腾讯云":     {Name: "腾讯云", Provider: "tencentcloud"},
+		"腾讯云":    {Name: "腾讯云", Provider: "tencentcloud"},
 	}
 	if err := s.SaveDNSKeys(keys); err != nil {
 		t.Fatalf("SaveDNSKeys: %v", err)
@@ -467,10 +467,10 @@ func TestInvalidateConfigHashesForDNSKey(t *testing.T) {
 
 	// 4 个节点: 新格式引用 / 旧格式 dns_key_name / 旧格式 dns_provider / 无关引用
 	nodes := map[string]*model.NodeRecord{
-		"node-new":         {ConfigYAML: `{"dns_confs":[{"dns_key":"阿里云-生产"}]}`, ConfigHash: "sha256:h1"},
-		"node-old-name":    {ConfigYAML: `{"dns_key_name":"阿里云-生产"}`, ConfigHash: "sha256:h2"},
+		"node-new":          {ConfigYAML: `{"dns_confs":[{"dns_key":"阿里云-生产"}]}`, ConfigHash: "sha256:h1"},
+		"node-old-name":     {ConfigYAML: `{"dns_key_name":"阿里云-生产"}`, ConfigHash: "sha256:h2"},
 		"node-old-provider": {ConfigYAML: `{"dns_provider":"alidns"}`, ConfigHash: "sha256:h3"},
-		"node-unrelated":   {ConfigYAML: `{"dns_confs":[{"dns_key":"腾讯云"}]}`, ConfigHash: "sha256:h4"},
+		"node-unrelated":    {ConfigYAML: `{"dns_confs":[{"dns_key":"腾讯云"}]}`, ConfigHash: "sha256:h4"},
 	}
 	for id, rec := range nodes {
 		if err := s.PutNode(id, rec); err != nil {
@@ -744,9 +744,9 @@ func TestRebuildManifest_WithHelper(t *testing.T) {
 	writeBin("node-agent-v1.6.36-windows-amd64.exe")
 	writeBin("upgrade_helper-v1.6.35-windows-amd64.exe")
 	writeBin("upgrade_helper-v1.6.36-windows-amd64.exe")
-	writeBin("upgrade_helper-v1.6.36-linux-amd64")           // Linux 不匹配正则 (非 .exe)
-	writeBin("node-agent-v1.6.35-linux-armv7")                 // 非标准 arch
-	writeBin("node-agent-vdev-windows-amd64.exe")              // dev 版本应跳过
+	writeBin("upgrade_helper-v1.6.36-linux-amd64") // Linux 不匹配正则 (非 .exe)
+	writeBin("node-agent-v1.6.35-linux-armv7")     // 非标准 arch
+	writeBin("node-agent-vdev-windows-amd64.exe")  // dev 版本应跳过
 
 	s.RebuildManifest()
 	manifest, err := s.LoadAgentManifest()

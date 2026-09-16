@@ -36,17 +36,17 @@ func TestFollowupHeartbeatCertErrors(t *testing.T) {
 	// 验证 sendDDNSHealthHeartbeat 构建的 HeartbeatReq 包含 CertErrors
 	// 核心: Status.CertErrors 字段在 struct 中已定义, 且 sendDDNSHealthHeartbeat 中已赋值
 	cfg := &model.AgentConfig{
-		NodeID:  "test-node",
+		NodeID:   "test-node",
 		CertPath: "/opt/ddns-agent/certs",
 	}
 	status := DNSStatus{
-		Running: true,
-		LastOK:  false,
-		LastError: "test DNS failure",
-		IPv4: "1.2.3.4",
+		Running:     true,
+		LastOK:      false,
+		LastError:   "test DNS failure",
+		IPv4:        "1.2.3.4",
 		IPv4Enabled: true,
-		IPv4OK: true,
-		IPv4Msg: "已获取",
+		IPv4OK:      true,
+		IPv4Msg:     "已获取",
 	}
 
 	// 模拟 certErrors 缓存
@@ -66,12 +66,12 @@ func TestFollowupHeartbeatCertErrors(t *testing.T) {
 			CertErrors: followCertErrors,
 			IPv4:       status.IPv4,
 			DDNSHealth: &model.DDNSHealthInfo{
-				Running:  status.Running,
-				LastOK:   status.LastOK,
+				Running:   status.Running,
+				LastOK:    status.LastOK,
 				LastError: status.LastError,
-				IPv4OK:   status.IPv4OK,
-				IPv4Msg:  status.IPv4Msg,
-				Status:   "ERR",
+				IPv4OK:    status.IPv4OK,
+				IPv4Msg:   status.IPv4Msg,
+				Status:    "ERR",
 			},
 		},
 	}

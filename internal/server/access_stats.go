@@ -23,8 +23,8 @@ const accessFlushInterval = 60 * time.Second
 type accessStatsCollector struct {
 	mu      sync.Mutex
 	buckets map[int64]map[string]int64 // unixMinute -> ip -> count
-	dir     string                      // 持久化目录
-	tz      *time.Location              // 配置时区
+	dir     string                     // 持久化目录
+	tz      *time.Location             // 配置时区
 }
 
 func newAccessStatsCollector(dataDir string) *accessStatsCollector {
@@ -316,4 +316,3 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, cached)
 }
-

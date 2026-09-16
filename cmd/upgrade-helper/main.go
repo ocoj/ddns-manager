@@ -9,9 +9,10 @@
 //  4. 自删除 (通过批处理延迟删除)
 //
 // 命令行: upgrade-helper.exe <oldPid> <newExe> <curExe>
-//    oldPid:  旧 Agent 进程 PID
-//    newExe:  新二进制完整路径 (node-agent.exe.new)
-//    curExe:  当前运行的二进制路径 (替换目标)
+//
+//	oldPid:  旧 Agent 进程 PID
+//	newExe:  新二进制完整路径 (node-agent.exe.new)
+//	curExe:  当前运行的二进制路径 (替换目标)
 package main
 
 import (
@@ -34,10 +35,10 @@ var (
 )
 
 const (
-	SYNCHRONIZE         = 0x00100000
+	SYNCHRONIZE           = 0x00100000
 	PROCESS_QUERY_LIMITED = 0x1000
-	WAIT_TIMEOUT        = 0x00000102
-	WAIT_FAILED         = 0xFFFFFFFF
+	WAIT_TIMEOUT          = 0x00000102
+	WAIT_FAILED           = 0xFFFFFFFF
 )
 
 func main() {

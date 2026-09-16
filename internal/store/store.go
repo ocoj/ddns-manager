@@ -228,13 +228,13 @@ func (s *ManagerStore) putNodeInternal(id string, rec *model.NodeRecord, del boo
 // ── Certs ──
 
 type CertBundle struct {
-	Name       string            `json:"name"`
-	Files      map[string][]byte `json:"-"`
-	TargetPath string            `json:"target_path"`
-	ExpiresAt  time.Time         `json:"expires_at"`
-	Domains    []string          `json:"domains"`
-	Hash       string            `json:"hash"`
-	PFXPassword string           `json:"pfx_password,omitempty"` // PFX 证书密码
+	Name        string            `json:"name"`
+	Files       map[string][]byte `json:"-"`
+	TargetPath  string            `json:"target_path"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	Domains     []string          `json:"domains"`
+	Hash        string            `json:"hash"`
+	PFXPassword string            `json:"pfx_password,omitempty"` // PFX 证书密码
 }
 
 // LoadCertMeta reads the raw meta.json fields of a cert bundle. It is used by
@@ -326,7 +326,7 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	extra := map[string]interface{}{}
 	if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
 		if ex := map[string]interface{}{}; json.Unmarshal(data, &ex) == nil {
-			structKeys := map[string]bool{"name":true,"files":true,"target_path":true,"expires_at":true,"domains":true,"hash":true,"pfx_password":true}
+			structKeys := map[string]bool{"name": true, "files": true, "target_path": true, "expires_at": true, "domains": true, "hash": true, "pfx_password": true}
 			for k, v := range ex {
 				if !structKeys[k] {
 					extra[k] = v
@@ -428,7 +428,7 @@ func (s *ManagerStore) DeleteCertBundle(name string) error {
 // ── Admin State ──
 
 type AdminState struct {
-	TokenHash       string `json:"token_hash"`        // bcrypt of admin token
+	TokenHash       string `json:"token_hash"` // bcrypt of admin token
 	PasswordChanged bool   `json:"password_changed"`
 	InstanceSalt    string `json:"instance_salt,omitempty"` // v1.6.46: 实例级随机 salt, 防跨实例 token 复用
 }
@@ -468,7 +468,9 @@ func (s *ManagerStore) dnsKeysPath() string { return filepath.Join(s.dir, "dns_k
 
 // ── DNS Key 全局版本 (v1.6.64 方案B) ──
 
-func (s *ManagerStore) dnsKeysVersionPath() string { return filepath.Join(s.dir, "dns_keys_version.json") }
+func (s *ManagerStore) dnsKeysVersionPath() string {
+	return filepath.Join(s.dir, "dns_keys_version.json")
+}
 
 // DNSKeysVersion 返回当前 DNS key 全局版本 (内存读, 心跳零 IO)。
 // v1.6.64 方案B: 两阶段锁 — fast path RLock, slow path Lock + double-check,
@@ -563,8 +565,12 @@ func (s *ManagerStore) loadDNSKeysToCache() error {
 	}
 	// backward compat: old keys use provider as key, fill Name/Provider if empty
 	for k, v := range keys {
-		if v.Name == "" { v.Name = k }
-		if v.Provider == "" { v.Provider = k }
+		if v.Name == "" {
+			v.Name = k
+		}
+		if v.Provider == "" {
+			v.Provider = k
+		}
 	}
 	s.dnsKeysCache = keys
 	s.dnsKeysCacheLoaded = true
@@ -809,10 +815,10 @@ type AgentConfig struct {
 // when the binary is missing from /bin/. An abandoned job is retried when
 // handleSetAgentVersion is called (new version or same-version re-save).
 type UpgJob struct {
-	TargetVer  string `json:"target_ver"`             // 目标版本
-	Triggered  string `json:"triggered"`              // 触发时间 RFC3339
-	Completed  string `json:"completed,omitempty"`    // 完成时间 (agent 心跳确认后写入)
-	RetryCount int    `json:"retry_count,omitempty"`  // 已推送次数 (用于永久放弃判定)
+	TargetVer  string `json:"target_ver"`            // 目标版本
+	Triggered  string `json:"triggered"`             // 触发时间 RFC3339
+	Completed  string `json:"completed,omitempty"`   // 完成时间 (agent 心跳确认后写入)
+	RetryCount int    `json:"retry_count,omitempty"` // 已推送次数 (用于永久放弃判定)
 }
 
 func (s *ManagerStore) agentManifestPath() string { return filepath.Join(s.dir, "agent_manifest.json") }
@@ -1143,13 +1149,13 @@ func (s *ManagerStore) SaveSMTPConfig(cfg *notify.Config) error {
 }
 
 type ACMEAccountConfig struct {
-	Email       string `json:"email"`
-	CA          string `json:"ca"`
-	KeyType     string `json:"key_type"`
-	AccountKey  string `json:"account_key,omitempty"`  // PEM-encoded private key
-	EABKID      string `json:"eab_kid,omitempty"`
-	EABKey      string `json:"eab_key,omitempty"`
-	Updated     string `json:"updated,omitempty"`
+	Email      string `json:"email"`
+	CA         string `json:"ca"`
+	KeyType    string `json:"key_type"`
+	AccountKey string `json:"account_key,omitempty"` // PEM-encoded private key
+	EABKID     string `json:"eab_kid,omitempty"`
+	EABKey     string `json:"eab_key,omitempty"`
+	Updated    string `json:"updated,omitempty"`
 }
 
 func (s *ManagerStore) acmeConfigPath() string { return filepath.Join(s.dir, "acme_config.json") }
@@ -1278,14 +1284,13 @@ func (s *ManagerStore) DeleteACMEAccount(index int) error {
 	return s.saveACMEAccountsLocked(accounts)
 }
 
-
 // ── Rate Limit Config ──
 
 type RateLimitConfig struct {
-	Enabled          bool `json:"enabled"`
-	RequestsPerMin   int  `json:"requests_per_min"`
-	HeartbeatPerMin  int  `json:"heartbeat_per_min"`
-	LoginPerMin      int  `json:"login_per_min"`
+	Enabled         bool `json:"enabled"`
+	RequestsPerMin  int  `json:"requests_per_min"`
+	HeartbeatPerMin int  `json:"heartbeat_per_min"`
+	LoginPerMin     int  `json:"login_per_min"`
 }
 
 func (s *ManagerStore) rateLimitPath() string { return filepath.Join(s.dir, "rate_limit.json") }
@@ -1304,18 +1309,30 @@ func (s *ManagerStore) LoadRateLimitConfig() (*RateLimitConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	if cfg.RequestsPerMin <= 0 { cfg.RequestsPerMin = 600 }
-	if cfg.HeartbeatPerMin <= 0 { cfg.HeartbeatPerMin = 120 }
-	if cfg.LoginPerMin <= 0 { cfg.LoginPerMin = 10 }
+	if cfg.RequestsPerMin <= 0 {
+		cfg.RequestsPerMin = 600
+	}
+	if cfg.HeartbeatPerMin <= 0 {
+		cfg.HeartbeatPerMin = 120
+	}
+	if cfg.LoginPerMin <= 0 {
+		cfg.LoginPerMin = 10
+	}
 	return &cfg, nil
 }
 
 func (s *ManagerStore) SaveRateLimitConfig(cfg *RateLimitConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cfg.RequestsPerMin <= 0 { cfg.RequestsPerMin = 600 }
-	if cfg.HeartbeatPerMin <= 0 { cfg.HeartbeatPerMin = 120 }
-	if cfg.LoginPerMin <= 0 { cfg.LoginPerMin = 10 }
+	if cfg.RequestsPerMin <= 0 {
+		cfg.RequestsPerMin = 600
+	}
+	if cfg.HeartbeatPerMin <= 0 {
+		cfg.HeartbeatPerMin = 120
+	}
+	if cfg.LoginPerMin <= 0 {
+		cfg.LoginPerMin = 10
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

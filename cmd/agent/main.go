@@ -40,6 +40,7 @@ import (
 
 // v1.5.34 C1: 降级拒绝 sentinel error，与升级成功/失败区分
 var errDowngradeBlocked = fmt.Errorf("downgrade blocked")
+
 // v1.6.29 M5: 认证失败 sentinel, 心跳重试循环遇此错误跳过重试
 var errAuthFailed = fmt.Errorf("auth failed")
 
@@ -53,6 +54,7 @@ var lastConfigHash string
 func configHashPath() string {
 	return filepath.Join(agentBaseDir, "ddns_config_hash.txt")
 }
+
 var certHashMap = map[string]string{}
 var certHashMapMu sync.Mutex // H6: protects certHashMap from concurrent access
 
@@ -75,17 +77,20 @@ var (
 )
 var heartbeatFailed atomic.Bool // v1.5.22 H2: 标记心跳失败, 阻止 agentLogBuf.Clear() 丢弃操作日志
 var agentLogBuf = newLogBuffer(100)
+
 // v1.5.30 H2: 证书部署错误缓存, 下一心跳通过 Status.CertErrors 上报 Manager
 var (
 	lastCertErrors   []string
 	lastCertErrorsMu sync.Mutex
 )
+
 // v1.5.34 H3: Agent 操作日志文件持久化 (10MB 轮转, 保留 3 个), 防止 crash 丢失
 // v1.6.10 L1: 读写分离 — os.File.Write 是线程安全的, 锁仅保护文件句柄的获取/替换
 var (
 	agentEventsFile   *os.File
 	agentEventsFileMu sync.Mutex
 )
+
 func agentLog(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
@@ -292,7 +297,6 @@ func setBaseDir(dir string) {
 	agentConfigPath = filepath.Join(agentBaseDir, "agent.yaml")
 }
 
-
 // configCachePath returns the path for caching the pushed ddns-go config.
 // Always stores inside agentBaseDir — not derived from CertPath to avoid
 // path traversal risk (e.g. CertPath = /var/../../../tmp).
@@ -489,17 +493,17 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 				FailedDomains:   status.FailedDomains,
 				LogLine:         status.LastLine(),
 				// v1.6.11 B2: IP获取状态
-				IPv4OK:          status.IPv4OK,
-				IPv6OK:          status.IPv6OK,
-				IPv4Msg:         status.IPv4Msg,
-				IPv6Msg:         status.IPv6Msg,
+				IPv4OK:  status.IPv4OK,
+				IPv6OK:  status.IPv6OK,
+				IPv4Msg: status.IPv4Msg,
+				IPv6Msg: status.IPv6Msg,
 				// v1.6.46: Manager 据此区分"主动关"和"意外失败"
-				IPv4Enabled:     status.IPv4Enabled,
-				IPv6Enabled:     status.IPv6Enabled,
+				IPv4Enabled: status.IPv4Enabled,
+				IPv6Enabled: status.IPv6Enabled,
 			},
 		},
-		ConfigHash: lastConfigHash,  // v1.5.23+v1.6.36 C4: 回传Manager权威hash, 避免yaml往返不稳定导致每心跳重推
-		Logs:       dnsUpdater.PeekRecentLogs(10),  // v1.6.46 H7: 增量上报, 心跳成功才 commit
+		ConfigHash: lastConfigHash,                // v1.5.23+v1.6.36 C4: 回传Manager权威hash, 避免yaml往返不稳定导致每心跳重推
+		Logs:       dnsUpdater.PeekRecentLogs(10), // v1.6.46 H7: 增量上报, 心跳成功才 commit
 		Hardware:   collectHardware(),
 	}
 
@@ -538,33 +542,33 @@ func doHeartbeat(cfg *model.AgentConfig) error {
 			if err := dnsUpdater.ApplyConfig([]byte(resp.Config.YAML)); err != nil {
 				log.Printf("配置应用失败: %v", err)
 			} else {
-			// v1.6.56 M2: 先持久化配置缓存，成功后写 hash — 缓存失败则 hash 不更新
-			// 避免 hash=新但缓存=旧导致重启后配置不一致永久报错
-			cacheWritten := false
-			if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
-				log.Printf("[config] 缓存目录创建失败 (磁盘满/权限?): %v", encErr)
-				agentLog("配置缓存目录创建失败: %v", encErr)
-			} else {
-				cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
-					getConfigCacheKey(cfg.Password, cfg.Fingerprint))
-				if encErr != nil {
-					log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
-					agentLog("缓存加密失败: %v", encErr)
-				} else if writeErr := os.WriteFile(configCachePath(), []byte(cacheData), 0600); writeErr != nil {
-					log.Printf("[config] 缓存写入失败 (磁盘满/权限?): %v", writeErr)
-					agentLog("配置缓存写入失败: %v", writeErr)
+				// v1.6.56 M2: 先持久化配置缓存，成功后写 hash — 缓存失败则 hash 不更新
+				// 避免 hash=新但缓存=旧导致重启后配置不一致永久报错
+				cacheWritten := false
+				if encErr := os.MkdirAll(filepath.Dir(configCachePath()), 0700); encErr != nil {
+					log.Printf("[config] 缓存目录创建失败 (磁盘满/权限?): %v", encErr)
+					agentLog("配置缓存目录创建失败: %v", encErr)
 				} else {
-					cacheWritten = true
+					cacheData, encErr := crypto.Encrypt([]byte(resp.Config.YAML),
+						getConfigCacheKey(cfg.Password, cfg.Fingerprint))
+					if encErr != nil {
+						log.Printf("[config] 缓存加密失败，拒绝写入明文: %v", encErr)
+						agentLog("缓存加密失败: %v", encErr)
+					} else if writeErr := os.WriteFile(configCachePath(), []byte(cacheData), 0600); writeErr != nil {
+						log.Printf("[config] 缓存写入失败 (磁盘满/权限?): %v", writeErr)
+						agentLog("配置缓存写入失败: %v", writeErr)
+					} else {
+						cacheWritten = true
+					}
 				}
-			}
-			if cacheWritten {
-				if err := os.WriteFile(configHashPath(), []byte(resp.Config.Hash), 0600); err != nil {
-					agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
-					log.Printf("[config] hash持久化失败: %v (managerHash已丢弃, 下次心跳重推)", err)
-				} else {
-					lastConfigHash = resp.Config.Hash
+				if cacheWritten {
+					if err := os.WriteFile(configHashPath(), []byte(resp.Config.Hash), 0600); err != nil {
+						agentLog("[config] hash持久化失败 (磁盘满/权限?): %v", err)
+						log.Printf("[config] hash持久化失败: %v (managerHash已丢弃, 下次心跳重推)", err)
+					} else {
+						lastConfigHash = resp.Config.Hash
+					}
 				}
-			}
 				// v1.6.28 H1: 配置变更后同步执行 DNS 更新, 失败时立即发送跟进心跳上报
 				// 修复 v1.5.29 C4 的 5 分钟延迟 — 异步 goroutine 导致失败静默到下一心跳
 				if dnsUpdateRunning.CompareAndSwap(false, true) {
@@ -676,7 +680,7 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 	followCertErrors := lastCertErrors
 	lastCertErrorsMu.Unlock()
 
-	dnsLogs := dnsUpdater.PeekRecentLogs(10)  // v1.6.46 H7: 增量上报
+	dnsLogs := dnsUpdater.PeekRecentLogs(10) // v1.6.46 H7: 增量上报
 	req := model.HeartbeatReq{
 		NodeID:      cfg.NodeID,
 		Fingerprint: cfg.Fingerprint,
@@ -686,7 +690,7 @@ func sendDDNSHealthHeartbeat(cfg *model.AgentConfig, status DNSStatus) {
 			AgentVersion: version,
 			CertPath:     cfg.CertPath,
 			CertHashes:   collectCertHashes(cfg), // v1.6.50 M2: 统一使用目录路径key, 对齐常规心跳和Manager精确匹配
-			CertErrors:   followCertErrors,  // v1.6.33 P5: 补全证书部署错误上报
+			CertErrors:   followCertErrors,       // v1.6.33 P5: 补全证书部署错误上报
 			IPv4:         status.IPv4,
 			IPv6:         status.IPv6,
 			DDNSHealth: &model.DDNSHealthInfo{
@@ -821,21 +825,21 @@ func applyCertUpdates(cfg *model.AgentConfig, updates []*model.CertUpdate) (cert
 		iisOK := true
 		if runtime.GOOS == "windows" {
 			// v1.5.20: 证书级 PFX 密码 → 配置级 → 默认 "ddns"
-		// v1.5.39: 增加密码来源诊断日志, 便于从 Manager 侧定位密码不匹配问题
-		pfxPwd := cu.PFXPassword
-		pwdSource := "证书级(cert)"
-		if pfxPwd == "" {
-			pfxPwd = cfg.PFXPassword
-			pwdSource = "配置级(agent.yaml)"
-		}
-		if pfxPwd == "" {
-			pfxPwd = crypto.DefaultPFXPassword
-			pwdSource = "默认"
-			agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
-			log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 %s", cu.BundleName, crypto.DefaultPFXPassword)
-		}
-		agentLog("证书部署: PFX密码来源=%s bundle=%s", pwdSource, cu.BundleName)
-		log.Printf("[cert] %s: PFX密码来源=%s", cu.BundleName, pwdSource)
+			// v1.5.39: 增加密码来源诊断日志, 便于从 Manager 侧定位密码不匹配问题
+			pfxPwd := cu.PFXPassword
+			pwdSource := "证书级(cert)"
+			if pfxPwd == "" {
+				pfxPwd = cfg.PFXPassword
+				pwdSource = "配置级(agent.yaml)"
+			}
+			if pfxPwd == "" {
+				pfxPwd = crypto.DefaultPFXPassword
+				pwdSource = "默认"
+				agentLog("证书部署: 使用默认PFX密码, 建议在管理端为 %s 设置密码", cu.BundleName)
+				log.Printf("[cert] %s: 未设置PFX密码, 使用默认值 %s", cu.BundleName, crypto.DefaultPFXPassword)
+			}
+			agentLog("证书部署: PFX密码来源=%s bundle=%s", pwdSource, cu.BundleName)
+			log.Printf("[cert] %s: PFX密码来源=%s", cu.BundleName, pwdSource)
 			pfxImported := false
 			// 1. 优先尝试 Modern PFX (Win10 1809+, 更强加密)
 			if hasModernPFX && modernPFXFile != "" {
@@ -1071,7 +1075,9 @@ func recycleIISAppPools() {
 }
 func fileSize(path string) int64 {
 	fi, err := os.Stat(path)
-	if err != nil { return -1 }
+	if err != nil {
+		return -1
+	}
 	return fi.Size()
 }
 
@@ -1161,14 +1167,20 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			}
 			return nil
 		})
-		if ctx.Err() != nil { return }
+		if ctx.Err() != nil {
+			return
+		}
 		// Phase 2+3: 磁盘证书扫描 (v1.6.29 H2: 并入 goroutine, 受 30s 超时保护)
 		// v1.6.42 M3: 合并为单次遍历 entries, 同时收集根级证书文件 + 检测子目录
 		entries, _ := os.ReadDir(cfg.CertPath)
 		var rootFiles []string
 		for _, e := range entries {
-			if ctx.Err() != nil { return }
-			if e.IsDir() { continue }
+			if ctx.Err() != nil {
+				return
+			}
+			if e.IsDir() {
+				continue
+			}
 			if isCertFile(e.Name()) {
 				rootFiles = append(rootFiles, e.Name())
 			}
@@ -1177,36 +1189,56 @@ func collectCertHashes(cfg *model.AgentConfig) map[string]string {
 			sort.Strings(rootFiles)
 			h := sha256.New()
 			for _, fn := range rootFiles {
-				if data, err := os.ReadFile(filepath.Join(cfg.CertPath, fn)); err == nil { h.Write(data) }
+				if data, err := os.ReadFile(filepath.Join(cfg.CertPath, fn)); err == nil {
+					h.Write(data)
+				}
 			}
 			rootHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 			mu.Lock()
-			if _, exists := result[cfg.CertPath]; !exists { result[cfg.CertPath] = rootHash }
+			if _, exists := result[cfg.CertPath]; !exists {
+				result[cfg.CertPath] = rootHash
+			}
 			mu.Unlock()
 		}
 		for _, e := range entries {
-			if ctx.Err() != nil { return }
-			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") { continue }
+			if ctx.Err() != nil {
+				return
+			}
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
 			subDir := filepath.Join(cfg.CertPath, e.Name())
-			if _, err := os.Stat(filepath.Join(subDir, ".cert_hash")); err == nil { continue }
+			if _, err := os.Stat(filepath.Join(subDir, ".cert_hash")); err == nil {
+				continue
+			}
 			certFiles, _ := os.ReadDir(subDir)
 			var files []string
 			for _, cf := range certFiles {
-				if cf.IsDir() || cf.Name() == "meta.json" { continue }
+				if cf.IsDir() || cf.Name() == "meta.json" {
+					continue
+				}
 				files = append(files, cf.Name())
 			}
-			if len(files) == 0 { continue }
+			if len(files) == 0 {
+				continue
+			}
 			sort.Strings(files)
 			h := sha256.New()
 			for _, fn := range files {
-				if data, err := os.ReadFile(filepath.Join(subDir, fn)); err == nil { h.Write(data) }
+				if data, err := os.ReadFile(filepath.Join(subDir, fn)); err == nil {
+					h.Write(data)
+				}
 			}
 			diskHash := fmt.Sprintf("sha256:%x", h.Sum(nil))
 			mu.Lock()
 			// v1.6.30 H2: 同时注册相对名和完整路径, 兼容 Manager deploy_path 两套键名
-			if _, exists := result[e.Name()]; !exists { result[e.Name()] = diskHash }
+			if _, exists := result[e.Name()]; !exists {
+				result[e.Name()] = diskHash
+			}
 			fullPath := filepath.Join(cfg.CertPath, e.Name())
-			if _, exists := result[fullPath]; !exists { result[fullPath] = diskHash }
+			if _, exists := result[fullPath]; !exists {
+				result[fullPath] = diskHash
+			}
 			mu.Unlock()
 		}
 	}()
@@ -1320,6 +1352,7 @@ func validateAgentBinary(path string) error {
 	}
 	return nil
 }
+
 // upgradeLogger writes upgrade step logs to install_dir/ddns_upgrade.log
 // (v1.5.30 M1: 与批处理脚本统一日志文件, 方便排查)
 // v1.6.36 M7: 缓存文件句柄 — 升级流程中 write→close→open 重复 20+ 次,
@@ -1328,6 +1361,7 @@ var (
 	upgradeLogFile   *os.File
 	upgradeLogFileMu sync.Mutex
 )
+
 func upgradeLogger(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	log.Print(msg)
@@ -1696,8 +1730,8 @@ func bindIISWebAdmin(thumb, certCN string) (updated int, handled bool) {
 	type wb struct {
 		BI         string `json:"BI"` // bindingInformation "IP:Port:Host"
 		Thumbprint string `json:"Thumbprint"`
-		Site       string `json:"Site"`     // 站点名 (ItemXPath 提取, 多站点区分)
-		CertCN     string `json:"CertCN"`   // 绑定当前证书 CN (sp 多站点 IP 绑定场景的关键匹配依据)
+		Site       string `json:"Site"`   // 站点名 (ItemXPath 提取, 多站点区分)
+		CertCN     string `json:"CertCN"` // 绑定当前证书 CN (sp 多站点 IP 绑定场景的关键匹配依据)
 	}
 	// 扫描: Get-WebBinding 返回结构化对象, 不受 locale 影响 (对齐 scanIISBindings v1.6.15 C7)
 	// v1.6.69: 同时提取站点名 + 绑定当前证书 CN。sp 多站点场景: https 是 IP 绑定
@@ -1896,7 +1930,9 @@ func autoBindExisting(thumb, certCN string) {
 			// v1.6.9: IP绑定只在单站(仅1个IP绑定)时自动更新, 多IP绑定时跳过防误覆盖
 			ipCount := 0
 			for _, bb := range bindings {
-				if !bb.isSNI { ipCount++ }
+				if !bb.isSNI {
+					ipCount++
+				}
 			}
 			if ipCount > 1 {
 				agentLog("证书部署: 跳过IP绑定 %s (%d个IP绑定, 防止多站点误覆盖, 请手动绑定)", b.key, ipCount)
@@ -2165,6 +2201,7 @@ func saveIISBindingsFile(cfg *model.AgentConfig, sites []model.IISBoundSite) {
 // win-test 上 certutil -dump 无 -p 返回 0x80070056 (ERROR_INVALID_PASSWORD) 导致指纹提取失败。
 // certutilErrRe v1.6.42 C5: 包级编译一次 + 匹配任意长度 hex (覆盖 0x2/0x5/0x80070056)
 var certutilErrRe = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+
 // v1.6.50 L2: 二次匹配 Windows 符号错误名 (如 ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED)
 var certutilWinErrRe = regexp.MustCompile(`ERROR_[A-Z_]+`)
 
@@ -2224,8 +2261,8 @@ func decodeCertutilOutput(out []byte) string {
 
 // parsePFXInfoDump 解析 certutil -dump 输出，提取叶子证书(带私钥)的指纹和 CN。
 // v1.6.65 修复 — 与 netsh 中文 locale 问题同源(参考 v1.6.6 cutAnyPrefix 方案):
-//  1) 中文 Windows 输出中文标签 (证书哈希(sha1):/使用者:)，同时匹配中英文
-//  2) certutil -dump 按"证书 N"分块，根证书在前(无私钥)。必须提取含
+//  1. 中文 Windows 输出中文标签 (证书哈希(sha1):/使用者:)，同时匹配中英文
+//  2. certutil -dump 按"证书 N"分块，根证书在前(无私钥)。必须提取含
 //     Provider/提供程序 行的叶子证书块，否则 delstore/IIS 绑定会用根证书
 //     指纹导致绑定失败 (生产 sp.example.com / win-test 实测)
 func parsePFXInfoDump(output string) (thumb string, cn string) {
@@ -2304,7 +2341,7 @@ func main() {
 	if !(*daemon && runtime.GOOS == "windows") {
 		detectInstallDir() // v1.5.32: 自适应寻找安装目录 (兼容旧路径)
 		initAgentLog()
-		ensureSymlink()   // v1.5.37: 启动时符号链接自愈, 防止离线
+		ensureSymlink() // v1.5.37: 启动时符号链接自愈, 防止离线
 	}
 
 	if *showVersion {
@@ -2378,16 +2415,16 @@ func main() {
 				case <-ticker.C:
 					doHeartbeatWithRetry()
 				case <-ch:
-				log.Println("[daemon] 正在关闭...")
-				// v1.5.29 M2: 等待正在运行的 DNS 更新完成，防止 goroutine 泄漏
-				waitStart := time.Now()
-				for dnsUpdateRunning.Load() && time.Since(waitStart) < 30*time.Second {
-					time.Sleep(200 * time.Millisecond)
-				}
-				if dnsUpdateRunning.Load() {
-					log.Println("[daemon] DNS 更新超时未完成，强制退出")
-				}
-				return
+					log.Println("[daemon] 正在关闭...")
+					// v1.5.29 M2: 等待正在运行的 DNS 更新完成，防止 goroutine 泄漏
+					waitStart := time.Now()
+					for dnsUpdateRunning.Load() && time.Since(waitStart) < 30*time.Second {
+						time.Sleep(200 * time.Millisecond)
+					}
+					if dnsUpdateRunning.Load() {
+						log.Println("[daemon] DNS 更新超时未完成，强制退出")
+					}
+					return
 				}
 			}
 		}
@@ -2405,5 +2442,3 @@ func main() {
 	fmt.Println("  Install: use the separate ddns-installer binary")
 	fmt.Println("    curl -fsSL MANAGER/bin/install.sh | sh")
 }
-
-

@@ -12,10 +12,10 @@ import (
 // 2. nil=保留, []string{}=清空, ["nginx"]=正常传播
 func TestReloadServices_Propagation(t *testing.T) {
 	tests := []struct {
-		name     string
-		binding  model.CertBinding
-		wantLen  int
-		wantNil  bool
+		name    string
+		binding model.CertBinding
+		wantLen int
+		wantNil bool
 	}{
 		{
 			name: "正常_含服务列表",

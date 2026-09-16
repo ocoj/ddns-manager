@@ -22,7 +22,6 @@ func tokenFromPasswordWithSalt(pass, salt string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-
 // jsonOK v1.6.42 M4: 大响应 (>1KB) 预编码并设置 Content-Length, 浏览器可显进度条
 func jsonOK(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

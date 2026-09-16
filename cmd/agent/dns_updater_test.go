@@ -477,6 +477,7 @@ dnsconf:
 		t.Errorf("ipCaches should be nil after ApplyConfig, got %v", u.ipCaches)
 	}
 }
+
 // 覆盖场景: (1) 正常排水清空 (2) 恢复后条目数正确 (3) 清空后新写入
 func TestLogBuffer_DrainAndRecover(t *testing.T) {
 	lb := newLogBuffer(5)

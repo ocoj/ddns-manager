@@ -54,8 +54,8 @@ type DNSUpdater struct {
 	mu       sync.Mutex
 	cfg      *ddnsconfig.Config // current ddns-go config from Manager
 	status   DNSStatus
-	logBuf   *LogBuffer          // memory ring buffer (50 entries)
-	ipCaches [][2]util.IpCache   // v1.6.61: 持久化 IpCache, 对齐 ddns-go 原版跳过机制
+	logBuf   *LogBuffer        // memory ring buffer (50 entries)
+	ipCaches [][2]util.IpCache // v1.6.61: 持久化 IpCache, 对齐 ddns-go 原版跳过机制
 }
 
 // NewDNSUpdater creates a DNSUpdater with default (empty) config.
@@ -99,12 +99,20 @@ func (u *DNSUpdater) Run() DNSStatus {
 
 	// v1.6.11 B2: 在循环前检测配置中是否启用了IPv4/IPv6
 	for _, dc := range u.cfg.DnsConf {
-		if dc.Ipv4.Enable { u.status.IPv4Enabled = true }
-		if dc.Ipv6.Enable { u.status.IPv6Enabled = true }
+		if dc.Ipv4.Enable {
+			u.status.IPv4Enabled = true
+		}
+		if dc.Ipv6.Enable {
+			u.status.IPv6Enabled = true
+		}
 	}
 	// v1.6.49: 未启用的协议清空 IP，防止旧配置残留值污染显示
-	if !u.status.IPv4Enabled { u.status.IPv4 = "" }
-	if !u.status.IPv6Enabled { u.status.IPv6 = "" }
+	if !u.status.IPv4Enabled {
+		u.status.IPv4 = ""
+	}
+	if !u.status.IPv6Enabled {
+		u.status.IPv6 = ""
+	}
 
 	// v1.6.61: 对齐 IpCache 与 DnsConf 数量 (对应 ddns-go dns/index.go)
 	if len(u.ipCaches) != len(u.cfg.DnsConf) {
@@ -243,13 +251,23 @@ func (u *DNSUpdater) Run() DNSStatus {
 		// (对齐 ddns-go dns/index.go 的失败重置语义)
 		segV4Failed, segV6Failed := false, false
 		for _, d := range domains.Ipv4Domains {
-			if d.UpdateStatus == ddnsconfig.UpdatedFailed { segV4Failed = true; break }
+			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
+				segV4Failed = true
+				break
+			}
 		}
 		for _, d := range domains.Ipv6Domains {
-			if d.UpdateStatus == ddnsconfig.UpdatedFailed { segV6Failed = true; break }
+			if d.UpdateStatus == ddnsconfig.UpdatedFailed {
+				segV6Failed = true
+				break
+			}
 		}
-		if segV4Failed { u.ipCaches[i][0] = util.IpCache{} }
-		if segV6Failed { u.ipCaches[i][1] = util.IpCache{} }
+		if segV4Failed {
+			u.ipCaches[i][0] = util.IpCache{}
+		}
+		if segV6Failed {
+			u.ipCaches[i][1] = util.IpCache{}
+		}
 	}
 
 	// v1.6.10 C1+H1: 循环外统一赋值 status, 防止多段配置时中间状态覆盖
@@ -279,12 +297,16 @@ func (u *DNSUpdater) Run() DNSStatus {
 		}
 	}
 
-// v1.6.30 H6: 无论 DNS 更新成功与否, IP 已获取就设置 IPv4OK/IPv6OK
+	// v1.6.30 H6: 无论 DNS 更新成功与否, IP 已获取就设置 IPv4OK/IPv6OK
 	// DNS 记录更新失败不等于 IP 获取失败 (原逻辑误标 IP 状态)
 	u.status.IPv4Msg = buildIPMsg(u.status.IPv4, u.status.IPv4Enabled)
 	u.status.IPv6Msg = buildIPMsg(u.status.IPv6, u.status.IPv6Enabled)
-	if u.status.IPv4 != "" { u.status.IPv4OK = true }
-	if u.status.IPv6 != "" { u.status.IPv6OK = true }
+	if u.status.IPv4 != "" {
+		u.status.IPv4OK = true
+	}
+	if u.status.IPv6 != "" {
+		u.status.IPv6OK = true
+	}
 
 	// v1.6.10 M1 + v1.6.11 B2: DNS 更新结果持久化, 区分IP状态
 	if allOK {

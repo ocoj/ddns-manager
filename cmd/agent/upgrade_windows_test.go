@@ -25,13 +25,13 @@ func TestUpgradeBatchTimeout(t *testing.T) {
 	// The batch script must include all of these:
 	requiredKeywords := []string{
 		"setlocal enabledelayedexpansion",
-		"set /a WAIT_COUNT=0",        // C1: counter init
-		"set /a WAIT_COUNT+=1",       // C1: counter increment
-		"!WAIT_COUNT! GEQ 30",        // C1: 60s timeout (30×2s)
+		"set /a WAIT_COUNT=0",                       // C1: counter init
+		"set /a WAIT_COUNT+=1",                      // C1: counter increment
+		"!WAIT_COUNT! GEQ 30",                       // C1: 60s timeout (30×2s)
 		"Timeout waiting for service to stop (60s)", // C1: timeout error message
-		"goto :done",                 // C1: bail out on timeout
-		"sc query node-agent",        // verify SCM polling
-		"sc start node-agent",        // verify service restart
+		"goto :done",                                // C1: bail out on timeout
+		"sc query node-agent",                       // verify SCM polling
+		"sc start node-agent",                       // verify service restart
 	}
 
 	// Construct a minimal path to trigger batch script generation
@@ -95,10 +95,10 @@ func TestUpgradeBatchTimeout(t *testing.T) {
 // 3. Rollback to backup on failure
 func TestUpgradeBatchRollback(t *testing.T) {
 	rollbackKeywords := []string{
-		"move /y",        // backup + move operations
-		"!NEWSIZE! GTR 1024",  // size validation
-		"rolling back",   // rollback on failure
-		"set RETRY=0",   // retry counter for sc start
+		"move /y",            // backup + move operations
+		"!NEWSIZE! GTR 1024", // size validation
+		"rolling back",       // rollback on failure
+		"set RETRY=0",        // retry counter for sc start
 	}
 	for _, kw := range rollbackKeywords {
 		if kw == "" {

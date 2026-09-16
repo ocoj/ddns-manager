@@ -53,8 +53,8 @@ func TestCertBindingNilVsEmpty(t *testing.T) {
 	}
 
 	// 验证 != nil 检查能正确区分
-	shouldPreserve := nilBindings == nil  // true = preserve
-	shouldClear := emptyBindings != nil    // true = clear
+	shouldPreserve := nilBindings == nil // true = preserve
+	shouldClear := emptyBindings != nil  // true = clear
 	if !shouldPreserve {
 		t.Error("H2: nil cert_bindings should preserve existing (shouldPreserve=true)")
 	}
@@ -116,8 +116,8 @@ func TestDNSKeyTrackingFallback(t *testing.T) {
 	// 模拟 DNS Key 映射
 	keys := map[string]string{
 		"阿里云-生产": "alidns",
-		"CF-主账号":   "cloudflare",
-		"腾讯云":      "tencentcloud",
+		"CF-主账号": "cloudflare",
+		"腾讯云":    "tencentcloud",
 	}
 
 	// 正常: DNSKeyName 直接匹配

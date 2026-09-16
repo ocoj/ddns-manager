@@ -15,10 +15,13 @@ func TestSelfUpgradeEarlyValidation(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "test-agent")
 		data := make([]byte, 1024)
-		data[0] = 0x7f; data[1] = 'E'; data[2] = 'L'; data[3] = 'F'
-		data[4] = 2     // 64-bit
-		data[5] = 1     // little-endian
-		data[7] = 3     // OS/ABI = GNU/Linux
+		data[0] = 0x7f
+		data[1] = 'E'
+		data[2] = 'L'
+		data[3] = 'F'
+		data[4] = 2                                      // 64-bit
+		data[5] = 1                                      // little-endian
+		data[7] = 3                                      // OS/ABI = GNU/Linux
 		binary.LittleEndian.PutUint16(data[16:18], 2)    // ET_EXEC
 		binary.LittleEndian.PutUint16(data[18:20], 0x3E) // x86-64
 		os.WriteFile(binPath, data, 0755)
@@ -52,11 +55,14 @@ func TestSelfUpgradeEarlyValidation(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "corrupt")
 		data := make([]byte, 64)
-		data[0] = 0x7f; data[1] = 'E'; data[2] = 'L'; data[3] = 'F'
-		data[4] = 2  // 64-bit
-		data[5] = 1  // LE
-		data[7] = 9  // OS/ABI = FreeBSD (rejected)
-		binary.LittleEndian.PutUint16(data[16:18], 2)  // ET_EXEC
+		data[0] = 0x7f
+		data[1] = 'E'
+		data[2] = 'L'
+		data[3] = 'F'
+		data[4] = 2                                      // 64-bit
+		data[5] = 1                                      // LE
+		data[7] = 9                                      // OS/ABI = FreeBSD (rejected)
+		binary.LittleEndian.PutUint16(data[16:18], 2)    // ET_EXEC
 		binary.LittleEndian.PutUint16(data[18:20], 0x3E) // x86-64
 		os.WriteFile(binPath, data, 0755)
 		if err := validateAgentBinary(binPath); err == nil {
@@ -68,9 +74,11 @@ func TestSelfUpgradeEarlyValidation(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "test.exe")
 		data := make([]byte, 1024)
-		data[0] = 'M'; data[1] = 'Z'
+		data[0] = 'M'
+		data[1] = 'Z'
 		binary.LittleEndian.PutUint32(data[60:64], 128)
-		data[128] = 'P'; data[129] = 'E'
+		data[128] = 'P'
+		data[129] = 'E'
 		binary.LittleEndian.PutUint16(data[132:134], 0x8664) // AMD64
 		os.WriteFile(binPath, data, 0755)
 		err := validateAgentBinary(binPath)
@@ -81,9 +89,11 @@ func TestSelfUpgradeEarlyValidation(t *testing.T) {
 		dir := t.TempDir()
 		binPath := filepath.Join(dir, "arm.exe")
 		data := make([]byte, 1024)
-		data[0] = 'M'; data[1] = 'Z'
+		data[0] = 'M'
+		data[1] = 'Z'
 		binary.LittleEndian.PutUint32(data[60:64], 128)
-		data[128] = 'P'; data[129] = 'E'
+		data[128] = 'P'
+		data[129] = 'E'
 		binary.LittleEndian.PutUint16(data[132:134], 0xAA64) // ARM64 on non-ARM host
 		os.WriteFile(binPath, data, 0755)
 		err := validateAgentBinary(binPath)

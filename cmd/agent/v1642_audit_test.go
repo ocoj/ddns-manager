@@ -10,9 +10,9 @@ import (
 // 以及非英文 locale 下的回退行为。
 func TestCertutilErrorCode_ShortHexMatch(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		contains string // 结果必须包含的子串
+		name        string
+		input       string
+		contains    string // 结果必须包含的子串
 		notContains string // 结果不能包含的子串
 	}{
 		{
@@ -41,9 +41,9 @@ func TestCertutilErrorCode_ShortHexMatch(t *testing.T) {
 			contains: "0x80070002",
 		},
 		{
-			name:        "completely empty",
-			input:       "",
-			contains:    "未知错误",
+			name:     "completely empty",
+			input:    "",
+			contains: "未知错误",
 		},
 	}
 
@@ -73,9 +73,9 @@ func TestFallbackBatchFormatCorrectness(t *testing.T) {
 
 	// 不能包含 Go Sprintf 的位置参数错误输出
 	badPatterns := []string{
-		"%!(EXTRA",       // Go Sprintf 错误格式输出
-		"%[1]s",          // 残留的位置参数语法
-		"%[2]s",          // 残留的位置参数语法
+		"%!(EXTRA", // Go Sprintf 错误格式输出
+		"%[1]s",    // 残留的位置参数语法
+		"%[2]s",    // 残留的位置参数语法
 	}
 	for _, bad := range badPatterns {
 		if strings.Contains(result, bad) {

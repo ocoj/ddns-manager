@@ -11,9 +11,9 @@ func TestVersionFormatValidation(t *testing.T) {
 	verPattern := regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[\w.-]+)?$`)
 
 	tests := []struct {
-		name    string
-		ver     string
-		wantOK  bool
+		name   string
+		ver    string
+		wantOK bool
 	}{
 		// 正常
 		{"semantic v prefix", "v1.5.12", true},

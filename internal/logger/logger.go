@@ -35,19 +35,19 @@ var statusIconMap = map[string]string{
 
 // Manager handles structured logging.
 type Manager struct {
-	mu         sync.Mutex   // protects ring buffer (events, writeIdx)
-	fileMu     sync.Mutex   // protects file writes only (rotation moved to rotateMu)
-	rotateMu   sync.Mutex   // H2: serialises rotation, avoids blocking concurrent writes
-	file       *os.File
-	logPath    string
-	events     []Event       // in-memory ring buffer
-	maxSize    int
-	writeIdx      int        // ring buffer write index (wraps at 2^63)
-	retention     int        // days to retain log files
-	lastRotate    time.Time  // tracks last log file rotation
-	lastDiskCheck time.Time  // tracks last disk space check (debounce)
-	maxFileMB     int        // rotate when file exceeds this
-	tz           *time.Location // 时区，用于日志轮转日期文件名
+	mu            sync.Mutex // protects ring buffer (events, writeIdx)
+	fileMu        sync.Mutex // protects file writes only (rotation moved to rotateMu)
+	rotateMu      sync.Mutex // H2: serialises rotation, avoids blocking concurrent writes
+	file          *os.File
+	logPath       string
+	events        []Event // in-memory ring buffer
+	maxSize       int
+	writeIdx      int            // ring buffer write index (wraps at 2^63)
+	retention     int            // days to retain log files
+	lastRotate    time.Time      // tracks last log file rotation
+	lastDiskCheck time.Time      // tracks last disk space check (debounce)
+	maxFileMB     int            // rotate when file exceeds this
+	tz            *time.Location // 时区，用于日志轮转日期文件名
 }
 
 // New creates a Logger that writes to the given file path.
@@ -78,9 +78,9 @@ func NewWithConfig(logPath string, maxSize, retentionDays, maxFileMB int) (*Mana
 		maxFileMB = 50
 	}
 	m := &Manager{
-		file:       f,
-		logPath:    logPath,
-		events:     make([]Event, maxSize),
+		file:          f,
+		logPath:       logPath,
+		events:        make([]Event, maxSize),
 		maxSize:       maxSize,
 		retention:     retentionDays,
 		lastRotate:    time.Now(),
@@ -180,15 +180,15 @@ func (m *Manager) reloadFromDisk() {
 // Deletes the oldest log file(s) until >10% free (i.e. used < 90%).
 func (m *Manager) EnsureDiskSpace() (freedFiles int, freedMB float64) {
 	dir := filepath.Dir(m.logPath)
-	
+
 	// usage is the percentage of blocks used; we want at least 10% free
 	usage := m.diskUsagePercent(dir)
 	if usage >= 0 && usage < 90 {
 		return 0, 0 // enough free space (>10%)
 	}
-	
+
 	log.Printf("[logger] 磁盘已用 %.0f%% ≥ 90%%，开始释放空间", usage)
-	
+
 	// Collect all log files (current + rotated)
 	var logFiles []os.FileInfo
 	entries, _ := os.ReadDir(dir)
@@ -204,12 +204,12 @@ func (m *Manager) EnsureDiskSpace() (freedFiles int, freedMB float64) {
 	if len(logFiles) == 0 {
 		return 0, 0
 	}
-	
+
 	// Sort oldest first
 	sort.Slice(logFiles, func(i, j int) bool {
 		return logFiles[i].ModTime().Before(logFiles[j].ModTime())
 	})
-	
+
 	// Delete oldest files until space > 10% or only current file remains
 	currentName := filepath.Base(m.logPath)
 	for _, fi := range logFiles {
@@ -222,13 +222,13 @@ func (m *Manager) EnsureDiskSpace() (freedFiles int, freedMB float64) {
 		freedFiles++
 		freedMB += mb
 		log.Printf("[logger] 空间不足，已删除: %s (%.1fMB)", fi.Name(), mb)
-		
+
 		usage = m.diskUsagePercent(dir)
 		if usage < 0 || usage < 90 {
 			break
 		}
 	}
-	
+
 	if freedFiles > 0 {
 		log.Printf("[logger] 释放完成: %d 个文件, %.1fMB, 当前使用 %.0f%%", freedFiles, freedMB, usage)
 	}
@@ -251,7 +251,7 @@ func (m *Manager) diskUsagePercent(dir string) float64 {
 func (m *Manager) CleanupBefore(before time.Time) (deletedFiles int, deletedMB float64) {
 	dir := filepath.Dir(m.logPath)
 	currentName := filepath.Base(m.logPath)
-	
+
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.IsDir() || e.Name() == currentName {
@@ -289,7 +289,7 @@ func (m *Manager) ArchiveLogs() (string, error) {
 		return "", err
 	}
 	tmpFile.Close()
-	
+
 	args := []string{"-czf", tmpFile.Name(), "-C", dir}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
@@ -301,7 +301,7 @@ func (m *Manager) ArchiveLogs() (string, error) {
 			args = append(args, name)
 		}
 	}
-	
+
 	cmd := exec.Command("tar", args...)
 	if err := cmd.Run(); err != nil {
 		os.Remove(tmpFile.Name())

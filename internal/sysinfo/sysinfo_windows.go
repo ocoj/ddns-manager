@@ -8,6 +8,6 @@ package sysinfo
 // 仅被 internal/server/access_stats.go 引用 (Manager 组件, 仅 Linux 部署)。
 // Agent 端不依赖 sysinfo 包。
 
-func CPUPercent() float64        { return 0 }
+func CPUPercent() float64          { return 0 }
 func MemoryInfo() (uint64, uint64) { return 0, 0 }
 func DiskInfo() (uint64, uint64)   { return 0, 0 }

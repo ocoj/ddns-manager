@@ -38,13 +38,13 @@ func TestValidateAgentBinaryELFOSABI(t *testing.T) {
 	buildELF := func(osabi byte, machine uint16, elfType uint16) []byte {
 		buf := make([]byte, 64)
 		buf[0], buf[1], buf[2], buf[3] = 0x7f, 'E', 'L', 'F'
-		buf[4] = 2                // 64-bit
-		buf[5] = 1                // little-endian
-		buf[6] = 1                // version
-		buf[7] = osabi            // OS/ABI (variable)
-		buf[16] = byte(elfType)   // ET_EXEC=2, ET_DYN=3
+		buf[4] = 2              // 64-bit
+		buf[5] = 1              // little-endian
+		buf[6] = 1              // version
+		buf[7] = osabi          // OS/ABI (variable)
+		buf[16] = byte(elfType) // ET_EXEC=2, ET_DYN=3
 		buf[17] = 0
-		buf[18] = byte(machine)   // EM_X86_64=0x3E, EM_AARCH64=0xB7
+		buf[18] = byte(machine) // EM_X86_64=0x3E, EM_AARCH64=0xB7
 		buf[19] = 0
 		return buf
 	}

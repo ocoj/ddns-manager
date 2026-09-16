@@ -152,8 +152,9 @@ func TestShouldPushConfig_Condition(t *testing.T) {
 }
 
 // TestShouldRenderConfig_Condition 验证 v1.6.64 方案B 配置推送的完整判断条件:
-//   shouldRender (入口): reqHash != recHash || recHash == "" || recKeysVer < curKeyVer
-//   shouldPush (渲染后): rendered != "" && cfgHash != reqHash
+//
+//	shouldRender (入口): reqHash != recHash || recHash == "" || recKeysVer < curKeyVer
+//	shouldPush (渲染后): rendered != "" && cfgHash != reqHash
 func TestShouldRenderConfig_Condition(t *testing.T) {
 	shouldRender := func(reqHash, recHash string, recKeysVer, curKeyVer uint64) bool {
 		return reqHash != recHash || recHash == "" || recKeysVer < curKeyVer

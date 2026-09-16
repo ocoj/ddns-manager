@@ -14,18 +14,18 @@ type DDNSHealthInfo struct {
 	LastOK          bool     `json:"last_ok"`
 	LastError       string   `json:"last_error,omitempty"`
 	LastErrorDetail string   `json:"last_error_detail,omitempty"` // v1.5.33: ddns-go API 详细错误
-	FailedDomains   []string `json:"failed_domains,omitempty"` // v1.5.29 H1: 具体失败域名列表
+	FailedDomains   []string `json:"failed_domains,omitempty"`    // v1.5.29 H1: 具体失败域名列表
 	LogLine         string   `json:"log_line,omitempty"`
 	Status          string   `json:"status,omitempty"`
 	StatusMsg       string   `json:"status_msg,omitempty"`
 	// v1.6.11 B2: IP获取状态
-	IPv4OK      bool   `json:"ipv4_ok,omitempty"`
-	IPv6OK      bool   `json:"ipv6_ok,omitempty"`
-	IPv4Msg     string `json:"ipv4_msg,omitempty"`
-	IPv6Msg     string `json:"ipv6_msg,omitempty"`
+	IPv4OK  bool   `json:"ipv4_ok,omitempty"`
+	IPv6OK  bool   `json:"ipv6_ok,omitempty"`
+	IPv4Msg string `json:"ipv4_msg,omitempty"`
+	IPv6Msg string `json:"ipv6_msg,omitempty"`
 	// v1.6.46: IPv4/IPv6 启用标志 — Manager 据此区分"主动关"和"意外失败"
-	IPv4Enabled bool   `json:"ipv4_enabled,omitempty"`
-	IPv6Enabled bool   `json:"ipv6_enabled,omitempty"`
+	IPv4Enabled bool `json:"ipv4_enabled,omitempty"`
+	IPv6Enabled bool `json:"ipv6_enabled,omitempty"`
 }
 
 type HeartbeatReq struct {
@@ -33,30 +33,30 @@ type HeartbeatReq struct {
 	Fingerprint string        `json:"fingerprint"`
 	Status      NodeStatus    `json:"status"`
 	ConfigHash  string        `json:"config_hash,omitempty"`
-	Logs        []string      `json:"logs,omitempty"`           // DNS 更新日志
-	AgentLogs   []string      `json:"agent_logs,omitempty"`     // Agent 操作日志（升级/证书/配置/心跳）
+	Logs        []string      `json:"logs,omitempty"`       // DNS 更新日志
+	AgentLogs   []string      `json:"agent_logs,omitempty"` // Agent 操作日志（升级/证书/配置/心跳）
 	Hardware    *HardwareInfo `json:"hardware,omitempty"`
 }
 
 type NodeStatus struct {
 	AgentVersion  string            `json:"agent_version"`
-	CertPath      string            `json:"cert_path,omitempty"`     // 客户端实际证书目录
+	CertPath      string            `json:"cert_path,omitempty"` // 客户端实际证书目录
 	CertHashes    map[string]string `json:"cert_hashes,omitempty"`
 	IPv4          string            `json:"ipv4"`
 	IPv6          string            `json:"ipv6"`
 	DDNSHealth    *DDNSHealthInfo   `json:"ddns_health,omitempty"`
-	CertErrors    []string          `json:"cert_errors,omitempty"`   // v1.5.29 H5: 证书部署失败详情
+	CertErrors    []string          `json:"cert_errors,omitempty"`     // v1.5.29 H5: 证书部署失败详情
 	IISBoundSites []IISBoundSite    `json:"iis_bound_sites,omitempty"` // v1.6.0: IIS 绑定快照
 }
 
 // IISBoundSite v1.6.0: Agent 上报的 IIS SSL 绑定快照, 用于多站点证书识别。
 type IISBoundSite struct {
-	Hostname   string `json:"hostname"`               // SNI hostname 或 IP
-	Port       int    `json:"port"`                   // 端口号
-	Thumbprint string `json:"thumbprint"`             // SHA1 指纹 (IIS 证书哈希)
-	SiteID     int    `json:"site_id,omitempty"`      // v1.6.0: IIS 站点 ID
-	SiteName   string `json:"site_name,omitempty"`    // IIS 站点名称
-	BundleName string `json:"bundle_name,omitempty"`   // 匹配到的 bundle 名称
+	Hostname   string `json:"hostname"`              // SNI hostname 或 IP
+	Port       int    `json:"port"`                  // 端口号
+	Thumbprint string `json:"thumbprint"`            // SHA1 指纹 (IIS 证书哈希)
+	SiteID     int    `json:"site_id,omitempty"`     // v1.6.0: IIS 站点 ID
+	SiteName   string `json:"site_name,omitempty"`   // IIS 站点名称
+	BundleName string `json:"bundle_name,omitempty"` // 匹配到的 bundle 名称
 }
 
 type HeartbeatResp struct {
@@ -79,7 +79,7 @@ type NodeRecord struct {
 	PasswordHash string        `json:"password_hash"`
 	CreatedAt    time.Time     `json:"created_at"`
 	LastSeen     time.Time     `json:"last_seen"`
-	Approved     bool          `json:"approved"`            // 审批状态: 注册后需管理员审批才能接收配置/证书推送
+	Approved     bool          `json:"approved"` // 审批状态: 注册后需管理员审批才能接收配置/证书推送
 	CertBindings []CertBinding `json:"cert_bindings"`
 	ConfigYAML   string        `json:"config_yaml,omitempty"`
 	ConfigHash   string        `json:"config_hash,omitempty"`
@@ -87,10 +87,10 @@ type NodeRecord struct {
 	// v1.6.64 方案B: 配置所引用 DNS key 的全局版本 — 持久化版本比对,
 	// 修复关机/离线节点错过 Invalidate 瞬时信号导致配置永不推送的死锁
 	ConfigKeysVersion uint64        `json:"config_keys_version,omitempty"`
-	Tags         []string      `json:"tags,omitempty"`
-	Notes        string        `json:"notes,omitempty"`
-	Status       NodeStatus    `json:"status,omitempty"`
-	Hardware     *HardwareInfo `json:"hardware,omitempty"`
+	Tags              []string      `json:"tags,omitempty"`
+	Notes             string        `json:"notes,omitempty"`
+	Status            NodeStatus    `json:"status,omitempty"`
+	Hardware          *HardwareInfo `json:"hardware,omitempty"`
 	// v1.6.46: DNS 连续失败计数器 — 防 DNS API 瞬态故障误标 ERR
 	// 心跳中 LastOK=false 时 +1, LastOK=true 时清零
 	// 连续 ≥2 次失败才标记 ERR, 单次失败标记 WARN
@@ -104,8 +104,8 @@ type NodeRecord struct {
 }
 
 type DNSKeyRecord struct {
-	Name            string   `json:"name"`              // 用户自定义名称 (e.g. "阿里云-生产")
-	Provider        string   `json:"provider"`          // ddns-go 提供商 (e.g. "alidns")
+	Name            string   `json:"name"`     // 用户自定义名称 (e.g. "阿里云-生产")
+	Provider        string   `json:"provider"` // ddns-go 提供商 (e.g. "alidns")
 	AccessKeyID     string   `json:"access_key_id"`
 	AccessKeySecret string   `json:"access_key_secret"`
 	UpdatedAt       string   `json:"updated_at"`
@@ -142,12 +142,12 @@ type CertBinding struct {
 }
 
 type CertUpdate struct {
-	CertHash            string            `json:"cert_hash"`
-	BundleName          string            `json:"bundle_name"`
-	Files               map[string]string `json:"files"`
-	TargetPath          string            `json:"target_path"`
-	ReloadServices      []string          `json:"reload_services,omitempty"`
-	PFXPassword         string            `json:"pfx_password,omitempty"`     // PFX 证书密码（用户自设，非硬编码）
+	CertHash       string            `json:"cert_hash"`
+	BundleName     string            `json:"bundle_name"`
+	Files          map[string]string `json:"files"`
+	TargetPath     string            `json:"target_path"`
+	ReloadServices []string          `json:"reload_services,omitempty"`
+	PFXPassword    string            `json:"pfx_password,omitempty"` // PFX 证书密码（用户自设，非硬编码）
 }
 
 type AgentUpdate struct {
@@ -192,8 +192,8 @@ type NodeConfigRequest struct {
 
 // DnsConfItem 单张 DNS 配置卡片 — 独立 DNS Key、IPv4/IPv6 获取方式、域名、TTL
 type DnsConfItem struct {
-	Name   string     `json:"name"`             // 卡片名称 (e.g. "阿里云-主")
-	DnsKey string     `json:"dns_key"`          // 引用的 DNS Key 名称
+	Name   string     `json:"name"`    // 卡片名称 (e.g. "阿里云-主")
+	DnsKey string     `json:"dns_key"` // 引用的 DNS Key 名称
 	IPv4   IPv4Config `json:"ipv4"`
 	IPv6   IPv6Config `json:"ipv6"`
 	TTL    string     `json:"ttl"`

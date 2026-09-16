@@ -677,7 +677,11 @@ func (s *ManagerStore) loadDNSKeysToCache() error {
 		if data, rerr := os.ReadFile(s.dnsKeysPath()); rerr == nil {
 			backup := fmt.Sprintf("%s.bak.%s", s.dnsKeysPath(), time.Now().UTC().Format("20060102T150405Z"))
 			// 注意：本函数由 LoadDNSKeys **持 s.mu 调用** ⇒ 此处**绝不可再取 s.mu**
-			// （sync.Mutex 非可重入；历史上 P0-F1 即此形态 ⇒ 自死锁）。直接读字段。
+			// （sync.RWMutex 非可重入；v1.6.73 Slice 2 初版即此形态 ⇒ 自死锁，症状是
+			// 「测试挂死至超时」⇒ 最差形态）。直接读字段。
+			// **回调契约（N-32）**：下面的 cb 是在**持写锁**时被调用的 ⇒ **回调内不得取
+			// store 锁**，也不得回调任何会取锁的 store 方法（否则自死锁）。该契约由
+			// deadlock_regression_test.go 的 T73b/T73c 结构性守卫 + T73a 看门狗共同看护。
 			cb := s.dnsKeysMigrationReporter
 			if werr := atomicWriteFile(backup, data, 0o600); werr != nil {
 				if cb != nil {

@@ -1523,6 +1523,70 @@ func selfUpgrade(cfg *model.AgentConfig, update *model.AgentUpdate) error {
 	return nil
 }
 
+// certutilRunner 执行一次 certutil 调用（返回合并输出与错误）。可注入以便离线单测。
+type certutilRunner func(args ...string) ([]byte, error)
+
+// runCertutil 是 certutilRunner 的默认实现（调用真实 certutil）。
+func runCertutil(args ...string) ([]byte, error) {
+	return exec.Command("certutil", args...).CombinedOutput()
+}
+
+// isCertutilPasswordError 判定 certutil 输出是否表示"密码不正确"。
+// v1.6.17: 中文 Windows 输出 GBK 编码 ⇒ 只认 hex 错误码，避免乱码导致漏判。
+func isCertutilPasswordError(out []byte) bool {
+	s := string(out)
+	return strings.Contains(s, "0x80070056") || strings.Contains(s, "ERROR_INVALID_PASSWORD")
+}
+
+// pfxImportResult 是 importPFXWithFallback 的结果。
+type pfxImportResult struct {
+	// EffectivePassword 本次导入**实际生效**的口令 —— 调用方后续所有步骤（尤其指纹
+	// 提取 extractPFXInfo）**必须**使用它，**绝不可**再使用入参口令。
+	EffectivePassword string
+	// Out / Err 为**最终**结果：成功时来自实际生效的那次尝试；失败时来自首次尝试
+	// （首次的输出对诊断「口令不符」最有价值；调用方仅在 Err != nil 时用 Out 取错误码）。
+	Out []byte
+	Err error
+	// FallbackAttempted 表示是否走了"默认口令兜底"重试；FallbackOut/FallbackErr 为其结果。
+	FallbackAttempted bool
+	FallbackOut       []byte
+	FallbackErr       error
+}
+
+// importPFXWithFallback 用给定口令导入 PFX；若 certutil 明确报"密码不正确"，再用默认
+// ddns 口令重试一次（v1.5.40 遗留兼容路径），并回报**实际生效的口令**。
+//
+// 🔴 v1.6.73 修复（本函数自 importPFXToIIS 提取，行为等价 + 修一处缺陷）：
+// 旧实现在兜底成功时**只更新 out/err，未更新口令变量**，而紧随其后的指纹提取
+// (extractPFXInfo) 仍用旧口令 ⇒ `certutil -dump` 认证失败返回空指纹 ⇒ 函数返回 false
+// ——**尽管证书已成功导入证书存储** ⇒ 调用方判定「Modern PFX 失败」⇒ 降级 Legacy
+// ⇒ 再降级 openssl ⇒ **三重重复导入 + 虚假失败审计 + 绑定流程被跳过**（站点继续用旧证书）。
+// 触发条件：Manager 下发的口令与 PFX 实际口令不符（v1.6.72 及更早的心跳口令为空
+// ⇒ 兜底必被触发 ⇒ 所有使用默认口令的节点均受影响）。
+//
+// 重试策略（有意收紧，避免兜底掩盖真实故障）：
+//   - 仅在**确认是密码问题**（0x80070056 / ERROR_INVALID_PASSWORD）时才重试；
+//     非密码类错误（权限/文件损坏/存储不可用）**不**用默认口令兜底。
+//   - 入参口令已是默认口令时**不**重试（同口令重试无意义）。
+func importPFXWithFallback(run certutilRunner, pfxFile, pfxPassword string) pfxImportResult {
+	out, err := run("-importpfx", "-p", pfxPassword, "-enterprise", pfxFile)
+	if err == nil {
+		return pfxImportResult{EffectivePassword: pfxPassword, Out: out}
+	}
+	res := pfxImportResult{EffectivePassword: pfxPassword, Out: out, Err: err}
+	if !isCertutilPasswordError(out) || pfxPassword == crypto.DefaultPFXPassword {
+		return res
+	}
+	res.FallbackAttempted = true
+	res.FallbackOut, res.FallbackErr = run("-importpfx", "-p", crypto.DefaultPFXPassword, "-enterprise", pfxFile)
+	if res.FallbackErr == nil {
+		res.EffectivePassword = crypto.DefaultPFXPassword
+		res.Out = res.FallbackOut
+		res.Err = nil
+	}
+	return res
+}
+
 func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.CertToIISBinding) bool {
 	// 1. 用 certutil -importpfx 导入到 LocalMachine 证书存储 (v1.5.32: 替代不可靠的 PowerShell Import)
 	// certutil 是 Windows 内置工具, 无执行策略/.NET 版本依赖, 全版本一致
@@ -1532,39 +1596,34 @@ func importPFXToIIS(pfxFile, bundleName, pfxPassword string, bindings []model.Ce
 		exec.Command("certutil", "-delstore", "My", oldThumb).Run()
 	}
 	// v1.6.57: certutil 不支持环境变量传密码，仅能通过 -p 参数。openssl 路径已改用 env。
-	importArgs := []string{"-importpfx", "-p", pfxPassword, "-enterprise", pfxFile}
-	out, err := exec.Command("certutil", importArgs...).CombinedOutput()
-	if err != nil {
-		// v1.5.40: 如果密码错误(0x80070056), 尝试默认 ddns 密码兜底
-		// 已知问题: 部分 Windows 节点 PFX 传输后 certutil 报告密码不匹配
-		errMsg := string(out)
-		if strings.Contains(errMsg, "0x80070056") || strings.Contains(errMsg, "ERROR_INVALID_PASSWORD") {
-			log.Printf("[cert] certutil 密码错误(0x80070056), 尝试默认密码兜底: %s", bundleName)
-			retryArgs := []string{"-importpfx", "-p", crypto.DefaultPFXPassword, "-enterprise", pfxFile}
-			retryOut, retryErr := exec.Command("certutil", retryArgs...).CombinedOutput()
-			if retryErr == nil {
-				log.Printf("[cert] certutil ddns兜底导入成功: %s", bundleName)
-				agentLog("证书部署: certutil初审密码失败, ddns兜底成功 %s", bundleName)
-				// 继续执行指纹提取(用 ddns 密码)
-				out = retryOut
-				err = nil
-			} else {
-				log.Printf("[cert] certutil ddns兜底也失败 %s: %s", bundleName, strings.TrimSpace(string(retryOut)))
-			}
+	res := importPFXWithFallback(runCertutil, pfxFile, pfxPassword)
+	if res.FallbackAttempted {
+		if res.Err == nil {
+			log.Printf("[cert] certutil 初审密码失败, ddns 兜底导入成功: %s", bundleName)
+			agentLog("证书部署: certutil初审密码失败, ddns兜底成功 %s", bundleName)
+		} else {
+			log.Printf("[cert] certutil ddns兜底也失败 %s: %s", bundleName, strings.TrimSpace(string(res.FallbackOut)))
 		}
-		if err != nil {
-			// v1.6.17: certutil 在中文Windows输出GBK编码, 直接取hex错误码避免乱码
-			ec := certutilErrorCode(errMsg)
-			log.Printf("[cert] certutil -importpfx 失败 %s: %v, code=%s", bundleName, err, ec)
-			agentLog("证书部署: certutil导入失败 %s: %s", bundleName, ec)
-			return false
-		}
+	}
+	if res.Err != nil {
+		// v1.6.17: certutil 在中文Windows输出GBK编码, 直接取hex错误码避免乱码
+		ec := certutilErrorCode(string(res.Out))
+		log.Printf("[cert] certutil -importpfx 失败 %s: %v, code=%s", bundleName, res.Err, ec)
+		agentLog("证书部署: certutil导入失败 %s: %s", bundleName, ec)
+		return false
 	}
 	log.Printf("[cert] certutil -importpfx 成功: %s", bundleName)
 
+	// ★ v1.6.73: 本函数后续**必须**使用"实际生效的口令"（走兜底时 = 默认口令）。
+	//   **不得**再使用入参 pfxPassword —— 否则兜底成功后 `certutil -dump` 会认证失败
+	//   ⇒ 指纹为空 ⇒ 误报导入失败 ⇒ 触发 Modern→Legacy→openssl 三重降级级联
+	//   （见 importPFXWithFallback 注释）。该约束由 pfx_stale_password_test.go 的
+	//   T74g 结构性守卫看护（入参 pfxPassword 在本函数内除声明外只允许出现 1 次）。
+	effectivePFXPassword := res.EffectivePassword
+
 	// 2. 用 certutil -dump 提取指纹（格式固定，不受 PowerShell 版本/语言影响）
 	// v1.5.20 L1: 合并一次 certutil -dump 同时提取指纹和 CN
-	thumb, certCN := extractPFXInfo(pfxFile, pfxPassword)
+	thumb, certCN := extractPFXInfo(pfxFile, effectivePFXPassword)
 	if thumb == "" {
 		log.Printf("PFX 证书指纹提取失败: %s", bundleName)
 		return false

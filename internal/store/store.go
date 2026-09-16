@@ -385,9 +385,20 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 			}
 		}
 	}
+	// v1.6.73 B-1：落盘用**脱敏副本** —— 明文口令绝不写盘；密文写入 extra[pfx_password_enc]
+	// （非受管键 ⇒ 后续 Save 自动原样保留）。调用方传入的 b **不被修改**（内存仍可用于本次推送）。
+	if b.PFXPassword != "" {
+		ct, cerr := s.encryptWithPurpose(purposePFXPassword, []byte(b.PFXPassword))
+		if cerr != nil {
+			return cerr
+		}
+		extra[pfxPasswordEncKey] = ct
+	}
+	disk := *b
+	disk.PFXPassword = ""
 	// marshal bundle, then merge extra fields
 	metaMap := map[string]interface{}{}
-	data, err := json.Marshal(b)
+	data, err := json.Marshal(disk)
 	if err != nil {
 		return fmt.Errorf("marshal cert bundle: %w", err)
 	}

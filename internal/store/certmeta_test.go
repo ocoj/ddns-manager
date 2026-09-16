@@ -62,8 +62,16 @@ func TestLoadCertMeta_ExtraFieldsSurviveSaveCertBundle(t *testing.T) {
 	if got["acme"] != true {
 		t.Error("acme flag lost")
 	}
-	if got["pfx_password"] != "pw" {
-		t.Error("pfx_password lost")
+	// v1.6.73 B-1（**语义变更**，取代旧断言「明文 pfx_password 必须留存」）：
+	// 口令属受管键 ⇒ 落盘一律置空且不得回填；值改由 pfx_password_enc 承载，经单一取值入口解回。
+	if pw, _ := got["pfx_password"].(string); pw != "" {
+		t.Errorf("pfx_password 明文不得留存在盘上（B-1 落盘脱敏），实际 %q", pw)
+	}
+	if _, ok := got[pfxPasswordEncKey]; !ok {
+		t.Errorf("meta.json 必须含 %s（密文承载口令），keys=%v", pfxPasswordEncKey, got)
+	}
+	if pw, err := st.BundlePFXPassword(&CertBundle{Name: "acme-x"}); err != nil || pw != "pw" {
+		t.Errorf("口令应经单一取值入口解回 pw，实际 %q err=%v", pw, err)
 	}
 	if got["ca"] != "Let's Encrypt" {
 		t.Error("ca lost")

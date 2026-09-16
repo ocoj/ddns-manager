@@ -173,6 +173,23 @@ func (s *Server) reportAcmeWireIssue(action, detail string) {
 // reportAcmeCaveats 记录**非判定性**提示（B-2）：一律 warning 级，
 // 且**跨 flush 去重**（同一 (action, detail) 只记一次），避免每次 attach 重复噪音。
 // 注：去重键含 detail（其中含 home 路径）⇒ 不同路径各自成条（正确）。
+// reportCertMetaConflict 记录**受管键冲突**（v1.6.73 B-3）：旧 meta 的受管键值被 struct
+// 权威覆盖 ⇒ warning 级审计（不含值），跨 flush 去重。
+func (s *Server) reportCertMetaConflict(bundleName, key string) {
+	s.acmeWireMu.Lock()
+	defer s.acmeWireMu.Unlock()
+	if s.acmeCaveatSeen == nil {
+		s.acmeCaveatSeen = map[string]bool{}
+	}
+	a, d := "证书 meta 受管键被权威覆盖", bundleName+" / "+key
+	k := a + "\x00" + d
+	if s.acmeCaveatSeen[k] {
+		return
+	}
+	s.acmeCaveatSeen[k] = true
+	s.acmeWireIssues = append(s.acmeWireIssues, acmeWireIssue{action: a, detail: d, level: "warning"})
+}
+
 func (s *Server) reportAcmeCaveats(caveats []string) {
 	if len(caveats) == 0 {
 		return
@@ -666,6 +683,9 @@ func New(cfg *srvcfg.ManagerConfig, s *store.ManagerStore, acmeMgr *acme.Manager
 // meta.dns_key cannot resolve its key precisely and degrades to the ambiguous
 // unique-match fallback.
 func (s *Server) startupAudit() {
+	// v1.6.73 B-3：把 store 的受管键冲突回调接到 warning 审计（仅键名，跨 flush 去重）。
+	s.store.SetCertMetaConflictReporter(s.reportCertMetaConflict)
+
 	// v1.6.73 B-2：统一采集各 manager 的**非判定性**提示（仅告警通道；不参与任何判定）。
 	// 采集点放在这里而非 attachAcmeShPath —— attach 保持"纯接线"，不改动既有审计时序（T49e 不变量）。
 	for _, cm := range s.acmeMgrs {

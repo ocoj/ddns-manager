@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -27,9 +28,10 @@ import (
 // v1.6.10 L3: 两个独立标志, 防止并发场景下 loadNodesToCache 设置 cacheLoaded=true
 // 导致 dnsKeysCache 被误标记为已加载 (两个 load 函数之前共享一个 cacheLoaded)
 type ManagerStore struct {
-	mu         sync.RWMutex
-	dir        string
-	storageKey []byte // v1.6.56: at-rest encryption key for ACME secrets
+	mu               sync.RWMutex
+	dir              string
+	storageKey       []byte                       // v1.6.56: at-rest encryption key for ACME secrets
+	certMetaConflict func(bundleName, key string) // v1.6.73 B-3：受管键冲突回调（仅键名）
 
 	// In-memory caches — populated on first read, kept in sync by write methods.
 	// Protected by mu (reads hold RLock, writes hold Lock).
@@ -238,10 +240,14 @@ type CertBundle struct {
 }
 
 // LoadCertMeta reads the raw meta.json fields of a cert bundle. It is used by
-// callers that need fields not modelled on CertBundle (notably "acme" and
-// "dns_key"). Deliberately a separate reader rather than adding a same-named
-// field to CertBundle: SaveCertBundle preserves unknown keys via a structKeys
-// whitelist, so a duplicate struct field would create a double-write ambiguity.
+// callers that need fields not modelled on CertBundle (notably "acme",
+// "dns_key", "pfx_password_enc"). Deliberately a separate reader rather than
+// adding a same-named field to CertBundle: SaveCertBundle 让 **受管键由 struct
+// 权威提供**、非受管键原样保留，若再加同名字段会造成双重写入歧义。
+//
+// v1.6.73 B-3 口径（受管键 = 由 CertBundle struct 驱动、必须随 Save 权威落盘的键；见
+// CertMetaManagedKeys）：非受管键**一律原样保留**（acme/ca/email/key_type/dns_key/x-*）；
+// 受管键永不被旧 meta 覆盖（**合并顺序即不变量**，见 SaveCertBundle）。
 func (s *ManagerStore) LoadCertMeta(name string) (map[string]interface{}, error) {
 	if err := sanitizeBundleName(name); err != nil {
 		return nil, err
@@ -302,6 +308,36 @@ func (s *ManagerStore) LoadCertBundle(name string) (*CertBundle, error) {
 	return &b, nil
 }
 
+// CertMetaManagedKeys 为「受管键」集合。**裁决依据**：受管键 = 由 `CertBundle` struct 字段
+// 驱动、且必须随 Save **权威落盘**的键；其余键（acme/ca/email/key_type/dns_key 以及任意
+// `x-` 前缀或未登记键）**非受管 ⇒ 一律原样保留**。
+//
+// **合并顺序即不变量**：`SaveCertBundle` 先 marshal struct、再用 `extra`（旧 meta 的非受管键）
+// 覆盖。顺序一旦颠倒，受管键将被旧 meta 值**反向覆盖** ⇒ 等价于撤销 P2/F7 的修复
+// （`meta.domains` 不再反映真实域名列表）。改动该顺序前后请先跑 T63。
+//
+// 逐键差集（旧口径 → 本口径）：
+//
+//	name / target_path / expires_at / hash   受管 → 受管（struct 权威，不变）
+//	files                                    受管 → 受管（json:"-"，不入盘）
+//	domains                                  受管 → 受管（**必须保持受管**，否则旧值经 extra 覆盖 ⇒ F7 回归）
+//	pfx_password                             受管 → 受管（B-1 起落盘置空，密文入 pfx_password_enc）
+//	acme / ca / email / key_type / dns_key   非受管 → 非受管（原样保留）
+//	任意其它未登记键 / x-*                    非受管 → 非受管（原样保留）
+var CertMetaManagedKeys = map[string]bool{
+	"name": true, "files": true, "target_path": true, "expires_at": true,
+	"domains": true, "hash": true, "pfx_password": true,
+}
+
+// SetCertMetaConflictReporter 注册「受管键冲突」回调：当旧 meta 中的受管键值与 struct
+// 权威值不一致时被调用（参数仅含 bundle 名与键名，**不含值**）。server 侧接线到 warning
+// 级审计（跨 flush 去重）。未注册（nil）时不报告。
+func (s *ManagerStore) SetCertMetaConflictReporter(f func(bundleName, key string)) {
+	s.mu.Lock()
+	s.certMetaConflict = f
+	s.mu.Unlock()
+}
+
 func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	if err := sanitizeBundleName(b.Name); err != nil {
 		return err
@@ -326,10 +362,24 @@ func (s *ManagerStore) SaveCertBundle(b *CertBundle) error {
 	extra := map[string]interface{}{}
 	if data, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
 		if ex := map[string]interface{}{}; json.Unmarshal(data, &ex) == nil {
-			structKeys := map[string]bool{"name": true, "files": true, "target_path": true, "expires_at": true, "domains": true, "hash": true, "pfx_password": true}
+			// struct 的权威 JSON 表示（用于受管键冲突检测；不含值外泄 —— 回调只传键名）
+			authoritative := map[string]interface{}{}
+			if raw, merr := json.Marshal(b); merr == nil {
+				_ = json.Unmarshal(raw, &authoritative)
+			}
 			for k, v := range ex {
-				if !structKeys[k] {
-					extra[k] = v
+				if !CertMetaManagedKeys[k] {
+					extra[k] = v // 非受管键：原样保留
+					continue
+				}
+				// 受管键：以 struct 为准；旧值不一致 ⇒ 记一条冲突告警（仅键名）
+				if av, ok := authoritative[k]; ok && !reflect.DeepEqual(v, av) {
+					s.mu.Lock()
+					cb := s.certMetaConflict
+					s.mu.Unlock()
+					if cb != nil {
+						cb(b.Name, k)
+					}
 				}
 			}
 		}

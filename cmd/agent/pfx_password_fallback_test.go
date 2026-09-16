@@ -292,6 +292,7 @@ func TestT74g_NoStalePasswordAfterFallbackCall(t *testing.T) {
 			"这正是 v1.6.73 修复的缺陷形态：兜底成功后必须改用 res.EffectivePassword，\n"+
 			"否则指纹提取会用错口令 ⇒ 证书已导入却报失败 ⇒ Modern→Legacy→openssl 三重降级。",
 			fnName, callName, callLine, stale)
+		return // 失败时**不得**打印"通过"日志（否则证据自相矛盾）
 	}
 	t.Logf("T74g 通过：%s 内 pfxPassword 使用点 %v，全部早于 %s 调用行 %d",
 		fnName, useLines, callName, callLine)

@@ -1530,17 +1530,86 @@ func (s *ManagerStore) migrateACMEKeysIfNeeded() error {
 	return s.saveACMEAccountsLocked(accounts)
 }
 
+// v1.6.73 B-1：**purpose 隔离的派生密钥**（三参 DeriveKey 全给；同一 .storageKey、
+// 不同 purpose ⇒ 彼此不可解密，由 T65 断言）。purpose 绝不可复用：
+//
+//	acme-at-rest        既有（ACME 账号私钥）
+//	dns-keys-at-rest    DNS 凭据（dns_keys.json 密文）
+//	pfx-password-at-rest 证书 PFX 口令（meta.json 的 pfx_password_enc）
+const (
+	purposeACMEAtRest  = "acme-at-rest"
+	purposeDNSKeys     = "dns-keys-at-rest"
+	purposePFXPassword = "pfx-password-at-rest"
+)
+
+func (s *ManagerStore) derivePurposeKey(purpose string) []byte {
+	return mycrypto.DeriveKey(hex.EncodeToString(s.storageKey), "storage", purpose)
+}
+
+// encryptWithPurpose 用指定 purpose 派生密钥做 AES-256-GCM 加密。
+func (s *ManagerStore) encryptWithPurpose(purpose string, plaintext []byte) (string, error) {
+	return mycrypto.Encrypt(plaintext, s.derivePurposeKey(purpose))
+}
+
+// decryptWithPurpose 用指定 purpose 派生密钥解密；purpose 不符/密文损坏 ⇒ 返回错误（**不静默回落**）。
+func (s *ManagerStore) decryptWithPurpose(purpose, ciphertext string) ([]byte, error) {
+	return mycrypto.Decrypt(ciphertext, s.derivePurposeKey(purpose))
+}
+
 // encryptSensitive encrypts plaintext using AES-256-GCM with a derived key.
 func (s *ManagerStore) encryptSensitive(plaintext []byte) (string, error) {
-	key := mycrypto.DeriveKey(hex.EncodeToString(s.storageKey), "storage", "acme-at-rest")
-	return mycrypto.Encrypt(plaintext, key)
+	return s.encryptWithPurpose(purposeACMEAtRest, plaintext)
 }
 
 // decryptSensitive decrypts a base64+GCM ciphertext.
 func (s *ManagerStore) decryptSensitive(ciphertext string) ([]byte, error) {
-	key := mycrypto.DeriveKey(hex.EncodeToString(s.storageKey), "storage", "acme-at-rest")
-	return mycrypto.Decrypt(ciphertext, key)
+	return s.decryptWithPurpose(purposeACMEAtRest, ciphertext)
 }
+
+// v1.6.73 B-1：PFX 口令的**单一取值入口** —— 口令的**唯一磁盘来源**是
+// meta.json 的 `pfx_password_enc`（B-1 起落盘明文被置空，故 struct 字段读回恒为空）。
+// 优先级：pfx_password_enc（解密）⇒ 明文 pfx_password（v1 兼容读）⇒ mycrypto.DefaultPFXPassword。
+// **解密失败不静默回落**：返回错误而非默认口令（防"静默用错口令"复发 —— 与本次事故同形态）。
+//
+// 断言口径（N-31）：判**键是否存在**，不做文本匹配（`pfx_password` 是 `pfx_password_enc` 的前缀）。
+func (s *ManagerStore) MetaPFXPassword(meta map[string]interface{}) (string, error) {
+	if meta == nil {
+		return mycrypto.DefaultPFXPassword, nil
+	}
+	if enc, ok := meta[pfxPasswordEncKey].(string); ok && enc != "" {
+		pt, err := s.decryptWithPurpose(purposePFXPassword, enc)
+		if err != nil {
+			return "", fmt.Errorf("解密 %s 失败（purpose=%s）：%w", pfxPasswordEncKey, purposePFXPassword, err)
+		}
+		return string(pt), nil
+	}
+	if pw, ok := meta["pfx_password"].(string); ok && pw != "" {
+		return pw, nil // v1 兼容读（迁移前的明文形态）
+	}
+	return mycrypto.DefaultPFXPassword, nil
+}
+
+// BundlePFXPassword 读取某 bundle 的口令：优先**内存中的明文**（调用方刚设置过），
+// 否则读该 bundle 的 meta.json 并经 MetaPFXPassword（解密优先）。
+func (s *ManagerStore) BundlePFXPassword(b *CertBundle) (string, error) {
+	if b != nil && b.PFXPassword != "" {
+		return b.PFXPassword, nil
+	}
+	if b == nil {
+		return mycrypto.DefaultPFXPassword, nil
+	}
+	if err := sanitizeBundleName(b.Name); err != nil {
+		return "", err
+	}
+	meta, err := s.LoadCertMeta(b.Name)
+	if err != nil {
+		return mycrypto.DefaultPFXPassword, nil // 无 meta.json（全新签发）⇒ 默认口令
+	}
+	return s.MetaPFXPassword(meta)
+}
+
+// pfxPasswordEncKey 为 PFX 口令的**密文字段名**（B-1 起由 extra 通道写入 ⇒ 非受管键 ⇒ 原样保留）。
+const pfxPasswordEncKey = "pfx_password_enc"
 
 // ResetCaches clears in-memory node/DNS-key caches so next reads reload from disk.
 func (s *ManagerStore) ResetCaches() {

@@ -58,6 +58,12 @@ func NewStore(dir string) (*ManagerStore, error) {
 	if err := s.initStorageKey(); err != nil {
 		return nil, fmt.Errorf("storage key: %w", err)
 	}
+	// 规格 ⑥（续）：密钥**存在但不可用**（被替换为别的密钥 / 文件被截断等）同样必须拒绝启动。
+	// 理由与"密钥缺失"完全一致：进程若照常启动，写路径会以当前（错）密钥原子覆盖
+	// dns_keys.json ⇒ 唯一密文副本被销毁且不产生 .bak ⇒ 不可恢复。
+	if err := s.verifyExistingCiphertextDecryptable(); err != nil {
+		return nil, err
+	}
 	// F8: 自动迁移明文 ACME 私钥（非致命 — 失败仅记录日志，不阻塞启动）
 	if err := s.migrateACMEKeysIfNeeded(); err != nil {
 		log.Printf("[store] ACME 密钥迁移失败（非致命）: %v", err)
@@ -1630,6 +1636,20 @@ func (s *ManagerStore) storageKeyPath() string {
 }
 
 // initStorageKey loads or generates the storage master key.
+//
+// 🔴 v1.6.73 规格 ⑥（密钥丢失 ⇒ **启动** fail-fast）：密钥文件缺失时**必须**先判定
+// "是否已存在依赖该密钥的密文"：
+//   - **无密文** ⇒ 真正的首次运行 ⇒ 正常生成 32 随机字节；
+//   - **有密文** ⇒ 这是"密钥丢失/被删"而非首次运行 ⇒ **拒绝启动**（返回 error ⇒
+//     `NewStore` 失败 ⇒ `cmd/manager/main.go` 的 `log.Fatalf` 生效）。
+//
+// 为什么必须在**生成之前**判定（而不是先生成再校验）：若先生成，`.storage_key` 会被新密钥
+// 占据，且写路径（`SaveDNSKeys` / `TrackDNSKeyUsage` / `BumpDNSKeysVersion`，由心跳/绑定与
+// 管理端编辑触发）会以**新密钥**原子覆盖 `dns_keys.json` ⇒ **唯一密文副本被销毁**，且
+// **不会**产生 `.bak`（备份只在 v1→v2 迁移路径生成）⇒ 即便之后找回原 `.storage_key`，
+// DNS 凭据**不可恢复**。故本函数在缺失路径上**对磁盘零副作用**。
+//
+// 该不变量由 T68（b/c/d 三例：密钥丢失⇒拒绝 / 全新目录⇒生成 / v1 明文⇒放行）看护。
 func (s *ManagerStore) initStorageKey() error {
 	keyPath := s.storageKeyPath()
 	data, err := os.ReadFile(keyPath)
@@ -1640,12 +1660,135 @@ func (s *ManagerStore) initStorageKey() error {
 	if !os.IsNotExist(err) {
 		return err
 	}
+	if reason := s.needsStorageKeyReason(); reason != "" {
+		return fmt.Errorf("检测到已有密文（%s）但 .storage_key 缺失：这属于**密钥丢失**而非首次运行 "+
+			"⇒ 拒绝启动（不生成新密钥，以免写路径以新密钥覆盖唯一的密文副本）；"+
+			"请恢复 .storage_key 或从 .bak/快照恢复", reason)
+	}
 	// First run: generate 32 random bytes
 	s.storageKey = make([]byte, 32)
 	if _, err := rand.Read(s.storageKey); err != nil {
 		return err
 	}
 	return os.WriteFile(keyPath, s.storageKey, 0o600)
+}
+
+// verifyExistingCiphertextDecryptable 规格 ⑥（续）：对**现存密文**做真实解密探测。
+// 任一类别解不开 ⇒ 返回 error（调用方 NewStore 拒绝启动）。没有密文 ⇒ 返回 nil。
+//
+// 与 needsStorageKeyReason 的分工（两者刻意分开，避免把"结构性存在"与"可用性"混为一谈）：
+//   - needsStorageKeyReason：**密钥缺失时**在生成前做**结构**探测（对磁盘零副作用）；
+//   - 本函数：**密钥已加载后**做**解密**探测，覆盖"密钥被替换/截断"等不匹配情形。
+//
+// 类别与 needsStorageKeyReason 保持**同集合**（①DNS ②PFX 口令 ③ACME 账号私钥），
+// 只覆盖其中一类即为"部分守卫"⇒ 仍可静默丢数据。
+func (s *ManagerStore) verifyExistingCiphertextDecryptable() error {
+	// ① dns_keys.json（复用既有单一入口；返回 "v2-ok" / "v1-plaintext" / "absent"）
+	if status, err := s.ValidateDNSKeysDecryptable(); err != nil {
+		return fmt.Errorf("启动自检失败：现存 dns_keys.json 密文无法用当前 .storage_key 解开"+
+			"（status=%s）：%w；请恢复 .storage_key 或从 .bak/快照恢复", status, err)
+	}
+	// ② certs/*/meta.json 的 pfx_password_enc
+	if entries, err := os.ReadDir(filepath.Join(s.dir, "certs")); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(s.dir, "certs", e.Name(), "meta.json"))
+			if err != nil {
+				continue
+			}
+			var probe map[string]json.RawMessage
+			if json.Unmarshal(data, &probe) != nil {
+				continue
+			}
+			raw, ok := probe[PFXPasswordEncKey]
+			if !ok {
+				continue
+			}
+			var ct string
+			if json.Unmarshal(raw, &ct) != nil || ct == "" {
+				continue
+			}
+			if _, err := s.decryptWithPurpose(purposePFXPassword, ct); err != nil {
+				return fmt.Errorf("启动自检失败：certs/%s/meta.json 的 %s 无法用当前 .storage_key 解开：%w；"+
+					"请恢复 .storage_key 或从 .bak/快照恢复", e.Name(), PFXPasswordEncKey, err)
+			}
+		}
+	}
+	// ③ acme_config.json 的账号私钥密文
+	if data, err := os.ReadFile(s.acmeConfigPath()); err == nil {
+		var accounts []ACMEAccountConfig
+		if json.Unmarshal(data, &accounts) == nil {
+			for i := range accounts {
+				k := accounts[i].AccountKey
+				if k == "" || strings.HasPrefix(k, "-----BEGIN") {
+					continue
+				}
+				if _, err := s.decryptWithPurpose(purposeACMEAtRest, k); err != nil {
+					return fmt.Errorf("启动自检失败：acme_config.json 账号 %d 的私钥密文无法用当前 .storage_key 解开：%w；"+
+						"请恢复 .storage_key 或从 .bak/快照恢复", i, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// needsStorageKeyReason 判定"磁盘上是否已存在依赖 `.storage_key` 的密文"。
+// 返回非空字符串 = **存在密文**（并注明来源，用于错误文案）；返回 "" = 不存在密文。
+//
+// 覆盖**全部三类**落盘密文（只查一类会退化为"部分守卫" ⇒ 仍可静默丢数据）：
+//
+//	① `dns_keys.json` 的 v2 信封（哨兵键 `__ddnskey_enc`，purpose = dns-keys-at-rest）
+//	② `certs/<bundle>/meta.json` 的 `pfx_password_enc`（purpose = pfx-password-at-rest）
+//	③ `acme_config.json` 的账号私钥密文（purpose = acme-at-rest；**非 PEM 头**即为密文，
+//	   与 migrateACMEKeysIfNeeded 的判据互补）
+//
+// 判据一律"**判键/判形态，不判文本内容**"（N-31 教训）：只做 JSON 结构级探测，不解密、
+// 不读取任何明文值。
+func (s *ManagerStore) needsStorageKeyReason() string {
+	// ① dns_keys.json v2 信封
+	if data, err := os.ReadFile(s.dnsKeysPath()); err == nil {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(data, &probe) == nil {
+			if _, isV2 := probe[dnsKeysEncKey]; isV2 {
+				return "dns_keys.json 的 v2 密文信封（" + dnsKeysEncKey + "）"
+			}
+		}
+	}
+	// ② certs/*/meta.json 的 pfx_password_enc
+	if entries, err := os.ReadDir(filepath.Join(s.dir, "certs")); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			metaPath := filepath.Join(s.dir, "certs", e.Name(), "meta.json")
+			data, err := os.ReadFile(metaPath)
+			if err != nil {
+				continue
+			}
+			var probe map[string]json.RawMessage
+			if json.Unmarshal(data, &probe) == nil {
+				if _, ok := probe[PFXPasswordEncKey]; ok {
+					return "certs/" + e.Name() + "/meta.json 的 " + PFXPasswordEncKey
+				}
+			}
+		}
+	}
+	// ③ acme_config.json 的账号私钥密文
+	if data, err := os.ReadFile(s.acmeConfigPath()); err == nil {
+		var accounts []ACMEAccountConfig
+		if json.Unmarshal(data, &accounts) == nil {
+			for i := range accounts {
+				k := accounts[i].AccountKey
+				if k != "" && !strings.HasPrefix(k, "-----BEGIN") {
+					return "acme_config.json 的账号私钥密文"
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // migrateACMEKeysIfNeeded checks for plaintext ACME account keys and re-encrypts them.

@@ -1,4 +1,6 @@
 # 构建产物
+/ddns-manager
+/ddns-manager-*
 build/
 dist/
 cmd/agent-win/

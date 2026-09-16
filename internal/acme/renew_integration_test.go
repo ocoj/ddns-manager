@@ -342,7 +342,8 @@ func TestIssueWritesDNSKeyToMeta_JSONSafe(t *testing.T) {
 
 	weirdName := `怪"名\号`
 	if _, err := m.issueViaAcmeSh(context.Background(), []string{"y.example.com"},
-		DNSProvider{Name: "alidns", KeyID: "AK", KeySecret: "SK", KeyName: weirdName}); err != nil {
+		DNSProvider{Name: "alidns", KeyID: "AK", KeySecret: "SK", KeyName: weirdName},
+		m.acmeShPath, m.ca, m.keyType); err != nil { // v1.6.72 P0-F1: 新增快照参数
 		t.Fatalf("issueViaAcmeSh: %v", err)
 	}
 

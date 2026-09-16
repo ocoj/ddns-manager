@@ -552,35 +552,44 @@ func (m *Manager) IssueHTTP01(ctx context.Context, domains []string) (string, er
 }
 
 func (m *Manager) IssueDNS01(ctx context.Context, domains []string, dp DNSProvider) (string, error) {
+	// v1.6.72 P0-F1（生产 H2 复现）：此处**不得**在持 m.mu 的情况下进入 issueViaAcmeSh ——
+	// 后者经 acmeShEnvFor 再次获取 m.mu，而 sync.Mutex 不可重入 ⇒ 自死锁：请求永久挂起、
+	// acme.sh 从未启动、每次请求泄漏一个 goroutine（修复前为 Lock + defer Unlock 覆盖全函数体）。
+	// 现在锁内只做"注册 + 状态快照"，执行段完全无锁。回归守卫：TestT50 / TestT51。
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.reg == nil {
 		if err := m.RegisterAccount(ctx); err != nil {
+			m.mu.Unlock()
 			return "", fmt.Errorf("register: %w", err)
 		}
 	}
-	if m.acmeShPath != "" {
+	acmeShPath, ca, keyType := m.acmeShPath, m.ca, m.keyType
+	m.mu.Unlock()
+
+	if acmeShPath != "" {
 		// v1.6.70 B6: 与续期路径统一使用 dnsAPILookup（大小写不敏感）——
 		// 否则会出现"续期能解析凭据、签发却报不支持"的口径分裂。
 		if _, ok := dnsAPILookup(dp.Name); ok {
-			return m.issueViaAcmeSh(ctx, domains, dp)
+			return m.issueViaAcmeSh(ctx, domains, dp, acmeShPath, ca, keyType)
 		}
 		log.Printf("[acme] provider %q not supported by acme.sh DNS API", dp.Name)
 	}
 	return "", fmt.Errorf("DNS-01 challenge requires acme.sh with a supported DNS provider (alidns/cloudflare/txcloud/huawei/duckdns/godaddy); provider %q not supported", dp.Name)
 }
 
-func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSProvider) (string, error) {
+// v1.6.72 P0-F1: 本函数**不得**在持 m.mu 时被调用（它会经 acmeShEnvFor 再次取 m.mu）。
+// 所需可变状态由调用方在锁内快照后作为参数传入（acmeShPath / ca / keyType）。
+func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSProvider, acmeShPath string, ca CA, keyType KeyType) (string, error) {
 	firstDomain := domains[0]
 	certDir := filepath.Join(m.certsDir, firstDomain)
 	os.MkdirAll(certDir, 0o700)
 
 	// CA server flag
-	caFlag := " --server " + m.ca.URL
+	caFlag := " --server " + ca.URL
 
 	// Key length flag for acme.sh
 	keyLength := "ec-256"
-	switch m.keyType {
+	switch keyType {
 	case EC384:
 		keyLength = "ec-384"
 	case RSA2048:
@@ -630,11 +639,11 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 	if envErr != nil {
 		return "", fmt.Errorf("acme.sh 环境不可用: %w", envErr)
 	}
-	cmd := exec.CommandContext(ctx, m.acmeShPath, args...)
+	cmd := exec.CommandContext(ctx, acmeShPath, args...)
 	cmd.Dir = certDir
 	cmd.Env = env
 
-	log.Printf("[acme] %s %s", m.acmeShPath, strings.Join(args, " "))
+	log.Printf("[acme] %s %s", acmeShPath, strings.Join(args, " "))
 	out, err := cmd.CombinedOutput()
 	log.Printf("[acme] 输出:\n%s", string(out))
 	m.AppendLog(fmt.Sprintf("acme.sh %s\n%s\n", strings.Join(args, " "), string(out)))
@@ -648,9 +657,9 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 		"domains":  domains,
 		"issued":   time.Now().Format(time.RFC3339),
 		"acme":     true,
-		"ca":       m.ca.Name,
+		"ca":       ca.Name,
 		"provider": dp.Name,
-		"key_type": string(m.keyType),
+		"key_type": string(keyType),
 		"email":    m.email,
 	}
 	if dp.KeyName != "" {
@@ -661,7 +670,7 @@ func (m *Manager) issueViaAcmeSh(ctx context.Context, domains []string, dp DNSPr
 	} else if err := os.WriteFile(filepath.Join(certDir, "meta.json"), metaData, 0o600); err != nil {
 		log.Printf("[acme] 写入 meta.json 失败: %v (证书已签发但元数据丢失)", err)
 	}
-	log.Printf("[acme] 证书已签发: %s (CA=%s 密钥=%s)", strings.Join(domains, ","), m.ca.Name, m.keyType)
+	log.Printf("[acme] 证书已签发: %s (CA=%s 密钥=%s)", strings.Join(domains, ","), ca.Name, keyType)
 	return firstDomain, nil
 }
 

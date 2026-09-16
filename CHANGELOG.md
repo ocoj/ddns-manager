@@ -1,6 +1,35 @@
 ## v1.6.71 — 2026-09-16
 
-### 🔴 修复（N1：acme.sh 的 HOME/ACME_HOME 依赖 —— 上线期发现的复发型缺陷）
+> **版本归并说明**：当日全部修复（**4 个 🔴 根因** + 评审/审计/验收各轮整改）并入**本版本**。
+> 上线期曾以中间构建 `1.6.70` 部署验证（4/4 证书续签成功），其内容与本条目一致，故不再单列版本条目。
+
+### 🔴 修复 1: 自动续期不再依赖 acme.sh 全局凭据（DNS Key 注入续期路径）
+
+
+- **根因**: 首次签发通过 `cmd.Env` 注入 DNS 凭据，但 `Renew` / `RenewByName` **未注入** → 续期永久依赖 acme.sh 内全局单份 `SAVED_*`。UI 轮换 DNS Key 后自动续期仍用旧 Key → `Error adding TXT record to domain: _acme-challenge.<域名>`（`InvalidAccessKeyId.Inactive`），证书**静默不更新**
+- **修复 A**: 新增 `acmeShEnvFor`（签发/续期**共用**；空值不注入；`dp==nil` 时不设 `cmd.Env`，逐字节保持原行为）+ `resolveDNSKey`（按 `meta.provider` + `meta.dns_key` 精确解析；provider 不一致/凭据不完整/多候选歧义一律拒绝注入）
+- **修复 B**: `meta.json` 新增 `dns_key` 字段登记 DNS Key 名；签发时写入
+- **修复 C（防静默失效）**: `attachDNSKeyLookup` 覆盖**全部 4 个** manager 注册点；启动自检对"凭据解析器未挂载 / ACME 证书缺 `meta.dns_key`"输出 **error/warning** 审计
+
+### 🔴 修复 2: 推送前保证 bundle 内 PEM/PFX 是同一张证书（IIS 装回旧证书）
+
+
+- **根因**: `LoadCertBundle` 自愈只重算 `meta.hash`，**心跳推送路径没有任何 PFX 生成点**。外部写入者（残留的 acme.sh cron，或手工执行 `acme.sh --renew`）覆盖 PEM 后，Manager 会把"**新 PEM + 旧 PFX**"下发给 Agent；Windows Agent 从 **PFX** 提取指纹导入 IIS → IIS 装回**旧证书**。生产实测存在 PFX 已过期约 2 个月的实例
+- **修复**: 新增 `ensureBundlePFXFresh`（心跳路径，`matched` 判定与 `CertUpdate` 构建**之前**执行）
+  - **三态内容级判据**（一致 / 需重建 / 不可判定），硬判据为 **四路 leaf DER 相等**（`fullchain.pem`、`cert.pem`、`cert.pfx`、`cert-modern.pfx`）
+  - **链长差异仅信息性**（不触发重建）—— 否则每次续期后 `UpdateCertMeta` 产出 leaf-only PFX 会引发**震荡重建**
+  - `cert.pfx` / `cert-modern.pfx` **缺失 → 重建**；**存在但解码失败 → 不重建 + error**（避免用推断密码引入新的不一致）
+  - 仅作用于 ACME bundle（用户上传证书不受影响）
+  - 按 bundle **串行化** + **锁内重载**（防陈旧内存副本重复重建）
+- **可观测性**: 一致性审计按**状态变更去重**，避免每心跳刷屏淹没真实失败
+
+### 🔴 修复 3: 新签发证书的续期结果无法落入 bundle
+
+
+- `issueViaAcmeSh` 首次安装到 `certs/<域名>/`，随后被 `handleACMEIssue` 的 `os.RemoveAll` 删除 → 新增 `Manager.InstallCert`（`acme.sh --install-cert`）把安装路径重指向 bundle 目录；失败记 error 但不阻断签发
+
+### 🔴 修复 4（N1）: acme.sh 的 HOME / 工作目录依赖 —— systemd 无 HOME 时不得回落到 `/.acme.sh`
+
 
 - **问题**：`acmeShEnvFor` 以 `os.Environ()` 为基底并假设"父环境会提供 `HOME`"，而
   **systemd 默认不设置 `HOME`** ⇒ acme.sh 的 home 落到 `/.acme.sh`：既读不到既有域名配置
@@ -21,7 +50,56 @@
 - **不变量**：新增 I26（home 必须显式固定）、I27（环境继承类不变量必须以"移除该状态"的方式测试）、
   I28（不得在任意路径创建携带明文凭据的 home）、I29（acme.sh 路径与 home 全局唯一）。
 
-### 🛠 实现轮审计整改（G1 / G4 / G5）
+### 🔧 其它改进
+
+
+- **5 处** PFX 生成点（续期 / 签发 / 下载 / 设置 PFX 密码 / 上传）统一走 `crypto.PickCertPEM`（确定性偏好 `fullchain.pem`），消除链长非确定性（原实现遍历 `map`，顺序随机）
+- 新增 `crypto.ParsePFXLeafChain`（用 `pkcs12.DecodeChain`，可取完整 CA 链）、`crypto.ClassifyPFXError`（区分"密码不符"与"容器损坏"）、`store.LoadCertMeta`
+- 同一证书续期**串行化** + 等锁后**二次到期校验**；`Renew` 改为按次返回 `RenewOutcome`（消除并发下共享错误字段互相覆盖），并按 `RenewKind` 分级落审计
+- `meta.json` 写入改 `json.MarshalIndent`，防止 Key 名/域名含引号时生成非法 JSON
+- 新增 `scripts/migrate-acme-dns-key.py`（默认 dry-run；为存量 ACME 证书补写 `dns_key`；`--verify` 同时校验 `Le_Real*Path` 是否等于 bundle 目录）
+
+### 🛠 评审/审计/验收整改（B1–B8、B7 补全、送审包复核、G1/G4/G5）
+
+**实施结果评审（B1–B7）**
+
+
+对照独立实施评审报告逐项整改：
+
+- **B1（阻断级）** `KindNotReplaced` 分支未写入 `lastRenewErr` ⇒ 手工续期遇到"S4：退出码 0 但证书未变化"时，UI 回落成**误导性的 404「证书未找到或未到续期时间」**。已在分支内补 `setLastRenewErr`，并在 `renewOne` 的强制续期入口清空历史错误，使界面显示可操作的真实原因。
+- **B2（阻断级）** `AppendLog` 无锁、`GetLog` 持 `m.mu`，二者并不互斥；续期路径新增的 `AppendLog` 调用扩大了并发写面。新增独立 `logMu`，`AppendLog`/`GetLog` 统一使用。
+- **B4** `Unverifiable` 按原因分级：**解码失败/重载失败/重建失败 = error**，"缺少可判定的源文件" = **warning**（与 I15 措辞一致；两者均按状态变更去重）。
+- **B5** 启动自检新增 ③ **一致性只读预检**（只审计不重建），既在启动即暴露 PEM/PFX 不一致，又**预热去重签名**，消除重启后首轮心跳每个 bundle 各报一条 info。
+- **B6** provider 查表口径统一：新增 `dnsAPILookup`（大小写不敏感），**签发与续期共 4 处**（`IssueDNS01` / `issueViaAcmeSh` / `acmeShEnvFor` / `resolveDNSKey`）全部改经该入口 —— 原实现一侧 `EqualFold`、一侧精确查表，存在"续期能解析凭据、签发却报不支持（或反之，注入被静默拒绝）"的口径分裂。
+- **B7** 迁移脚本的"凭据完整"判定改为与 Go 侧 `dnsAPIMapping` 对齐的 `REQUIRES_SECRET` 集合（原实现只覆盖 3 个 provider，`alidns` 等会被误判为完整候选）。
+- 可读性：歧义拒绝消息列出候选 Key 名；启动自检输出问题证书数量。
+
+**第三方验收报告整改（B7 补全 + B8）**
+
+
+| 项 | 问题 | 整改 |
+|:--:|------|------|
+| **B7** 🟠 | 迁移脚本的凭据完整性判定**未被强制执行**：`dns_keys.json` 中唯一 Key 缺 `access_key_secret` 时，`--key-name` 显式指定仍会被 dry-run 规划并 `--apply` 写入，`--verify` 也通过 | 新增 `_credential_problem()`（与 Go 侧 `resolveDNSKey` 口径一致）：`cmd_migrate` 入口**拒绝**（exit 1，提示"写入不完整 Key 比留空更糟——Go 侧命中后拒绝注入且不回退唯一匹配"）、`cmd_verify` 同步断言、`resolve_candidates` 复用同一判定 |
+| **B8** 🟠 | `isAcmeShSkip` 仅凭输出串判定 ⇒ 某次**真实失败**的输出恰好命中跳过文案时会被吞成 `KindSkipped`（不记 error） | 新增 `certContentChanged()`，判定改为 `!force && isAcmeShSkip(combined) && !certContentChanged(certDir, before)`；读不到文件时按"可能已变"处理（宁可多一条 error，不可漏报）。回归用例 `TestRenewByName_AcmeShSkip_MarkerButContentChanged_IsFailed` |
+| T30 🟢 | "统计 `PickCertPEM(` 次数"的守卫**无法发现**新增生成点绕过 helper | 改为 **AST 级逐函数断言**（调用 `GeneratePFX`/`GeneratePFXModern` 的函数内必须出现 `PickCertPEM`）；已用"注入违规函数 → 守卫失败并报出函数名"做**判别力反证** |
+
+**自查发现并修复**：两处 `force=false` 用例原本**空转**（harness 证书 90 天 → 在"未到期预检"即返回，从未调用 acme.sh）。已加 `makeCertDue()` 并在用例中断言"acme.sh 确实被调用"（反空转守卫）。
+
+**送审包复核整改（第 3 轮，5 项非阻断建议全部落地）**
+
+
+| 复核意见 | 整改 |
+|------|------|
+| 待裁定问题数量口径不一致（送审说明 8 / 报告 6） | 2 个新问题已**并入报告 §11（#7/#8）**，报告 §0.5 口径同步为 8 |
+| 附录 C 未收录本轮材料 | 已补入送审说明 / 补丁 / 指纹 / `rt-repro.sh` / 送审包复核报告，并新增"评审轮次汇总"（方案 4 + 实施 1 + 验收 2 = 7 轮） |
+| `InstallCert` 单 `-d` 守卫（可选） | `TestInstallCert_PassesBundlePaths` 断言 **argv 中 `-d` 恰好 1 次**；已做**注入式反证**（多传一个 `-d` → FAIL，报 `got 2`）。理由：RT2a/RT2b 实测——首个 `-d` 决定装入哪张证书，首参为**另一张有效证书**时会 **exit 0 静默装错证书** |
+| 反空转约定 helper 化（可选） | 抽出 `requireAcmeShInvoked()`（+ `argvLines` / `countArg`），原两处手写 guard 改用之 |
+| 仓库根抗污染（卫生） | `.gitignore` 新增 `/home/`（沙箱误在仓库根执行时的产物，内含自签私钥）；实测创建 `home/` 后 `git status` 与 `git ls-files --others` 均不再出现 |
+
+**顺带修正**：`InstallCert` 原注释写"多 `-d` 行为未验证（见 U3）"，与 RT2a/RT2b 已实测的结论不符，已按实测重写（U3 就此结案）。
+
+**实现轮审计整改（G1 / G4 / G5）**
+
 
 - **G1**（🟠 实质缺口）：判定表中「路径**不存在**」与「**空目录**」两个分支此前**直接采用**，
   绕过了 §1.3.4 体检 ⇒ **全新安装实例**可能把 home 建到 `/tmp` 类公共可写目录，或采纳**他人预置的空目录**，
@@ -35,101 +113,24 @@
 - **注入式反证**：E1（位置体检恒通过）/ E2（移除空目录体检）/ F（不保守）/ G（不去重）
   四项均使对应用例 FAIL，还原后全绿。
 
-### 📚 文档
-
-- `docs/usage-guide.md`：systemd 模板补 `Environment=HOME=` 与 `Environment=LE_WORKING_DIR=`；
-  **新增 §2.4「acme.sh 安装与 home 约定」**（含 `cert.provider` 的真实语义与排错指引）。
-
-### 🧪 测试（T34–T49）
-
-- 判定表与环境构造：`TestT34/T35/T35b/T36/T37/T38/T38b`；home 解析：
-  `TestT40/T41/T41b/T41c/T41d/T45/T46/T47/T48/T48b/T35b`；服务端接线：`TestT44/T49/T49b/T49c`。
-- 集成：`TestT34_Renew_PinnedHomeInChildEnv`（断言 fake acme.sh **shell 内实际解析**出的
-  `HOME`/`LE_WORKING_DIR`）、`TestT39_InstallCert_EnvHasHomeAndNoCredentials`、
-  `TestT41d_Renew_NoHome_FailFastAndAcmeShNeverCalled`。
-- **判别力反证（注入式）**：4 项注入（不补 HOME / 恢复 `acme.sh` 判据 / 移除 fail-fast / 少接线一个构造点）
-  均使对应用例 FAIL，还原后全绿。
-- 门禁：`go build ./... && go vet ./... && go test ./... -race -count=1` **全绿**。
-
----
-
-## v1.6.70 — 2026-09-16
-
-### 🔴 修复: 自动续期不再依赖 acme.sh 全局凭据（DNS Key 注入续期路径）
-
-- **根因**: 首次签发通过 `cmd.Env` 注入 DNS 凭据，但 `Renew` / `RenewByName` **未注入** → 续期永久依赖 acme.sh 内全局单份 `SAVED_*`。UI 轮换 DNS Key 后自动续期仍用旧 Key → `Error adding TXT record to domain: _acme-challenge.<域名>`（`InvalidAccessKeyId.Inactive`），证书**静默不更新**
-- **修复 A**: 新增 `acmeShEnvFor`（签发/续期**共用**；空值不注入；`dp==nil` 时不设 `cmd.Env`，逐字节保持原行为）+ `resolveDNSKey`（按 `meta.provider` + `meta.dns_key` 精确解析；provider 不一致/凭据不完整/多候选歧义一律拒绝注入）
-- **修复 B**: `meta.json` 新增 `dns_key` 字段登记 DNS Key 名；签发时写入
-- **修复 C（防静默失效）**: `attachDNSKeyLookup` 覆盖**全部 4 个** manager 注册点；启动自检对"凭据解析器未挂载 / ACME 证书缺 `meta.dns_key`"输出 **error/warning** 审计
-
-### 🔴 修复: 推送前保证 bundle 内 PEM/PFX 是同一张证书（IIS 装回旧证书）
-
-- **根因**: `LoadCertBundle` 自愈只重算 `meta.hash`，**心跳推送路径没有任何 PFX 生成点**。外部写入者（残留的 acme.sh cron，或手工执行 `acme.sh --renew`）覆盖 PEM 后，Manager 会把"**新 PEM + 旧 PFX**"下发给 Agent；Windows Agent 从 **PFX** 提取指纹导入 IIS → IIS 装回**旧证书**。生产实测存在 PFX 已过期约 2 个月的实例
-- **修复**: 新增 `ensureBundlePFXFresh`（心跳路径，`matched` 判定与 `CertUpdate` 构建**之前**执行）
-  - **三态内容级判据**（一致 / 需重建 / 不可判定），硬判据为 **四路 leaf DER 相等**（`fullchain.pem`、`cert.pem`、`cert.pfx`、`cert-modern.pfx`）
-  - **链长差异仅信息性**（不触发重建）—— 否则每次续期后 `UpdateCertMeta` 产出 leaf-only PFX 会引发**震荡重建**
-  - `cert.pfx` / `cert-modern.pfx` **缺失 → 重建**；**存在但解码失败 → 不重建 + error**（避免用推断密码引入新的不一致）
-  - 仅作用于 ACME bundle（用户上传证书不受影响）
-  - 按 bundle **串行化** + **锁内重载**（防陈旧内存副本重复重建）
-- **可观测性**: 一致性审计按**状态变更去重**，避免每心跳刷屏淹没真实失败
-
-### 🔴 修复: 新签发证书的续期结果无法落入 bundle
-
-- `issueViaAcmeSh` 首次安装到 `certs/<域名>/`，随后被 `handleACMEIssue` 的 `os.RemoveAll` 删除 → 新增 `Manager.InstallCert`（`acme.sh --install-cert`）把安装路径重指向 bundle 目录；失败记 error 但不阻断签发
-
-### 🔧 其它改进
-
-- **5 处** PFX 生成点（续期 / 签发 / 下载 / 设置 PFX 密码 / 上传）统一走 `crypto.PickCertPEM`（确定性偏好 `fullchain.pem`），消除链长非确定性（原实现遍历 `map`，顺序随机）
-- 新增 `crypto.ParsePFXLeafChain`（用 `pkcs12.DecodeChain`，可取完整 CA 链）、`crypto.ClassifyPFXError`（区分"密码不符"与"容器损坏"）、`store.LoadCertMeta`
-- 同一证书续期**串行化** + 等锁后**二次到期校验**；`Renew` 改为按次返回 `RenewOutcome`（消除并发下共享错误字段互相覆盖），并按 `RenewKind` 分级落审计
-- `meta.json` 写入改 `json.MarshalIndent`，防止 Key 名/域名含引号时生成非法 JSON
-- 新增 `scripts/migrate-acme-dns-key.py`（默认 dry-run；为存量 ACME 证书补写 `dns_key`；`--verify` 同时校验 `Le_Real*Path` 是否等于 bundle 目录）
-
-### 🛠 评审整改（实施结果评审 B1–B7）
-
-对照独立实施评审报告逐项整改：
-
-- **B1（阻断级）** `KindNotReplaced` 分支未写入 `lastRenewErr` ⇒ 手工续期遇到"S4：退出码 0 但证书未变化"时，UI 回落成**误导性的 404「证书未找到或未到续期时间」**。已在分支内补 `setLastRenewErr`，并在 `renewOne` 的强制续期入口清空历史错误，使界面显示可操作的真实原因。
-- **B2（阻断级）** `AppendLog` 无锁、`GetLog` 持 `m.mu`，二者并不互斥；续期路径新增的 `AppendLog` 调用扩大了并发写面。新增独立 `logMu`，`AppendLog`/`GetLog` 统一使用。
-- **B4** `Unverifiable` 按原因分级：**解码失败/重载失败/重建失败 = error**，"缺少可判定的源文件" = **warning**（与 I15 措辞一致；两者均按状态变更去重）。
-- **B5** 启动自检新增 ③ **一致性只读预检**（只审计不重建），既在启动即暴露 PEM/PFX 不一致，又**预热去重签名**，消除重启后首轮心跳每个 bundle 各报一条 info。
-- **B6** provider 查表口径统一：新增 `dnsAPILookup`（大小写不敏感），**签发与续期共 4 处**（`IssueDNS01` / `issueViaAcmeSh` / `acmeShEnvFor` / `resolveDNSKey`）全部改经该入口 —— 原实现一侧 `EqualFold`、一侧精确查表，存在"续期能解析凭据、签发却报不支持（或反之，注入被静默拒绝）"的口径分裂。
-- **B7** 迁移脚本的"凭据完整"判定改为与 Go 侧 `dnsAPIMapping` 对齐的 `REQUIRES_SECRET` 集合（原实现只覆盖 3 个 provider，`alidns` 等会被误判为完整候选）。
-- 可读性：歧义拒绝消息列出候选 Key 名；启动自检输出问题证书数量。
-
-### 🔬 真机实测（RT1–RT3，本机沙箱 acme.sh v3.1.4，零生产风险）
+### 🔬 真机实测（RT1–RT5）
 
 | # | 实测项 | 结果 |
 |:--:|------|------|
 | RT1 | 未到期时 `--renew` 的行为与退出码 | **返回非零退出码（2）** 并打印 `Skipping. Next renewal time is: …` / `Add '--force' to force renewal.`，证书文件不改动 |
 | RT2 | `--install-cert` 传多个 `-d` | 语法被接受（exit 0），但**只使用第一个 `-d`**（落盘证书 CN 与 conf 改写均验证）⇒ 本实现"只传主域名"正确且充分 |
 | RT3 | `--install-cert` 后 `Le_Real*Path` 是否变更 | **是**：conf 被写入 `Le_RealCertPath/Le_RealKeyPath/Le_RealFullChainPath`，且落盘文件与 acme.sh 源**sha256 一致** ⇒ I9 机制确认 |
+| RT4 | `env -i`（进程级**无 HOME**）运行 N1 用例 | **PASS** —— 证明 home 兜底由代码独立生效，而非依赖部署层环境（`scripts/rt4-acme-home-repro.sh`） |
+| RT5 | 真实 acme.sh v3.1.4 的 home 四形态探测（生产机沙箱） | **4/4 PASS**：①无 HOME ⇒ `/.acme.sh`（缺陷机制实证）②`LE_WORKING_DIR` 生效 ③`HOME` 生效 ④**`ACME_HOME` 不被识别** |
 
 **RT1 引出的真实修复**：原实现把 acme.sh 的"未到期跳过"（非零退出码）当作**续期失败**并记 error —— 每 24h ticker 会输出误导性失败。已新增 `isAcmeShSkip`：识别 `Skipping. Next renewal time is` / `to force renewal` 并归类为 `KindSkipped`（不记错误、不刷屏）；非强制路径生效，`--force` 路径不受影响。回归用例 `TestRenewByName_AcmeShSkip_IsSkippedNotFailed`。
 
-### ✅ 验收整改（第三方验收报告 B7 补全 + B8）
+### 📚 文档
 
-| 项 | 问题 | 整改 |
-|:--:|------|------|
-| **B7** 🟠 | 迁移脚本的凭据完整性判定**未被强制执行**：`dns_keys.json` 中唯一 Key 缺 `access_key_secret` 时，`--key-name` 显式指定仍会被 dry-run 规划并 `--apply` 写入，`--verify` 也通过 | 新增 `_credential_problem()`（与 Go 侧 `resolveDNSKey` 口径一致）：`cmd_migrate` 入口**拒绝**（exit 1，提示"写入不完整 Key 比留空更糟——Go 侧命中后拒绝注入且不回退唯一匹配"）、`cmd_verify` 同步断言、`resolve_candidates` 复用同一判定 |
-| **B8** 🟠 | `isAcmeShSkip` 仅凭输出串判定 ⇒ 某次**真实失败**的输出恰好命中跳过文案时会被吞成 `KindSkipped`（不记 error） | 新增 `certContentChanged()`，判定改为 `!force && isAcmeShSkip(combined) && !certContentChanged(certDir, before)`；读不到文件时按"可能已变"处理（宁可多一条 error，不可漏报）。回归用例 `TestRenewByName_AcmeShSkip_MarkerButContentChanged_IsFailed` |
-| T30 🟢 | "统计 `PickCertPEM(` 次数"的守卫**无法发现**新增生成点绕过 helper | 改为 **AST 级逐函数断言**（调用 `GeneratePFX`/`GeneratePFXModern` 的函数内必须出现 `PickCertPEM`）；已用"注入违规函数 → 守卫失败并报出函数名"做**判别力反证** |
+- `docs/usage-guide.md`：systemd 模板补 `Environment=HOME=` 与 `Environment=LE_WORKING_DIR=`；
+  **新增 §2.4「acme.sh 安装与 home 约定」**（含 `cert.provider` 的真实语义与排错指引）。
 
-**自查发现并修复**：两处 `force=false` 用例原本**空转**（harness 证书 90 天 → 在"未到期预检"即返回，从未调用 acme.sh）。已加 `makeCertDue()` 并在用例中断言"acme.sh 确实被调用"（反空转守卫）。
-
-### 🔎 送审包复核整改（第 3 轮，5 项非阻断建议全部落地）
-
-| 复核意见 | 整改 |
-|------|------|
-| 待裁定问题数量口径不一致（送审说明 8 / 报告 6） | 2 个新问题已**并入报告 §11（#7/#8）**，报告 §0.5 口径同步为 8 |
-| 附录 C 未收录本轮材料 | 已补入送审说明 / 补丁 / 指纹 / `rt-repro.sh` / 送审包复核报告，并新增"评审轮次汇总"（方案 4 + 实施 1 + 验收 2 = 7 轮） |
-| `InstallCert` 单 `-d` 守卫（可选） | `TestInstallCert_PassesBundlePaths` 断言 **argv 中 `-d` 恰好 1 次**；已做**注入式反证**（多传一个 `-d` → FAIL，报 `got 2`）。理由：RT2a/RT2b 实测——首个 `-d` 决定装入哪张证书，首参为**另一张有效证书**时会 **exit 0 静默装错证书** |
-| 反空转约定 helper 化（可选） | 抽出 `requireAcmeShInvoked()`（+ `argvLines` / `countArg`），原两处手写 guard 改用之 |
-| 仓库根抗污染（卫生） | `.gitignore` 新增 `/home/`（沙箱误在仓库根执行时的产物，内含自签私钥）；实测创建 `home/` 后 `git status` 与 `git ls-files --others` 均不再出现 |
-
-**顺带修正**：`InstallCert` 原注释写"多 `-d` 行为未验证（见 U3）"，与 RT2a/RT2b 已实测的结论不符，已按实测重写（U3 就此结案）。
-
-### 🧪 测试（T1–T33 全部有覆盖）
+### 🧪 测试（T1–T49）
 
 - 新增测试文件 6 个、测试函数 **33 个**（1802 行）：
   - `internal/crypto/pkcs12_consistency_test.go` — `ParsePFXLeafChain` 对 Legacy/Modern 均可解出完整 CA 链、错误分类、`PickCertPEM` 确定性且不取私钥
@@ -142,11 +143,29 @@
 - 说明：`T12`（并发无竞争）由全量 `-race` 覆盖但无专用用例；`T22`/`T20b` 由 `T16`/`T20` 内的断言覆盖
 - 覆盖口径：**33/33 有覆盖 = 30 项专用用例 + 3 项间接覆盖**（T12 并发无竞争仅由全量 `-race` 覆盖、无专用用例；T22 由 T16/T29 内 hash 断言覆盖；T24 为既有回归套件）；本批新落地 T14 / T15 / T26 / T28 / T29 / T30 / T31(恢复) / T33
 - 门禁：`go build ./... && go vet ./... && go test ./... -race -count=1` **全绿**
-- 基线指纹（补丁 sha256 / 逐文件 sha256 / 行数）：见 `internal-docs/audits/2026-09-16-acme-renew-fingerprints.txt`
+- 基线指纹（补丁 sha256 / 逐文件 sha256 / 行数）：见 `internal-docs/audits/` 下对应轮次的指纹清单
+
+**T34–T49（N1 批次：acme.sh home 解析 / 接线 / 位置体检）**
+
+- 判定表与环境构造：`TestT34/T35/T35b/T36/T37/T38/T38b`；home 解析：
+  `TestT40/T41/T41b/T41c/T41d/T45/T46/T47/T48/T48b/T35b`；服务端接线：`TestT44/T49/T49b/T49c`。
+- 集成：`TestT34_Renew_PinnedHomeInChildEnv`（断言 fake acme.sh **shell 内实际解析**出的
+  `HOME`/`LE_WORKING_DIR`）、`TestT39_InstallCert_EnvHasHomeAndNoCredentials`、
+  `TestT41d_Renew_NoHome_FailFastAndAcmeShNeverCalled`。
+- **判别力反证（注入式，累计 8 项）**：不补 HOME / 恢复 `acme.sh` 判据 / 移除 fail-fast / 少接线一个构造点 /
+  位置体检恒通过 / 移除空目录体检 / `detectLocalACMECerts` 不保守 / 接线审计不去重 —— 均使对应用例 FAIL，还原后全绿；
+  另 T48c/T48d/T48e 具备**修复前实际 FAIL** 的前置证据。
+- 门禁：`go build ./... && go vet ./... && go test ./... -race -count=1` **全绿**（10 个含测试包）。
+
+---
 
 ### 📁 涉及文件
 
-`internal/acme/acme.go`、`internal/crypto/pkcs12.go`、`internal/store/store.go`、`internal/server/server.go`、`internal/server/handlers_nodes.go`、`internal/server/handlers_certs.go`、`internal/server/cert_consistency.go`（新增）、`scripts/migrate-acme-dns-key.py`（新增）、测试 6 个（33 个测试函数）、`VERSION`、`CHANGELOG.md`
+- **代码（8）**：`internal/acme/acme.go`(+658/−157)、`internal/acme/acmehome.go`（新增）(+364/−0)、`internal/crypto/pkcs12.go`(+99/−0)、`internal/server/cert_consistency.go`（新增）(+345/−0)、`internal/server/handlers_certs.go`(+81/−69)、`internal/server/handlers_nodes.go`(+5/−0)、`internal/server/server.go`(+334/−24)、`internal/store/store.go`(+20/−0)
+- **测试（8）**：`internal/acme/acmehome_test.go`（新增）(+570/−0)、`internal/acme/dnskey_env_test.go`（新增）(+102/−0)、`internal/acme/renew_integration_test.go`（新增）(+695/−0)、`internal/crypto/pkcs12_consistency_test.go`（新增）(+156/−0)、`internal/server/acmesh_wiring_test.go`（新增）(+243/−0)、`internal/server/cert_consistency_test.go`（新增）(+808/−0)、`internal/server/startup_audit_test.go`（新增）(+71/−0)、`internal/store/certmeta_test.go`（新增）(+92/−0)
+- **脚本（2）**：`scripts/migrate-acme-dns-key.py`（新增）(+314/−0)、`scripts/rt4-acme-home-repro.sh`（新增）(+103/−0)
+- **文档/元数据（4）**：`.gitignore`(+3/−0)、`CHANGELOG.md`(+169/−0)、`VERSION`(+1/−1)、`docs/usage-guide.md`(+55/−0)
+- 合计：22 files changed, 5288 insertions(+), 251 deletions(-)（相对**已发布基线** `a61b3d9` = `origin/main`）
 
 ---
 

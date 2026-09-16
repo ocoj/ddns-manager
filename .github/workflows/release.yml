@@ -16,6 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        # N-21（v1.6.73 #4）：**CI 工具链必须显式记录**。当前 CI = go1.25，而生产部署件由
+        # **go1.26.4** 构建（见 ~/ddns-backups/v1.6.72-deployed-*/PROVENANCE.txt 的 toolchain 字段）
+        # ⇒ 二者产物**不可逐字节比较**（「哈希差异 ≠ 代码差异」；size 相同也不构成证据）。
+        # 「统一 Go 版本」列为**独立项**（未在本批实施，登记）。
         with: { go-version: '1.25' }
 
       - name: Read version
@@ -108,7 +112,11 @@ jobs:
           echo "" >> release-body.md
           echo "### SHA256" >> release-body.md
           echo '```' >> release-body.md
-          cat build/node-agent-v${VER}-*.sha256 >> release-body.md
+          # N-27（v1.6.73 #5）：正文 SHA256 块**纳入 Manager**（此前只有 3 个 Agent ⇒ Manager 的
+          # .sha256 仅作资产出现，正文里查不到）。改为单条 cat、**去手工拼块**。
+          # 顺序固定：Manager → Agent linux/amd64 → linux/arm64 → windows/amd64。
+          # 口径：CI 发布侧为**纯哈希**（无文件名，见上方 `awk '{print $1}'`）⇒ 本块即按上述顺序的 4 行哈希。
+          cat build/ddns-manager-v${VER}-linux-amd64.sha256 build/node-agent-v${VER}-*.sha256 >> release-body.md
           echo '```' >> release-body.md
           cat release-body.md
 
@@ -128,6 +136,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
+        # N-21（v1.6.73 #4）：同 build job —— CI 工具链 go1.25（与生产 go1.26.4 不一致，见 build job 处注释）
         with: { go-version: '1.25' }
 
       - name: Build binary

@@ -96,7 +96,10 @@ jobs:
         id: changelog
         env: { VER: "${{ needs.build.outputs.version }}" }
         run: |
-          awk "/^## v${VER}/," CHANGELOG.md | sed '/^---$/q' | tail -n +2 > release-body.md
+          # v1.6.71 修复: 原 `awk "/^## v${VER}/,"`(range 缺第二模式) 是 awk 语法错误
+          # ⇒ 提取结果为空 ⇒ Release 正文只剩下方追加的 SHA256 块（v1.6.69 及更早同样受影响）。
+          # 正确写法: sed 地址范围(含末行 ---) → 去标题行 → 去末行 ---
+          sed -n "/^## v${VER}/,/^---$/p" CHANGELOG.md | tail -n +2 | sed '$d' > release-body.md
           echo "---" >> release-body.md
           echo "" >> release-body.md
           echo "### SHA256" >> release-body.md

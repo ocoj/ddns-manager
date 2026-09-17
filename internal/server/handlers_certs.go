@@ -494,6 +494,22 @@ func (s *Server) handleACMEDeleteAccount(w http.ResponseWriter, r *http.Request)
 	jsonOK(w, map[string]string{"deleted": deleted})
 }
 
+// issueBundleName normalises the cert name returned by IssueDNS01 / IssueHTTP01 into the
+// bundle name used under data/certs/.
+//
+// F-DNS01-1: the callers of this helper previously used `!strings.HasPrefix(certName, "acme-")`
+// as a proxy for "the issuance dir differs from the bundle dir". That proxy silently breaks when
+// the *domain itself* starts with `acme-` (e.g. `acme-xxx.lanxun.pro`), because the name already
+// carries the prefix: every such guard then skips (no meta pre-write ⇒ `dns_key` lost, no
+// install-cert relocation ⇒ renewals never land in the bundle, no cleanup, and a double prefix).
+// Normalising once, here, removes the ambiguity: the prefix is added *iff* it is not already present.
+func issueBundleName(certName string) string {
+	if strings.HasPrefix(certName, "acme-") {
+		return certName
+	}
+	return "acme-" + certName
+}
+
 func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	refMgr := s.getACMEMgr(0)
 	if refMgr == nil {
@@ -585,10 +601,22 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	certDir := filepath.Join(s.cfg.DataDir, "certs", certName)
+	// F-DNS01-1 修复（名称规范化）：本函数此前用 `!strings.HasPrefix(certName, "acme-")`
+	// 判断"签发目录是否需要重指向/预写/清理"，其**隐含契约是 certName = 裸域名**。
+	// 但若**域名自身以 `acme-` 开头**（例如 `acme-xxx.lanxun.pro`），四道守卫会**全部误判跳过**：
+	//   ① 不预写签发 meta ⇒ `acme`/`ca`/`email`/**`dns_key`**/`provider`/`key_type` **丢失**
+	//      （`issueViaAcmeSh` 已在签发目录写好 `dns_key`，见 acme.go「metaMap["dns_key"] = dp.KeyName」）
+	//   ② 不重指向 acme.sh 安装路径 ⇒ 此后**每次续期结果都不落 bundle**
+	//   ③ 不清理原目录（目录残留）  ④ `Name` 被二次加前缀 ⇒ `acme-acme-…`
+	// 改为**一次性规范化**，并以「签发目录 ≠ bundle 目录」为唯一判据。
+	bundleName := issueBundleName(certName)
+	// 签发目录与 bundle 目录不同时才需要"搬运/重指向/清理"（同目录时 meta 已在位，
+	// `SaveCertBundle` 的 extra 保留机制可直接读到 ⇒ `dns_key` 等非受管键自然保留）。
+	needRelocate := certDir != filepath.Join(s.cfg.DataDir, "certs", bundleName)
 	// v1.6.72 P2/F7: `SaveCertBundle` 的 structKeys 白名单含 `domains`，若这里不赋值，
-	// 预写 meta 的 domains 会被结构体零值覆盖为 null（首发路径全量中招；续期/重建路径
-	// 因 Load→Save 会回填 Domains 而不受影响）。
-	bundle := &store.CertBundle{Name: "acme-" + certName, Domains: req.Domains, Files: map[string][]byte{}}
+	// 预写 meta 的 domains 会被结构体零值覆盖为 null（续期/重建路径因 Load→Save 会回填
+	// Domains 而不受影响）。
+	bundle := &store.CertBundle{Name: bundleName, Domains: req.Domains, Files: map[string][]byte{}}
 	for _, fn := range []string{"fullchain.pem", "privkey.pem", "cert.pem"} {
 		if data, err := os.ReadFile(filepath.Join(certDir, fn)); err == nil {
 			bundle.Files[fn] = data
@@ -629,9 +657,9 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 
 	// F4-A: 从原始签发目录预写 meta.json 到目标目录，确保 SaveCertBundle
 	// 的 extra 保留机制能读取到 ACME 元数据（acme/ca/email/provider/key_type）
-	if !strings.HasPrefix(certName, "acme-") {
+	if needRelocate {
 		if metaData, err := os.ReadFile(filepath.Join(certDir, "meta.json")); err == nil {
-			targetMetaDir := filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName)
+			targetMetaDir := filepath.Join(s.cfg.DataDir, "certs", bundleName)
 			os.MkdirAll(targetMetaDir, 0o700)
 			os.WriteFile(filepath.Join(targetMetaDir, "meta.json"), metaData, 0o600)
 		}
@@ -639,26 +667,34 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 
 	// F4-B: 检查 SaveCertBundle 返回值，失败时不删除原始目录
 	if err := s.store.SaveCertBundle(bundle); err != nil {
-		os.RemoveAll(filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName))
+		os.RemoveAll(filepath.Join(s.cfg.DataDir, "certs", bundleName))
 		log.Printf("[acme] SaveCertBundle 失败: %v", err)
 		jsonErr(w, http.StatusInternalServerError, "保存证书失败: "+err.Error())
 		return
 	}
 	// v1.6.72 P2/F7: 后置自检 —— 若 SaveCertBundle 后 meta.domains 仍为空（预写值被覆盖
 	// 或赋值路径回归），记 warning 审计。不阻断签发（该字段当前无功能性消费者）。
-	if meta, metaErr := s.store.LoadCertMeta("acme-" + certName); metaErr == nil {
+	if meta, metaErr := s.store.LoadCertMeta(bundleName); metaErr == nil {
 		ds, ok := meta["domains"].([]interface{})
 		if !ok || len(ds) == 0 {
 			s.logMgr.Log("acme", "meta.domains 缺失",
-				fmt.Sprintf("acme-%s: 期望 %v（structKeys 白名单覆盖回归？）", certName, req.Domains), "warning")
+				fmt.Sprintf("%s: 期望 %v（structKeys 白名单覆盖回归？）", bundleName, req.Domains), "warning")
+		}
+		// F-DNS01-1 回归守卫：DNS-01 签发必须把 Key 名落到 meta.dns_key
+		// （否则续期只能"按 provider 猜 Key"，同 provider 多 Key 时会选错 ⇒ 续期失败）。
+		if req.DNSProvider != "" {
+			if kn, _ := meta["dns_key"].(string); kn != req.DNSProvider {
+				s.logMgr.Log("acme", "meta.dns_key 缺失/不符",
+					fmt.Sprintf("%s: 期望 %q 实得 %q（F-DNS01-1 回归？）", bundleName, req.DNSProvider, kn), "warning")
+			}
 		}
 	}
 	// v1.6.70 S7/I9: 把 acme.sh 的安装路径重指向 bundle 目录。
 	// issueViaAcmeSh 首次安装到 certs/<域名>/，本函数随后会 os.RemoveAll 该目录；
 	// 若不重指向，此后每次续期的结果都不会落进 bundle（存量 4 张因历史外部
 	// 操作幸免，新签发证书必然中招）。失败不阻断签发，但必须记 error。
-	if !strings.HasPrefix(certName, "acme-") {
-		bundleDir := filepath.Join(s.cfg.DataDir, "certs", "acme-"+certName)
+	if needRelocate {
+		bundleDir := filepath.Join(s.cfg.DataDir, "certs", bundleName)
 		if instErr := mgr.InstallCert(r.Context(), req.Domains[0], bundleDir); instErr != nil {
 			log.Printf("[acme] --install-cert 失败 %s: %v", bundleDir, instErr)
 			s.logMgr.Log("acme", "install-cert 失败",
@@ -666,11 +702,11 @@ func (s *Server) handleACMEIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// clean up the original cert dir (issueViaAcmeSh creates certs/domain/, we save to certs/acme-domain/)
-	if !strings.HasPrefix(certName, "acme-") {
+	if needRelocate {
 		os.RemoveAll(certDir)
 	}
 	s.logMgr.Log("acme", "已签发", certName, fmt.Sprintf("ca=%s domains=%s", mgr.AccountInfo().CA, strings.Join(req.Domains, ",")))
-	jsonOK(w, map[string]interface{}{"status": "issued", "name": "acme-" + certName, "domains": req.Domains, "log": mgr.GetLog()})
+	jsonOK(w, map[string]interface{}{"status": "issued", "name": bundleName, "domains": req.Domains, "log": mgr.GetLog()})
 }
 
 // handleDownloadPFX generates and downloads a PKCS#12 (.pfx) certificate container.

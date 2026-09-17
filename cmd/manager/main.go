@@ -74,6 +74,17 @@ func main() {
 		log.Fatalf("初始化存储失败: %v", err)
 	}
 
+	// v1.6.75：PFX 口令**急切迁移** —— 把历史遗留的明文 pfx_password 就地转为密文并收敛 0600。
+	// 背景：v1.6.73 起新写入已脱敏，但旧 bundle 只在“下次被写入”时才转 ⇒ 长期不续期的 bundle 会
+	// 无限期保留明文（生产实测 3 个）。此处把惰性转换变为**启动即完成**，且对未来“从旧备份恢复”
+	// 同样自愈。安全契约见 store.MigratePlaintextPFXPasswords：先加密并回读验证，再原子替换；
+	// 幂等；失败**不阻断启动**（宁可告警，不可阻服务）。
+	if n, fails, merr := st.MigratePlaintextPFXPasswords(); merr != nil {
+		log.Printf("[store] PFX 口令急切迁移 失败（不阻断启动）: %v", merr)
+	} else if n > 0 || len(fails) > 0 {
+		log.Printf("[store] PFX 口令急切迁移: 已脱敏 %d 个 bundle；失败 %d 个 %v", n, len(fails), fails)
+	}
+
 	// 日志管理器
 	logMgr, err := logger.New(filepath.Join(cfg.DataDir, "events.log"), 10000)
 	if err != nil {

@@ -93,7 +93,7 @@ bash -c "$(curl -fsSL https://your-manager.example.com:30443/bin/install.sh)"
 
 | 项目 | 版本号 | 说明 |
 |------|--------|------|
-| ddns-manager | **v1.6.74** | 证书命名碰撞修复（`acme-` 域名首发/续期路径）· DNS 凭据与 PFX 口令落盘加密 |
+| ddns-manager | **v1.6.75** | PFX 口令启动即脱敏（急切迁移）· 证书命名碰撞修复 · DNS 凭据与 PFX 口令落盘加密 |
 | 安装器 | **v1.0.0** | 独立版本，与 Agent 解耦 |
 | ddns-go (内嵌) | v6.17.4 | DNS provider library |
 

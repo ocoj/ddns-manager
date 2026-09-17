@@ -216,6 +216,21 @@ func (m *Manager) PFXPasswordResolverConfigured() bool {
 // store must never be entered while m.mu is held. A resolver error is returned to
 // the caller, never converted into the default password — the default may not be
 // the user's custom password, and using it would overwrite the stored one.
+// bundleDirForCertDir 推导「PFX 口令权威来源」的 Manager bundle 目录（certs/acme-<域名>）。
+//
+// F-1（v1.6.74，第三方审计第一轮）：**不可**用 "acme-" + filepath.Base(certDir) 直接拼接。
+// renewOne 的 certDir 为 certs/<目录名>，当**域名自身以 acme- 开头**（如 acme-x.lanxun.pro）时
+// 目录名已带前缀，再拼一次会得到 certs/acme-acme-<域名> ⇒ 读不到 bundle meta ⇒ 解析器只剩默认口令
+// ⇒ 该分支以**默认口令重建 PFX**，静默覆盖用户自定义口令（且每轮续期重复）—— 恰是本文件上方 ①②③ 明令禁止的行为。
+// 规则与 server.issueBundleName 一致：**仅在缺失时补一次前缀**。
+func bundleDirForCertDir(certDir string) string {
+	base := filepath.Base(certDir)
+	if !strings.HasPrefix(base, "acme-") {
+		base = "acme-" + base
+	}
+	return filepath.Join(filepath.Dir(certDir), base)
+}
+
 func (m *Manager) resolvePFXPassword(meta map[string]interface{}) (string, error) {
 	m.mu.Lock()
 	fn := m.pfxPasswordLookup
@@ -1267,7 +1282,7 @@ func (m *Manager) UpdateCertMeta(certDir string) error {
 		//     写进 acme 操作日志（可见、不静默）。
 		pfxPassword, pfxResolveErr := m.resolvePFXPassword(metaMap)
 		if pfxResolveErr == nil && pfxPassword == mycrypto.DefaultPFXPassword {
-			bundleDir := filepath.Join(filepath.Dir(certDir), "acme-"+filepath.Base(certDir))
+			bundleDir := bundleDirForCertDir(certDir)
 			if bundleData, err := os.ReadFile(filepath.Join(bundleDir, "meta.json")); err == nil {
 				var bundleMeta map[string]interface{}
 				if json.Unmarshal(bundleData, &bundleMeta) == nil {

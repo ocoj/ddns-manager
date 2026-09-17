@@ -1,3 +1,44 @@
+## v1.6.74 — 2026-09-17
+
+> **本版范围**：证书命名碰撞缺陷修复 —— **首发路径**（F-DNS01-1）与**续期路径**（F-1）的
+> 「`acme-` 前缀」名称规范化；两处归一为同一规则「**仅在缺失时补一次前缀**」，并各带回归守卫。
+> 基线：`f546ba9`（= 已部署的 v1.6.73）。
+>
+> ⚠️ **本版改动了二进制 ⇒ 必须重部署**；**不改 Agent**（`cmd/agent` 零改动 ⇒ **无需重新下发 Agent**）。
+> 🔁 **回退**：`ln -sfn` 切回 `ddns-manager-v1.6.73-linux-amd64` + 重启即可；本版**不改数据格式**
+> ⇒ 无数据级回退前置（v1.6.73 已落地的 `dns_keys.json` v2 信封与 v1.6.74 兼容）。
+
+### 🐛 修复 1: 首发路径名称碰撞（F-DNS01-1）
+
+- **触发条件**: **仅当签发域名自身以 `acme-` 开头**（如 `acme-x.lanxun.pro`）；普通域名与通配符**不受影响**。
+- **症状**: 四道 `!strings.HasPrefix(certName,"acme-")` 守卫全部误判跳过 ⇒
+  ① 签发 meta 未预写 ⇒ `dns_key`/`provider`/`acme`/`ca`/`email`/`key_type` 丢失（续期退化为**按 provider 猜 Key**）
+  ② acme.sh 安装路径未重指向 ⇒ 此后续期**不落 bundle** ③ 原目录不清理 ④ bundle 名**二次加前缀**（`acme-acme-…`）。
+- **修复**: 新增 `issueBundleName`（幂等）；判据改为**目录比较** `needRelocate := certDir != certs/<bundleName>`；
+  名称用点 9 处归一（含失败清理 / 响应名 / 后置自检）；新增**运行时守卫**（`meta.dns_key` 不符 ⇒ warning 审计）。
+
+### 🐛 修复 2: 续期路径 bundle 目录推导（F-1）
+
+- **症状**: `UpdateCertMeta` 以 `"acme-" + filepath.Base(certDir)` 推导「PFX 口令权威来源」bundle 目录；
+  目录名已带前缀时推出双前缀路径。
+- **修复**: 新增 `bundleDirForCertDir`（幂等）替换调用点。
+- **定性**: 经第三方**行为级 A/B 取证**，该分支在当前代码形态下**不可达错误路径**（普通域名下旧式恰好正确；
+  `acme-` 域名下首取即得自定义口令 ⇒ 分支不进入）⇒ 属「**正确但当前不可达的加固**」，**无行为回归**。
+
+### 🧪 测试
+
+- `TestT76a` / `TestT76b`（server · 首发路径）· `TestT77a` / `TestT77b`（acme · 续期路径）
+- **`TestT77b` 为行为级**：断言 `cert.pfx` / `cert-modern.pfx` **以自定义口令可解、且默认口令不可解**，
+  覆盖**普通域名 + `acme-` 域名**两形态
+- 判别性注入：改回旧式命名 ⇒ `T76a` FAIL；破坏规则（助手恒等）⇒ `T77a` 与 `T77b` **双 FAIL**（**产物级**违规）
+
+### 📋 涉及文件
+
+`internal/server/handlers_certs.go`, `internal/server/f_dns01_issue_name_test.go`,
+`internal/acme/acme.go`, `internal/acme/f_dns01_1_renew_path_test.go` — 共 **4 文件**（+289 / −13）
+
+---
+
 ## v1.6.73 — 2026-09-17
 
 > **本版范围**：DNS 凭据与证书 PFX 口令的**落盘加密**（B-1）· 受管键口径定型（B-3）·
